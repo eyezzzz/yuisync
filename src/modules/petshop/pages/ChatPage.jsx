@@ -39,15 +39,16 @@ function MessageBubble({ msg, activeModule, isFirstInGroup }) {
   const isUser   = msg.role === 'user'
   const isBot    = msg.role === 'assistant'
   const isHuman  = msg.role === 'human_agent'
+  const isOwnMessage = !isUser
   const imageUrl = getMessageImageUrl(msg)
   const visibleText = getVisibleMessageText(msg, imageUrl)
 
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'} ${isFirstInGroup ? 'mt-4' : 'mt-1'} mb-1 group`}>
-      <div className={`flex ${isUser ? 'flex-row-reverse' : 'flex-row'} max-w-[85%] items-end gap-2.5`}>
+    <div className={`flex ${isUser ? 'justify-start' : 'justify-end'} ${isFirstInGroup ? 'mt-4' : 'mt-1'} mb-1 group`}>
+      <div className={`flex ${isOwnMessage ? 'flex-row-reverse' : 'flex-row'} max-w-[85%] items-end gap-2.5`}>
         
         {/* Avatar section (only for Bot/Agent, and only on first message of group) */}
-        {!isUser && (
+        {isOwnMessage && (
           <div className="w-8 flex-shrink-0 flex items-end">
             {isFirstInGroup ? (
               <div className={`w-8 h-8 rounded-xl flex items-center justify-center shadow-lg transition-transform group-hover:scale-110 mb-1`}
@@ -62,9 +63,9 @@ function MessageBubble({ msg, activeModule, isFirstInGroup }) {
           </div>
         )}
 
-        <div className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}>
+        <div className={`flex flex-col ${isUser ? 'items-start' : 'items-end'}`}>
           {/* Sender name - Only on first in group */}
-          {!isUser && isFirstInGroup && (
+          {isOwnMessage && isFirstInGroup && (
             <span className="text-[10px] font-black uppercase tracking-widest text-muted mb-1 px-1 opacity-70">
               {isBot ? (activeModule.id === 'petshop' ? 'PetBot 🤖' : 'Assistente IA 🤖') : 'Agente Autorizado 👤'}
             </span>
@@ -436,7 +437,7 @@ export default function ChatPage() {
                       )
                     })}
                     {botTyping && (
-                      <div className="flex items-center gap-2 mb-3">
+                      <div className="flex flex-row-reverse items-center gap-2 mb-3">
                         <div className="w-7 h-7 rounded-full flex items-center justify-center" style={{ backgroundColor: 'var(--primary-bg-light)' }}>
                           <Bot size={14} style={{ color: 'var(--primary)' }}/>
                         </div>

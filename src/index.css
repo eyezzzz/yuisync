@@ -547,21 +547,21 @@ h1, h2, h3, h4 { font-family: 'Outfit', sans-serif; }
 
   /* Chat bubbles */
   .bubble-user { 
-    background-color: var(--card);
-    border: 1px solid var(--border);
-    @apply text-text rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm; 
-  }
-  
-  .bubble-bot { 
     background-color: var(--primary-bg-light);
     border: 1px solid var(--primary-border);
     @apply text-text rounded-2xl rounded-tl-sm px-4 py-2.5 shadow-sm; 
   }
   
+  .bubble-bot { 
+    background-color: #fff;
+    border: 1px solid var(--border);
+    @apply text-text rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm; 
+  }
+  
   .bubble-human { 
-    background-color: rgba(139, 92, 246, 0.08); 
-    border: 1px solid rgba(139, 92, 246, 0.2); 
-    @apply text-text rounded-2xl rounded-tl-sm px-4 py-2.5 shadow-sm; 
+    background-color: #fff; 
+    border: 1px solid var(--border); 
+    @apply text-text rounded-2xl rounded-tr-sm px-4 py-2.5 shadow-sm; 
   }
 
   /* Stock status */
