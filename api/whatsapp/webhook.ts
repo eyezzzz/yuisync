@@ -51,6 +51,6 @@ export default async function webhook(req: IncomingMessage, res: ServerResponse)
     return
   }
 
-  const { handleWhatsappWebhook } = await import('../../serverless/whatsappWebhook')
+  const { handleWhatsappWebhook } = await import('../../serverless/whatsappWebhook.js')
   await handleWhatsappWebhook(req, res)
 }
