@@ -3,13 +3,37 @@ import { serverEnv } from './env.js'
 import { logger } from './logger.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
+const PRODUCT_CONTEXT_LIMIT = 18
+const PRODUCT_STOP_WORDS = new Set([
+  'aqui',
+  'algum',
+  'alguma',
+  'alguns',
+  'algumas',
+  'comprar',
+  'disponivel',
+  'disponiveis',
+  'gostaria',
+  'para',
+  'pode',
+  'produto',
+  'produtos',
+  'queria',
+  'quero',
+  'qual',
+  'quais',
+  'tem',
+  'tenho',
+  'vcs',
+  'voces',
+])
 
 // Cache for AI Lab workspace by tenant + module.
 const aiWorkspaceCache = new Map()
 const aiWorkspaceCacheTtl = 2 * 60 * 1000
 
 function detectIntent(message = '') {
-  const lower = message.toLowerCase()
+  const lower = normalizeSearchText(message)
 
   if (/racao|petisc|brinquedo|shampoo|coleira|comprar|preco|estoque|tem |tem\?|voces tem/i.test(lower)) {
     return 'produto'
@@ -22,17 +46,21 @@ function detectIntent(message = '') {
   return 'duvida'
 }
 
-function escapeIlike(value) {
-  return value.replace(/[%_\\]/g, (char) => `\\${char}`)
+function normalizeSearchText(value = '') {
+  return String(value || '')
+    .trim()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
 }
 
 function buildSearchTerms(message = '') {
-  return message
-    .replace(/[?!,.]/g, ' ')
+  return normalizeSearchText(message)
+    .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
     .map((term) => term.trim())
-    .filter((term) => term.length >= 3)
-    .slice(0, 8)
+    .filter((term) => term.length >= 3 && !PRODUCT_STOP_WORDS.has(term))
+    .slice(0, 6)
 }
 
 function isMissingTenantColumnError(error) {
@@ -46,11 +74,11 @@ function isMissingTenantColumnError(error) {
 
 function buildStockContext(products) {
   if (!products?.length) {
-    return 'Nenhum produto correspondente encontrado no catalogo para esta busca.'
+    return 'Nenhum produto disponivel confirmado no cadastro para esta busca.'
   }
 
   return products
-    .filter((product) => product.active && Number(product.stock_quantity) > 0)
+    .filter(isSellableProduct)
     .map((product) => [
       `ID: ${product.id}`,
       `NOME: ${product.name}`,
@@ -59,6 +87,67 @@ function buildStockContext(products) {
       `QTD: ${product.stock_quantity}`,
     ].join(' | '))
     .join('\n')
+}
+
+function isSellableProduct(product) {
+  const name = String(product?.name || '').trim()
+  return Boolean(product?.active)
+    && name.toLowerCase() !== 'produto importado'
+    && Number(product?.stock_quantity) > 0
+    && Number(product?.price) > 0
+}
+
+function productSearchText(product) {
+  return normalizeSearchText([
+    product?.name,
+    product?.category,
+    product?.description,
+    product?.species_target,
+  ].filter(Boolean).join(' '))
+}
+
+function rankProduct(product, terms) {
+  const searchable = productSearchText(product)
+  const category = normalizeSearchText(product?.category)
+  let score = 0
+
+  for (const term of terms) {
+    if (category.includes(term)) score += 6
+    if (searchable.includes(term)) score += 3
+  }
+
+  if (category.includes('racao')) score += 2
+  score += Math.min(Number(product?.stock_quantity || 0), 20) / 20
+  return score
+}
+
+function selectRelevantProducts(products, message) {
+  const available = (products || []).filter(isSellableProduct)
+  const searchTerms = buildSearchTerms(message)
+  const intent = detectIntent(message)
+
+  if (!available.length) return []
+
+  const matched = searchTerms.length
+    ? available
+      .map((product) => ({ product, score: rankProduct(product, searchTerms) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.product)
+    : []
+
+  const source = matched.length ? matched : (intent === 'produto' ? available : matched)
+
+  return source
+    .sort((a, b) => {
+      const aCategory = normalizeSearchText(a?.category)
+      const bCategory = normalizeSearchText(b?.category)
+      if (aCategory.includes('racao') !== bCategory.includes('racao')) {
+        return aCategory.includes('racao') ? -1 : 1
+      }
+      return String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR')
+    })
+    .slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
 function buildAppointmentsContext(appointments) {
@@ -88,6 +177,8 @@ function buildSystemPrompt({
     trainingPrompt || `Voce e um atendente virtual de pet shop. Atenda em nome de ${storeName}.`,
     'Use apenas as informacoes confirmadas no contexto abaixo.',
     'Nunca invente informacoes que nao estao explicitamente no contexto ou treino.',
+    'Se o estoque listar produtos, cite nomes, precos e quantidade desses itens quando o cliente perguntar sobre produtos.',
+    'Nao diga que nao ha produto ou racao quando houver itens listados no estoque.',
   ].join('\n')
 
   const contextSegments = []
@@ -132,12 +223,9 @@ async function loadStoreName(supabase, moduleId, tenantId) {
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
-  const searchTerms = buildSearchTerms(message)
-  const intent = detectIntent(message)
-
   let query = supabase
     .from('products')
-    .select('id, name, category, price, stock_quantity, active')
+    .select('id, name, category, description, species_target, price, stock_quantity, active')
     .eq('module_id', moduleId)
     .eq('active', true)
 
@@ -145,18 +233,9 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
     query = query.eq('tenant_id', tenantId)
   }
 
-  if (searchTerms.length > 0) {
-    const orQuery = searchTerms
-      .flatMap((term) => {
-        const escaped = escapeIlike(term)
-        return [`name.ilike.%${escaped}%`, `category.ilike.%${escaped}%`]
-      })
-      .join(',')
-
-    query = query.or(orQuery)
-  }
-
-  const { data, error } = await query.limit(intent === 'produto' ? 12 : 6)
+  const { data, error } = await query
+    .order('stock_quantity', { ascending: false })
+    .limit(120)
 
   if (error) {
     if (tenantId && isMissingTenantColumnError(error)) {
@@ -165,7 +244,7 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
     throw new HttpError(500, 'Unable to load product context.')
   }
 
-  return data || []
+  return selectRelevantProducts(data || [], message)
 }
 
 async function loadAppointments(supabase, moduleId, tenantId) {
@@ -362,13 +441,20 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     throw new HttpError(400, `Unsupported module_id "${session.module_id}".`)
   }
 
-  const [storeName, products, appointments, history, aiWorkspace] = await Promise.all([
+  const [storeName, appointments, history, aiWorkspace] = await Promise.all([
     loadStoreName(supabase, moduleId, session.tenant_id),
-    loadProducts(supabase, moduleId, session.tenant_id, trimmedMessage),
     loadAppointments(supabase, moduleId, session.tenant_id),
     loadRecentMessages(supabase, sessionId),
     getAiWorkspace(supabase, session.tenant_id, moduleId),
   ])
+  const productContextMessage = [
+    ...history
+      .filter((message) => message.role === 'user')
+      .slice(-4)
+      .map((message) => message.content),
+    trimmedMessage,
+  ].join(' ')
+  const products = await loadProducts(supabase, moduleId, session.tenant_id, productContextMessage)
 
   const intent = detectIntent(trimmedMessage)
   const systemPrompt = buildSystemPrompt({

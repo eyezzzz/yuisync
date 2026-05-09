@@ -9,6 +9,30 @@ const GRAPH_BASE_URL = 'https://graph.facebook.com'
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 const MAX_WHATSAPP_TEXT_CHARS = 4096
 const RECENT_HISTORY_LIMIT = 14
+const PRODUCT_CONTEXT_LIMIT = 18
+const PRODUCT_STOP_WORDS = new Set([
+  'aqui',
+  'algum',
+  'alguma',
+  'alguns',
+  'algumas',
+  'comprar',
+  'disponivel',
+  'disponiveis',
+  'gostaria',
+  'para',
+  'pode',
+  'produto',
+  'produtos',
+  'queria',
+  'quero',
+  'qual',
+  'quais',
+  'tem',
+  'tenho',
+  'vcs',
+  'voces',
+])
 
 type LooseRecord = Record<string, any>
 
@@ -458,22 +482,91 @@ async function touchSession(supabase: SupabaseClient, sessionId: string, sentAt 
   if (error) fail(500, 'Unable to update chat session timestamp.')
 }
 
-function buildSearchTerms(message: string): string[] {
-  return message
-    .replace(/[?!,.]/g, ' ')
-    .split(/\s+/)
-    .map((term) => term.trim())
-    .filter((term) => term.length >= 3)
-    .slice(0, 8)
+function normalizeSearchText(value: unknown): string {
+  return clean(value)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
 }
 
-function escapeIlike(value: string): string {
-  return value.replace(/[%_\\]/g, (char) => `\\${char}`)
+function detectProductIntent(message: string): boolean {
+  const normalized = normalizeSearchText(message)
+  return /\b(racao|petisco|brinquedo|shampoo|coleira|comprar|preco|estoque|produto|produtos|tem|voces tem|vcs tem)\b/.test(normalized)
+}
+
+function buildSearchTerms(message: string): string[] {
+  return normalizeSearchText(message)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3 && !PRODUCT_STOP_WORDS.has(term))
+    .slice(0, 6)
+}
+
+function isSellableProduct(product: LooseRecord): boolean {
+  const name = clean(product.name)
+  return Boolean(product.active)
+    && name.toLowerCase() !== 'produto importado'
+    && Number(product.stock_quantity) > 0
+    && Number(product.price) > 0
+}
+
+function productSearchText(product: LooseRecord): string {
+  return normalizeSearchText([
+    product.name,
+    product.category,
+    product.description,
+    product.species_target,
+  ].filter(Boolean).join(' '))
+}
+
+function rankProduct(product: LooseRecord, terms: string[]): number {
+  const searchable = productSearchText(product)
+  const category = normalizeSearchText(product.category)
+  let score = 0
+
+  for (const term of terms) {
+    if (category.includes(term)) score += 6
+    if (searchable.includes(term)) score += 3
+  }
+
+  if (category.includes('racao')) score += 2
+  score += Math.min(Number(product.stock_quantity || 0), 20) / 20
+  return score
+}
+
+function selectRelevantProducts(products: LooseRecord[] | null | undefined, latestUserMessage: string): LooseRecord[] {
+  const available = (products || []).filter(isSellableProduct)
+  const terms = buildSearchTerms(latestUserMessage)
+  const isProductIntent = detectProductIntent(latestUserMessage)
+
+  if (!available.length) return []
+
+  const matched = terms.length
+    ? available
+      .map((product) => ({ product, score: rankProduct(product, terms) }))
+      .filter((item) => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .map((item) => item.product)
+    : []
+
+  const source = matched.length ? matched : (isProductIntent ? available : matched)
+
+  return source
+    .sort((a, b) => {
+      const aCategory = normalizeSearchText(a.category)
+      const bCategory = normalizeSearchText(b.category)
+      if (aCategory.includes('racao') !== bCategory.includes('racao')) {
+        return aCategory.includes('racao') ? -1 : 1
+      }
+      return clean(a.name).localeCompare(clean(b.name), 'pt-BR')
+    })
+    .slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
 function buildProductsContext(products: LooseRecord[] | null | undefined): string {
-  const available = (products || []).filter((product) => product.active && Number(product.stock_quantity) > 0)
-  if (!available.length) return 'Nenhum produto confirmado para esta busca.'
+  const available = (products || []).filter(isSellableProduct)
+  if (!available.length) return 'Nenhum produto disponivel confirmado no cadastro para esta busca.'
 
   return available
     .map((product) => [
@@ -483,7 +576,7 @@ function buildProductsContext(products: LooseRecord[] | null | undefined): strin
       `Estoque: ${Number(product.stock_quantity || 0)}`,
     ].join(' | '))
     .join('\n')
-    .slice(0, 4000)
+    .slice(0, 6000)
 }
 
 function buildAppointmentsContext(appointments: LooseRecord[] | null | undefined): string {
@@ -509,25 +602,6 @@ async function loadStoreContext(
   env: WebhookEnv,
 ): Promise<StoreContext> {
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-  const terms = buildSearchTerms(latestUserMessage)
-
-  let productsQuery = supabase
-    .from('products')
-    .select('name, category, price, stock_quantity, active')
-    .eq('tenant_id', session.tenant_id)
-    .eq('module_id', session.module_id)
-    .eq('active', true)
-    .limit(12)
-
-  if (terms.length > 0) {
-    const orQuery = terms
-      .flatMap((term) => {
-        const escaped = escapeIlike(term)
-        return [`name.ilike.%${escaped}%`, `category.ilike.%${escaped}%`]
-      })
-      .join(',')
-    productsQuery = productsQuery.or(orQuery)
-  }
 
   const [settingsResult, companyResult, productsResult, appointmentsResult] = await Promise.all([
     supabase
@@ -545,7 +619,14 @@ async function loadStoreContext(
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle(),
-    productsQuery,
+    supabase
+      .from('products')
+      .select('name, category, description, species_target, price, stock_quantity, active')
+      .eq('tenant_id', session.tenant_id)
+      .eq('module_id', session.module_id)
+      .eq('active', true)
+      .order('stock_quantity', { ascending: false })
+      .limit(120),
     supabase
       .from('appointments')
       .select('service_type, scheduled_at, status')
@@ -563,7 +644,9 @@ async function loadStoreContext(
     companyPrompt: clean(companyResult.data?.system_prompt),
     modelName: clean(companyResult.data?.model_name) || env.openAiModel,
     temperature: Number(companyResult.data?.temperature ?? 0.2),
-    productContext: productsResult.error ? 'Catalogo indisponivel no momento.' : buildProductsContext(productsResult.data),
+    productContext: productsResult.error
+      ? 'Catalogo indisponivel no momento.'
+      : buildProductsContext(selectRelevantProducts(productsResult.data, latestUserMessage)),
     appointmentsContext: appointmentsResult.error ? 'Agenda indisponivel no momento.' : buildAppointmentsContext(appointmentsResult.data),
   }
 }
@@ -597,6 +680,8 @@ function buildSystemPrompt(context: StoreContext): string {
     'Regras de producao:',
     '- Use somente informacoes confirmadas no contexto abaixo.',
     '- Nao invente precos, horarios, estoque, procedimentos veterinarios ou promessas de disponibilidade.',
+    '- Se o catalogo listar produtos, cite nomes, precos e estoque desses itens quando o cliente perguntar sobre produtos.',
+    '- Nao diga que nao ha produto ou racao quando houver itens listados no catalogo/estoque relevante.',
     '- Quando faltar dado essencial, peca o dado de forma simples.',
     '- Se o cliente pedir algo sensivel ou fora do contexto, encaminhe para atendimento humano.',
     '- Mantenha respostas curtas, naturais e adequadas para WhatsApp.',
@@ -795,10 +880,15 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     return { sessionId: session.id, handedToHuman: true }
   }
 
-  const [context, history] = await Promise.all([
-    loadStoreContext(supabase, session, event.text, env),
-    loadRecentHistory(supabase, session.id),
-  ])
+  const history = await loadRecentHistory(supabase, session.id)
+  const productContextMessage = [
+    ...history
+      .filter((message) => message.role === 'user')
+      .slice(-4)
+      .map((message) => message.content),
+    event.text,
+  ].join(' ')
+  const context = await loadStoreContext(supabase, session, productContextMessage, env)
 
   const completion = await callOpenAi(context, history, env)
   const savedReply = await saveAssistantMessage(supabase, session.id, event, completion.reply, completion.tokensUsed)
