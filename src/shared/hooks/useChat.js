@@ -224,6 +224,11 @@ export function useChat() {
         table: 'chat_sessions',
         filter: `module_id=eq.${activeModuleId}`,
       }, () => loadSessions())
+      .on('postgres_changes', {
+        event: 'INSERT',
+        schema: 'public',
+        table: 'chat_messages',
+      }, () => loadSessions())
       .subscribe()
   }, [activeModuleId, loadSessions])
 

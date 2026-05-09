@@ -1,9 +1,7 @@
-import OpenAI from 'openai'
 import { HttpError } from './http.js'
 import { serverEnv } from './env.js'
 import { logger } from './logger.js'
 
-const openai = new OpenAI({ apiKey: serverEnv.openAiApiKey })
 const SUPPORTED_MODULES = new Set(['petshop'])
 
 // Cache for AI Lab workspace by tenant + module.
@@ -307,12 +305,25 @@ async function callOpenAIWithTimeout(params, timeoutMs) {
   const timer = setTimeout(() => controller.abort(), timeoutMs)
 
   try {
-    const completion = await openai.chat.completions.create(params, {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
       signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${serverEnv.openAiApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(params),
     })
-    return completion
+
+    const payload = await response.json().catch(() => ({}))
+    if (!response.ok) {
+      const detail = payload?.error?.message || `HTTP ${response.status}`
+      throw new HttpError(502, `OpenAI request failed: ${detail}`)
+    }
+
+    return payload
   } catch (error) {
-    if (error.name === 'AbortError' || error.code === 'ECONNABORTED') {
+    if (error.name === 'AbortError') {
       throw new HttpError(504, 'AI response timed out. Please try again.')
     }
     throw error
