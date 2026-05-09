@@ -8,6 +8,27 @@
     },
     "api/whatsapp/webhook.ts": {
       "maxDuration": 30
+    },
+    "api/admin/users.ts": {
+      "maxDuration": 30
+    },
+    "api/admin/users/[userId].ts": {
+      "maxDuration": 30
+    },
+    "api/admin/users/[userId]/status.ts": {
+      "maxDuration": 30
+    },
+    "api/chat/respond.ts": {
+      "maxDuration": 30
+    },
+    "api/chat/human-message.ts": {
+      "maxDuration": 30
+    },
+    "api/fiscal/sales/[saleId]/issue.ts": {
+      "maxDuration": 30
+    },
+    "api/fiscal/webhooks/focus.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [

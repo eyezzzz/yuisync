@@ -17,6 +17,8 @@ const STAFF_TYPE_OPTIONS = [
   { value: 'motodog', label: 'MotoDog' },
 ]
 
+const TEMP_PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}$/
+
 function getStaffTypeLabel(value) {
   return STAFF_TYPE_OPTIONS.find((item) => item.value === value)?.label || 'Funcionario'
 }
@@ -117,6 +119,9 @@ function UserModal({
     if (!form.email) return setErr('Email e obrigatorio.')
     if (!form.full_name.trim()) return setErr('Nome e obrigatorio.')
     if (!isEditing && !form.password) return setErr('Senha e obrigatoria.')
+    if (!isEditing && !TEMP_PASSWORD_RE.test(form.password)) {
+      return setErr('A senha temporaria precisa ter 12 caracteres ou mais, com letra maiuscula, minuscula e numero.')
+    }
 
     if (form.role === 'employee' && !isAdminGlobal && !form.permissions[activeModuleId]) {
       return setErr('Selecione um nivel de acesso para este modulo.')

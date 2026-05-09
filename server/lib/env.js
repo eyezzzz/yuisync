@@ -8,6 +8,15 @@ function requireEnv(name) {
   return value
 }
 
+function requireAnyEnv(...names) {
+  for (const name of names) {
+    const value = process.env[name]
+    if (value) return value
+  }
+
+  throw new Error(`Missing required environment variable: ${names.join(' or ')}`)
+}
+
 function optionalEnv(name, defaultValue = '') {
   return process.env[name] || defaultValue
 }
@@ -33,7 +42,7 @@ export const serverEnv = {
   apiPort: parseNumber('API_PORT', 3090),
   allowedOrigins,
   supabaseUrl: requireEnv('SUPABASE_URL'),
-  supabaseAnonKey: requireEnv('SUPABASE_ANON_KEY'),
+  supabaseAnonKey: requireAnyEnv('SUPABASE_ANON_KEY', 'VITE_SUPABASE_ANON_KEY'),
   supabaseServiceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
   openAiApiKey: requireEnv('OPENAI_API_KEY'),
   openAiModel: optionalEnv('OPENAI_MODEL', 'gpt-4o-mini'),
