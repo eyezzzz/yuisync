@@ -1,5 +1,72 @@
 import { ORDER_STATES, formatMoney } from './text.js'
 
+export function buildWelcomeReply() {
+  const hour = Number(new Intl.DateTimeFormat('pt-BR', {
+    hour: '2-digit',
+    hour12: false,
+    timeZone: 'America/Sao_Paulo',
+  }).format(new Date()))
+  const greeting = hour < 12 ? 'bom dia' : hour < 18 ? 'boa tarde' : 'boa noite'
+
+  return [
+    `Ola, ${greeting}! Seja bem-vindo ao Petshop Quatro Patas.`,
+    'Como podemos ajudar hoje? Posso consultar produtos, tirar uma duvida ou montar um pedido para voce.',
+  ].join('\n')
+}
+
+export function buildProductTriageReply(kind = 'generic') {
+  if (kind === 'ration') {
+    return [
+      'Claro! Para eu te indicar a racao certa, me passa rapidinho:',
+      '- E para cachorro ou gato?',
+      '- Qual idade/porte ou raca?',
+      '- Tem marca de preferencia?',
+      '- Qual tamanho do pacote voce quer? Ex: 1kg, 3kg, 10kg.',
+    ].join('\n')
+  }
+
+  if (kind === 'snack') {
+    return [
+      'Claro! Para acertar no petisco, me diz:',
+      '- E para cachorro ou gato?',
+      '- Qual porte/tamanho do pet?',
+      '- Prefere bifinho, ossinho, sache ou outro tipo?',
+    ].join('\n')
+  }
+
+  if (kind === 'toy') {
+    return [
+      'Legal! Para eu sugerir um brinquedo melhor, me diz:',
+      '- E para cachorro ou gato?',
+      '- O pet e pequeno, medio ou grande?',
+      '- Voce prefere bolinha, pelucia, mordedor ou algo mais resistente?',
+    ].join('\n')
+  }
+
+  if (kind === 'hygiene') {
+    return [
+      'Certo! Para produto de higiene, me ajuda com alguns detalhes:',
+      '- E para cachorro ou gato?',
+      '- Precisa de shampoo, tapete, areia, eliminador de odor ou outro item?',
+      '- Tem alguma necessidade especifica, como pelo sensivel ou odor forte?',
+    ].join('\n')
+  }
+
+  if (kind === 'accessory') {
+    return [
+      'Claro! Para acessorio, me diz rapidinho:',
+      '- E para cachorro ou gato?',
+      '- Qual tamanho/porte do pet?',
+      '- Voce procura coleira, guia, comedouro, cama ou outro item?',
+    ].join('\n')
+  }
+
+  return [
+    'Claro! Me passa um pouco mais de detalhe para eu consultar certo no estoque.',
+    'Voce procura qual tipo de produto, para qual pet e tem alguma marca/tamanho de preferencia?',
+  ].join('\n')
+}
+
 export function buildProductOptions(products = []) {
   if (!products.length) {
     return 'Nao encontrei um produto disponivel com esse criterio no catalogo agora. Pode me dizer de outro jeito o que voce procura?'

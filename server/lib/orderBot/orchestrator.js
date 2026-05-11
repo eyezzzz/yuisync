@@ -31,10 +31,205 @@ import {
   buildConfirmedReply,
   buildFinalSummary,
   buildPartialSummary,
+  buildProductTriageReply,
   buildProductOptions,
   buildSatisfactionThanks,
+  buildWelcomeReply,
 } from './responses.js'
 import { confirmOrder, saveSatisfactionScore } from './persistence.js'
+
+const PRODUCT_TRIAGE_NOTE_PREFIX = 'product_triage_kind:'
+
+const GENERIC_RATION_TERMS = new Set([
+  'racao',
+  'racoes',
+  'comida',
+  'alimento',
+  'oi',
+  'ola',
+  'opa',
+  'bom',
+  'boa',
+  'dia',
+  'tarde',
+  'noite',
+  'quero',
+  'queria',
+  'preciso',
+  'comprar',
+  'para',
+  'pra',
+  'pro',
+  'uma',
+  'um',
+  'cachorro',
+  'cachorra',
+  'cao',
+  'caes',
+  'gato',
+  'gata',
+  'gatos',
+  'filhote',
+  'adulto',
+  'senior',
+  'porte',
+  'pequeno',
+  'medio',
+  'grande',
+  'mini',
+  'shih',
+  'tzu',
+  'yorkshire',
+  'poodle',
+  'pinscher',
+  'srd',
+  'vira',
+  'lata',
+])
+
+const GENERIC_PRODUCT_TERMS = new Set([
+  'quero',
+  'queria',
+  'preciso',
+  'comprar',
+  'oi',
+  'ola',
+  'opa',
+  'bom',
+  'boa',
+  'dia',
+  'tarde',
+  'noite',
+  'para',
+  'pra',
+  'pro',
+  'uma',
+  'um',
+  'produto',
+  'produtos',
+  'algum',
+  'alguma',
+  'cachorro',
+  'cachorra',
+  'cao',
+  'caes',
+  'gato',
+  'gata',
+  'gatos',
+  'pet',
+  'porte',
+  'tamanho',
+  'pequeno',
+  'medio',
+  'grande',
+])
+
+function simpleTerms(message) {
+  return normalizeText(message)
+    .replace(/[^a-z0-9]+/g, ' ')
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter(Boolean)
+}
+
+function hasPackageSize(message) {
+  return /\b\d+(?:[,.]\d+)?\s*(?:kg|kilo|kilos|g|gr|gramas|ml|l|litro|litros)\b/.test(normalizeText(message))
+}
+
+function hasKnownRationSpecific(message) {
+  return /\b(golden|premier|royal|canin|granplus|quatree|magnus|pedigree|whiskas|special|dog|chow|cat|chow|proplan|hills|nd|formula|puppy|junior|light|castrado|indoor|urinary|renal|gastro)\b/.test(normalizeText(message))
+}
+
+function specificTermCount(message, genericTerms) {
+  return simpleTerms(message)
+    .filter((term) => term.length >= 3 && !genericTerms.has(term))
+    .length
+}
+
+function isGreetingOnly(message) {
+  const text = normalizeText(message).replace(/\s+/g, ' ').trim()
+  if (!text || text.length > 80) return false
+
+  const withoutGreeting = text
+    .replace(/\b(oi|ola|opa|bom dia|boa tarde|boa noite|bom|boa|tudo bem|td bem|e ai)\b/g, '')
+    .replace(/[,\s]+/g, ' ')
+    .trim()
+
+  return withoutGreeting.length === 0
+}
+
+function getProductTriageKind(message, orderSession, slots) {
+  if (!slots.signals.productSearch) return null
+  if (slots.signals.contextualConfirm || slots.signals.correction) return null
+  if (orderSession.currentState === ORDER_STATES.awaitingProductSelection && orderSession.lastSuggestedProducts?.length) {
+    return null
+  }
+
+  const text = normalizeText(message)
+
+  if (/\b(racao|racoes|comida|alimento)\b/.test(text)) {
+    if (hasPackageSize(text) || hasKnownRationSpecific(text) || specificTermCount(text, GENERIC_RATION_TERMS) >= 2) return null
+    return 'ration'
+  }
+
+  if (/\b(petisco|petiscos|bifinho|ossinho|snack|sache)\b/.test(text)) {
+    if (specificTermCount(text, new Set([...GENERIC_PRODUCT_TERMS, 'petisco', 'petiscos', 'snack'])) >= 2) return null
+    return 'snack'
+  }
+
+  if (/\b(brinquedo|brinquedos)\b/.test(text)) {
+    if (specificTermCount(text, new Set([...GENERIC_PRODUCT_TERMS, 'brinquedo', 'brinquedos'])) >= 2) return null
+    return 'toy'
+  }
+
+  if (/\b(shampoo|higiene|tapete|areia|odor|eliminador)\b/.test(text)) {
+    if (specificTermCount(text, new Set([...GENERIC_PRODUCT_TERMS, 'higiene'])) >= 2) return null
+    return 'hygiene'
+  }
+
+  if (/\b(coleira|guia|cama|comedouro|bebedouro|acessorio|acessorios)\b/.test(text)) {
+    if (hasPackageSize(text) || specificTermCount(text, new Set([...GENERIC_PRODUCT_TERMS, 'acessorio', 'acessorios'])) >= 2) return null
+    return 'accessory'
+  }
+
+  if (/^(quero|queria|preciso|tem|voces tem|vcs tem)\b/.test(text) && specificTermCount(text, GENERIC_PRODUCT_TERMS) < 2) {
+    return 'generic'
+  }
+
+  return null
+}
+
+function setProductTriageContext(orderSession, kind) {
+  return {
+    ...orderSession,
+    notes: [
+      ...(orderSession.notes || []).filter((note) => !String(note).startsWith(PRODUCT_TRIAGE_NOTE_PREFIX)),
+      `${PRODUCT_TRIAGE_NOTE_PREFIX}${kind}`,
+    ],
+  }
+}
+
+function clearProductTriageContext(orderSession) {
+  return {
+    ...orderSession,
+    notes: (orderSession.notes || []).filter((note) => !String(note).startsWith(PRODUCT_TRIAGE_NOTE_PREFIX)),
+  }
+}
+
+function getProductTriageContext(orderSession) {
+  const note = (orderSession.notes || []).find((item) => String(item).startsWith(PRODUCT_TRIAGE_NOTE_PREFIX))
+  return note ? String(note).slice(PRODUCT_TRIAGE_NOTE_PREFIX.length) : ''
+}
+
+function productKindKeyword(kind) {
+  return ({
+    ration: 'racao',
+    snack: 'petisco',
+    toy: 'brinquedo',
+    hygiene: 'higiene',
+    accessory: 'acessorio',
+  })[kind] || ''
+}
 
 function applyExtractedSlots(orderSession, slots) {
   let next = orderSession
@@ -134,6 +329,17 @@ function buildResult({ orderSession, reply, intent, extraMetadata = {} }) {
   }
 }
 
+function buildProductTriageResult(orderSession, kind) {
+  return buildResult({
+    orderSession: setProductTriageContext({
+      ...orderSession,
+      currentState: ORDER_STATES.browsingProducts,
+    }, kind),
+    reply: buildProductTriageReply(kind),
+    intent: `product_triage_${kind}`,
+  })
+}
+
 /**
  * @param {{
  *   supabase: any,
@@ -193,7 +399,23 @@ export async function runOrderBotTurn({
     })
   }
 
+  if (isGreetingOnly(trimmedMessage) && !hasActiveOrder(orderSession)) {
+    orderSession = {
+      ...orderSession,
+      currentState: ORDER_STATES.idle,
+    }
+    return buildResult({
+      orderSession,
+      reply: buildWelcomeReply(),
+      intent: 'welcome',
+    })
+  }
+
   const rawSlots = extractSlots(trimmedMessage, orderSession.currentState)
+  orderSession = maybeResetConfirmedOrder(orderSession, seed, rawSlots)
+  const earlyTriageKind = getProductTriageKind(trimmedMessage, orderSession, { ...rawSlots, rawMessage: trimmedMessage })
+  if (earlyTriageKind) return buildProductTriageResult(orderSession, earlyTriageKind)
+
   const semantic = await interpretMessageWithOpenAi({ message: trimmedMessage, orderSession, rawSlots })
   const slots = { ...mergeSemanticSlots(rawSlots, semantic), rawMessage: trimmedMessage }
   orderSession = maybeResetConfirmedOrder(orderSession, seed, slots)
@@ -264,15 +486,24 @@ export async function runOrderBotTurn({
     })
   }
 
+  const triageKind = getProductTriageKind(trimmedMessage, orderSession, slots)
+  if (triageKind) {
+    return buildProductTriageResult(orderSession, triageKind)
+  }
+
   if (shouldTryProductMatch(orderSession, slots)) {
     const quantity = slots.quantity || 1
-    const productMessage = slots.productQuery ? `${trimmedMessage} ${slots.productQuery}` : trimmedMessage
+    const triageContext = productKindKeyword(getProductTriageContext(orderSession))
+    const productMessage = [triageContext, trimmedMessage, slots.productQuery]
+      .filter(Boolean)
+      .join(' ')
     const match = matchProduct({ message: productMessage, catalog, orderSession, slots })
 
     if (match.product && match.confidence >= 0.68) {
       orderSession = slots.signals.correction && orderSession.items.length
         ? replaceLastItem(orderSession, match.product, quantity, match)
         : addItem(orderSession, match.product, quantity, match)
+      orderSession = clearProductTriageContext(orderSession)
 
       if (slots.signals.denyOrEndItems) {
         const next = withNextMissingSlot(orderSession)
@@ -344,7 +575,7 @@ export async function runOrderBotTurn({
   }
   return buildResult({
     orderSession,
-    reply: 'Oi! Posso te ajudar a montar um pedido. O que voce gostaria de comprar hoje?',
+    reply: buildWelcomeReply(),
     intent: 'idle',
   })
 }

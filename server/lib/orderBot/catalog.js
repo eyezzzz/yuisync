@@ -200,7 +200,10 @@ export function matchProduct({ message, catalog, orderSession, slots }) {
     && term.length >= 3
     && !GENERIC_SELECTION_TERMS.has(term)
   ))
-  const confidence = exactNameTerm ? Math.max(best.confidence, 0.72) : best.confidence
+  const hasSpecificTerm = terms.some((term) => term.length >= 3 && !GENERIC_SELECTION_TERMS.has(term))
+  const confidence = exactNameTerm && hasSpecificTerm
+    ? Math.max(best.confidence, 0.72)
+    : Math.min(best.confidence, 0.62)
 
   return {
     product: best.product,
