@@ -12,7 +12,7 @@ import { useModuleCtx } from '../../../context/ModuleContext'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, normalizeCategory, resolveCategoryMeta } from '../../../shared/lib/productCategories'
 import { importLegacyRows, resetStock } from '../../../lib/api'
-import { parseLegacyClients, parseLegacyProducts } from '../../../shared/lib/legacyImport'
+import { parseLegacyProducts } from '../../../shared/lib/legacyImport'
 
 const BASE_CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -381,14 +381,13 @@ function chunkRows(rows, size = 250) {
 
 function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
   const [productFile, setProductFile] = useState(null)
-  const [clientFile, setClientFile] = useState(null)
   const [summary, setSummary] = useState(null)
   const [importing, setImporting] = useState(false)
   const [progress, setProgress] = useState(0)
   const [error, setError] = useState('')
 
   const executeImport = async () => {
-    if (!productFile && !clientFile) return
+    if (!productFile) return
     setImporting(true)
     setError('')
     setProgress(0)
@@ -396,13 +395,10 @@ function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
     try {
       const totals = {
         products: { parsed: 0, skippedParse: 0, created: 0, updated: 0, skipped: 0 },
-        clients: { parsed: 0, skippedParse: 0, created: 0, updated: 0, skipped: 0 },
       }
       const jobs = []
 
       if (productFile) jobs.push({ kind: 'products', parsed: await parseLegacyProducts(productFile) })
-      setProgress(10)
-      if (clientFile) jobs.push({ kind: 'clients', parsed: await parseLegacyClients(clientFile) })
       setProgress(20)
 
       const totalChunks = jobs.reduce((sum, job) => sum + chunkRows(job.parsed.rows).length, 0) || 1
@@ -452,10 +448,9 @@ function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
 
         <div className="modal-body space-y-4">
           <p className="text-sm text-muted">
-            Importacao isolada para admin global. Aceita os XLS do sistema antigo e cria/atualiza estoque e clientes.
+            Importacao isolada para admin global. Aceita o XLS de produtos do sistema antigo e cria/atualiza o estoque.
           </p>
           <FilePicker file={productFile} setFile={setProductFile} label="Produtos GABRIEL.xls" hint="Estoque legado (.xls/.xlsx)"/>
-          <FilePicker file={clientFile} setFile={setClientFile} label="Clientes GABRIEL.xls" hint="Clientes legado (.xls/.xlsx)"/>
 
           {importing && (
             <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
@@ -466,13 +461,12 @@ function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
           {summary && (
             <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm text-text space-y-1">
               <p><b>Produtos:</b> {summary.products.created} criados, {summary.products.updated} atualizados, {summary.products.skipped} ignorados.</p>
-              <p><b>Clientes:</b> {summary.clients.created} criados, {summary.clients.updated} atualizados, {summary.clients.skipped} ignorados.</p>
             </div>
           )}
 
           <div className="flex gap-3">
             <button disabled={importing} onClick={onClose} className="btn btn-secondary flex-1 justify-center border-white/5">Fechar</button>
-            <button disabled={importing || (!productFile && !clientFile)} onClick={executeImport} className="btn btn-primary flex-1 justify-center gap-2">
+            <button disabled={importing || !productFile} onClick={executeImport} className="btn btn-primary flex-1 justify-center gap-2">
               {importing ? <RefreshCw size={14} className="animate-spin"/> : <Upload size={14}/>}
               {importing ? `${progress}%` : 'Importar Legado'}
             </button>
