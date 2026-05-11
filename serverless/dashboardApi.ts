@@ -555,14 +555,261 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
   const { moduleId, tenantId } = getMaintenanceScope(body)
   let productQuery = adminSupabase
     .from('products')
-    .delete()
+    .select('id')
     .eq('module_id', moduleId)
 
   if (tenantId) productQuery = productQuery.eq('tenant_id', tenantId)
-  const { error } = await productQuery
-  if (error) throw new HttpError(500, `Falha ao resetar estoque: ${error.message}`)
+  const { data: products, error: loadError } = await productQuery
+  if (loadError) throw new HttpError(500, `Falha ao localizar estoque: ${loadError.message}`)
 
-  sendJson(res, 200, { ok: true })
+  const productIds = (products || []).map((product) => product.id).filter(Boolean)
+  if (!productIds.length) {
+    sendJson(res, 200, { ok: true, deletedProducts: 0 })
+    return
+  }
+
+  const { error: upsellError } = await adminSupabase
+    .from('products')
+    .update({ upsell_link_id: null })
+    .in('upsell_link_id', productIds)
+
+  if (upsellError) {
+    throw new HttpError(500, `Falha ao remover vinculos de upsell: ${upsellError.message}`)
+  }
+
+  const { error: saleItemsError } = await adminSupabase
+    .from('sale_items')
+    .update({ product_id: null })
+    .in('product_id', productIds)
+
+  if (saleItemsError) {
+    throw new HttpError(500, `Falha ao desvincular produtos de vendas antigas: ${saleItemsError.message}`)
+  }
+
+  const { error: deleteError } = await adminSupabase
+    .from('products')
+    .delete()
+    .in('id', productIds)
+
+  if (deleteError) {
+    throw new HttpError(500, `Falha ao resetar estoque: ${deleteError.message}`)
+  }
+
+  sendJson(res, 200, { ok: true, deletedProducts: productIds.length })
+}
+
+function normalizeLegacyString(value: unknown) {
+  return String(value ?? '').replace(/\s+/g, ' ').trim()
+}
+
+function normalizeLegacyNumber(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) ? number : 0
+}
+
+function normalizeLegacyBoolean(value: unknown, fallback = true) {
+  return typeof value === 'boolean' ? value : fallback
+}
+
+function applyLegacyTenantFilter(query: any, tenantId: string) {
+  return tenantId ? query.eq('tenant_id', tenantId) : query
+}
+
+function buildLegacyTenantPayload(payload: Record<string, unknown>, tenantId: string) {
+  return tenantId ? { ...payload, tenant_id: tenantId } : payload
+}
+
+async function findLegacyProduct(moduleId: string, tenantId: string, row: Record<string, unknown>) {
+  const barcode = normalizeLegacyString(row.barcode)
+  const name = normalizeLegacyString(row.name)
+
+  if (barcode) {
+    let query = adminSupabase
+      .from('products')
+      .select('id')
+      .eq('module_id', moduleId)
+      .eq('barcode', barcode)
+      .limit(1)
+    query = applyLegacyTenantFilter(query, tenantId)
+    const { data, error } = await query
+    if (!error && data?.[0]?.id) return data[0].id
+  }
+
+  if (name) {
+    let query = adminSupabase
+      .from('products')
+      .select('id')
+      .eq('module_id', moduleId)
+      .eq('name', name)
+      .limit(1)
+    query = applyLegacyTenantFilter(query, tenantId)
+    const { data, error } = await query
+    if (!error && data?.[0]?.id) return data[0].id
+  }
+
+  return null
+}
+
+async function importLegacyProduct(moduleId: string, tenantId: string, row: Record<string, unknown>) {
+  const name = normalizeLegacyString(row.name)
+  if (!name) return { skipped: true, reason: 'Produto sem nome.' }
+
+  const payload = buildLegacyTenantPayload({
+    module_id: moduleId,
+    name,
+    barcode: normalizeLegacyString(row.barcode) || null,
+    category: normalizeLegacyString(row.category) || 'Importacao Legado',
+    description: normalizeLegacyString(row.description) || null,
+    price: normalizeLegacyNumber(row.price),
+    cost_price: normalizeLegacyNumber(row.costPrice),
+    stock_quantity: normalizeLegacyNumber(row.stockQuantity),
+    min_stock: normalizeLegacyNumber(row.minStock),
+    species_target: normalizeLegacyString(row.speciesTarget) || null,
+    active: normalizeLegacyBoolean(row.active, true),
+    updated_at: new Date().toISOString(),
+  }, tenantId)
+
+  const existingId = await findLegacyProduct(moduleId, tenantId, row)
+  if (existingId) {
+    const { error } = await adminSupabase
+      .from('products')
+      .update(payload)
+      .eq('id', existingId)
+
+    if (error) throw error
+    return { updated: true }
+  }
+
+  const { error } = await adminSupabase.from('products').insert(payload)
+  if (error) throw error
+  return { created: true }
+}
+
+async function findLegacyClient(moduleId: string, tenantId: string, row: Record<string, unknown>) {
+  const legacyCode = normalizeLegacyString(row.legacyCode)
+  const document = normalizeLegacyString(row.document)
+  const name = normalizeLegacyString(row.name)
+
+  if (legacyCode) {
+    let query = adminSupabase
+      .from('clients')
+      .select('id')
+      .eq('module_id', moduleId)
+      .contains('details', { legacy_code: legacyCode })
+      .limit(1)
+    query = applyLegacyTenantFilter(query, tenantId)
+    const { data, error } = await query
+    if (!error && data?.[0]?.id) return data[0].id
+  }
+
+  if (document) {
+    let query = adminSupabase
+      .from('clients')
+      .select('id')
+      .eq('module_id', moduleId)
+      .eq('document', document)
+      .limit(1)
+    query = applyLegacyTenantFilter(query, tenantId)
+    const { data, error } = await query
+    if (!error && data?.[0]?.id) return data[0].id
+  }
+
+  if (name) {
+    let query = adminSupabase
+      .from('clients')
+      .select('id')
+      .eq('module_id', moduleId)
+      .eq('name', name)
+      .limit(1)
+    query = applyLegacyTenantFilter(query, tenantId)
+    const { data, error } = await query
+    if (!error && data?.[0]?.id) return data[0].id
+  }
+
+  return null
+}
+
+async function importLegacyClient(moduleId: string, tenantId: string, row: Record<string, unknown>) {
+  const name = normalizeLegacyString(row.name)
+  if (!name) return { skipped: true, reason: 'Cliente sem nome.' }
+
+  const payload = buildLegacyTenantPayload({
+    module_id: moduleId,
+    type: normalizeLegacyString(row.type) || 'pet',
+    name,
+    document: normalizeLegacyString(row.document) || null,
+    phone: normalizeLegacyString(row.phone) || null,
+    email: normalizeLegacyString(row.email) || null,
+    address: normalizeLegacyString(row.address) || null,
+    neighborhood: normalizeLegacyString(row.neighborhood) || null,
+    city: normalizeLegacyString(row.city) || null,
+    notes: normalizeLegacyString(row.notes) || null,
+    active: normalizeLegacyBoolean(row.active, true),
+    details: typeof row.details === 'object' && row.details ? row.details : {},
+  }, tenantId)
+
+  const existingId = await findLegacyClient(moduleId, tenantId, row)
+  if (existingId) {
+    const { error } = await adminSupabase
+      .from('clients')
+      .update(payload)
+      .eq('id', existingId)
+
+    if (error) throw error
+    return { updated: true }
+  }
+
+  const { error } = await adminSupabase.from('clients').insert(payload)
+  if (error) throw error
+  return { created: true }
+}
+
+async function handleLegacyImport(req: IncomingMessage, res: ServerResponse) {
+  await requireGlobalAdmin(req)
+  const body = await readJsonBody(req) as JsonBody
+  const kind = normalizeLegacyString(body.kind)
+  const rows = Array.isArray(body.rows) ? body.rows.slice(0, 500) : []
+
+  if (!['products', 'clients'].includes(kind)) {
+    throw new HttpError(400, 'Tipo de importacao legado invalido.')
+  }
+
+  if (!rows.length) {
+    throw new HttpError(400, 'Nenhuma linha valida para importar.')
+  }
+
+  const { moduleId, tenantId } = getMaintenanceScope(body)
+  const summary = {
+    ok: true,
+    kind,
+    received: rows.length,
+    created: 0,
+    updated: 0,
+    skipped: 0,
+    errors: [] as Array<{ index: number; message: string }>,
+  }
+
+  for (const [index, row] of rows.entries()) {
+    try {
+      const result = kind === 'products'
+        ? await importLegacyProduct(moduleId, tenantId, row as Record<string, unknown>)
+        : await importLegacyClient(moduleId, tenantId, row as Record<string, unknown>)
+
+      if (result.created) summary.created += 1
+      else if (result.updated) summary.updated += 1
+      else summary.skipped += 1
+    } catch (error) {
+      summary.skipped += 1
+      if (summary.errors.length < 20) {
+        summary.errors.push({
+          index,
+          message: error instanceof Error ? error.message : 'Erro desconhecido.',
+        })
+      }
+    }
+  }
+
+  sendJson(res, 200, summary)
 }
 
 export async function handleAdminUsers(req: IncomingMessage, res: ServerResponse) {
@@ -685,6 +932,20 @@ export async function handleResetStockRoute(req: IncomingMessage, res: ServerRes
       throw new HttpError(405, 'Metodo nao permitido.')
     }
     return await handleResetStock(req, res)
+  } catch (error) {
+    handleApiError(res, error)
+  }
+}
+
+export async function handleLegacyImportRoute(req: IncomingMessage, res: ServerResponse) {
+  if (req.method === 'OPTIONS') return sendEmpty(res)
+
+  try {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST, OPTIONS')
+      throw new HttpError(405, 'Metodo nao permitido.')
+    }
+    return await handleLegacyImport(req, res)
   } catch (error) {
     handleApiError(res, error)
   }

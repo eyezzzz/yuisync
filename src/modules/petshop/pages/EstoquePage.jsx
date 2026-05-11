@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   Package, Plus, Search, Edit2, Trash2, X, AlertTriangle,
   TrendingUp, TrendingDown, RefreshCw, AlertCircle, Check,
-  Filter, DollarSign, Ban, ShieldAlert, ArrowUpRight
+  Filter, DollarSign, Ban, ShieldAlert, ArrowUpRight, Upload
 } from 'lucide-react'
 import { useProducts } from '../../../shared/hooks/useProducts'
 import { fmtCurrency } from '../../../lib/supabase'
@@ -11,7 +11,8 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, normalizeCategory, resolveCategoryMeta } from '../../../shared/lib/productCategories'
-import { resetStock } from '../../../lib/api'
+import { importLegacyRows, resetStock } from '../../../lib/api'
+import { parseLegacyClients, parseLegacyProducts } from '../../../shared/lib/legacyImport'
 
 const BASE_CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -372,6 +373,117 @@ function CSVImportModal({ onClose, onImport }) {
 }
 
 // ── Página Principal ──────────────────────────────────────────────────────────
+function chunkRows(rows, size = 250) {
+  const chunks = []
+  for (let i = 0; i < rows.length; i += size) chunks.push(rows.slice(i, i + size))
+  return chunks
+}
+
+function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
+  const [productFile, setProductFile] = useState(null)
+  const [clientFile, setClientFile] = useState(null)
+  const [summary, setSummary] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [error, setError] = useState('')
+
+  const executeImport = async () => {
+    if (!productFile && !clientFile) return
+    setImporting(true)
+    setError('')
+    setProgress(0)
+
+    try {
+      const totals = {
+        products: { parsed: 0, skippedParse: 0, created: 0, updated: 0, skipped: 0 },
+        clients: { parsed: 0, skippedParse: 0, created: 0, updated: 0, skipped: 0 },
+      }
+      const jobs = []
+
+      if (productFile) jobs.push({ kind: 'products', parsed: await parseLegacyProducts(productFile) })
+      setProgress(10)
+      if (clientFile) jobs.push({ kind: 'clients', parsed: await parseLegacyClients(clientFile) })
+      setProgress(20)
+
+      const totalChunks = jobs.reduce((sum, job) => sum + chunkRows(job.parsed.rows).length, 0) || 1
+      let doneChunks = 0
+
+      for (const job of jobs) {
+        totals[job.kind].parsed = job.parsed.rows.length
+        totals[job.kind].skippedParse = job.parsed.skipped
+
+        for (const rows of chunkRows(job.parsed.rows)) {
+          const result = await importLegacyRows({ kind: job.kind, rows, moduleId, tenantId })
+          totals[job.kind].created += Number(result.created || 0)
+          totals[job.kind].updated += Number(result.updated || 0)
+          totals[job.kind].skipped += Number(result.skipped || 0)
+          doneChunks += 1
+          setProgress(20 + Math.round((doneChunks / totalChunks) * 80))
+        }
+      }
+
+      setSummary(totals)
+      await onDone?.()
+    } catch (err) {
+      setError(err?.message || 'Erro ao importar legado.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const FilePicker = ({ file, setFile, label, hint }) => (
+    <label className="flex items-center justify-between gap-3 border border-[var(--border)] rounded-xl p-4 cursor-pointer hover:bg-white/5 transition-colors">
+      <div>
+        <p className="text-sm font-semibold text-text">{label}</p>
+        <p className="text-xs text-muted">{file ? file.name : hint}</p>
+      </div>
+      <Upload size={18} className="text-primary"/>
+      <input type="file" accept=".xls,.xlsx" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)}/>
+    </label>
+  )
+
+  return createPortal(
+    <div className="modal-overlay theme-petshop-modal" onClick={e => !importing && e.target === e.currentTarget && onClose()}>
+      <div className="modal-box max-w-lg">
+        <div className="modal-header">
+          <h2 className="font-display font-bold text-xl text-text">Import Legado</h2>
+          {!importing && <button onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>}
+        </div>
+
+        <div className="modal-body space-y-4">
+          <p className="text-sm text-muted">
+            Importacao isolada para admin global. Aceita os XLS do sistema antigo e cria/atualiza estoque e clientes.
+          </p>
+          <FilePicker file={productFile} setFile={setProductFile} label="Produtos GABRIEL.xls" hint="Estoque legado (.xls/.xlsx)"/>
+          <FilePicker file={clientFile} setFile={setClientFile} label="Clientes GABRIEL.xls" hint="Clientes legado (.xls/.xlsx)"/>
+
+          {importing && (
+            <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
+              <div className="bg-primary h-full transition-all duration-300" style={{width: `${progress}%`}}/>
+            </div>
+          )}
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          {summary && (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 p-4 text-sm text-text space-y-1">
+              <p><b>Produtos:</b> {summary.products.created} criados, {summary.products.updated} atualizados, {summary.products.skipped} ignorados.</p>
+              <p><b>Clientes:</b> {summary.clients.created} criados, {summary.clients.updated} atualizados, {summary.clients.skipped} ignorados.</p>
+            </div>
+          )}
+
+          <div className="flex gap-3">
+            <button disabled={importing} onClick={onClose} className="btn btn-secondary flex-1 justify-center border-white/5">Fechar</button>
+            <button disabled={importing || (!productFile && !clientFile)} onClick={executeImport} className="btn btn-primary flex-1 justify-center gap-2">
+              {importing ? <RefreshCw size={14} className="animate-spin"/> : <Upload size={14}/>}
+              {importing ? `${progress}%` : 'Importar Legado'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  )
+}
+
 export default function EstoquePage() {
   const auth = useAuthCtx()
   const { activeModuleId } = useModuleCtx()
@@ -387,6 +499,7 @@ export default function EstoquePage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [modal, setModal]       = useState(null)   // null | {} | product
   const [importModal, setImportModal] = useState(false)
+  const [legacyImportModal, setLegacyImportModal] = useState(false)
   const [adjusting, setAdjusting] = useState(null) // product | null
   const [resettingStock, setResettingStock] = useState(false)
 
@@ -443,11 +556,14 @@ export default function EstoquePage() {
     if (!ok) return
     setResettingStock(true)
     try {
-      await resetStock({
+      const result = await resetStock({
         moduleId: activeModuleId,
         tenantId: auth?.activeTenantId,
       })
       await load({ activeOnly: false })
+      window.alert(`${Number(result.deletedProducts || 0)} produto(s) removido(s) do estoque.`)
+    } catch (err) {
+      window.alert(err?.message || 'Nao foi possivel resetar o estoque.')
     } finally {
       setResettingStock(false)
     }
@@ -466,9 +582,14 @@ export default function EstoquePage() {
         </div>
         <div className="flex gap-2">
            {isGlobalAdmin && (
-             <button onClick={handleResetStock} disabled={resettingStock} className="btn btn-secondary text-red-500 border-red-500/20">
-                <RefreshCw size={16} className={resettingStock ? 'animate-spin' : ''}/> Resetar Estoque
-             </button>
+             <>
+               <button onClick={() => setLegacyImportModal(true)} className="btn btn-secondary border-primary/20 text-primary">
+                  <Upload size={16}/> Import Legado
+               </button>
+               <button onClick={handleResetStock} disabled={resettingStock} className="btn btn-secondary text-red-500 border-red-500/20">
+                  <RefreshCw size={16} className={resettingStock ? 'animate-spin' : ''}/> Resetar Estoque
+               </button>
+             </>
            )}
            {isAdmin && (
              <button onClick={() => setImportModal(true)} className="btn btn-secondary border border-white/10">
@@ -677,6 +798,14 @@ export default function EstoquePage() {
         <CSVImportModal 
           onClose={() => setImportModal(false)}
           onImport={create}
+        />
+      )}
+      {legacyImportModal && (
+        <LegacyImportModal
+          moduleId={activeModuleId}
+          tenantId={auth?.activeTenantId}
+          onClose={() => setLegacyImportModal(false)}
+          onDone={() => load({ activeOnly: false })}
         />
       )}
     </div>
