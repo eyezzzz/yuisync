@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Calendar as CalendarIcon, Cat, Dog, Fish, Grid, List as ListIcon, PawPrint, Phone, Plus, RefreshCw, Search, Trash2, Weight, X } from 'lucide-react'
+import { AlertCircle, Calendar as CalendarIcon, Cat, Dog, Fish, Grid, List as ListIcon, PawPrint, Phone, Plus, RefreshCw, Search, Trash2, Upload, Weight, X } from 'lucide-react'
 import { useClients } from '../../../shared/hooks/useClients'
 import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { useModuleCtx } from '../../../context/ModuleContext'
+import { useAuthCtx } from '../../../context/AuthContext'
 import { fmtCurrency, fmtDate } from '../../../lib/supabase'
+import { importLegacyRows } from '../../../lib/api'
+import { parseLegacyClients } from '../../../shared/lib/legacyImport'
 
 const SPECIES = [
   { value: 'dog', label: 'Cao', icon: Dog },
@@ -152,17 +155,83 @@ function PetDrawer({ pet, subscription, onClose, onEdit, speciesIcon, serviceLab
   )
 }
 
+function chunkRows(rows, size = 250) {
+  const chunks = []
+  for (let i = 0; i < rows.length; i += size) chunks.push(rows.slice(i, i + size))
+  return chunks
+}
+
+function LegacyClientsImportModal({ onClose, moduleId, tenantId, onDone }) {
+  const [file, setFile] = useState(null)
+  const [summary, setSummary] = useState(null)
+  const [importing, setImporting] = useState(false)
+  const [progress, setProgress] = useState(0)
+  const [error, setError] = useState('')
+
+  async function executeImport() {
+    if (!file) return
+    setImporting(true)
+    setError('')
+    setProgress(0)
+    try {
+      const parsed = await parseLegacyClients(file)
+      const totals = { created: 0, updated: 0, skipped: parsed.skipped }
+      const chunks = chunkRows(parsed.rows)
+      for (const [index, rows] of chunks.entries()) {
+        const result = await importLegacyRows({ kind: 'clients', rows, moduleId, tenantId })
+        totals.created += Number(result.created || 0)
+        totals.updated += Number(result.updated || 0)
+        totals.skipped += Number(result.skipped || 0)
+        setProgress(Math.round(((index + 1) / chunks.length) * 100))
+      }
+      setSummary(totals)
+      await onDone?.()
+    } catch (err) {
+      setError(err?.message || 'Erro ao importar clientes legados.')
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return createPortal(
+    <div className="modal-overlay theme-petshop-modal" onClick={(e) => !importing && e.target === e.currentTarget && onClose()}>
+      <div className="modal-box max-w-lg">
+        <div className="modal-header">
+          <h2 className="font-display font-bold text-xl text-text">Import Legado de Clientes</h2>
+          {!importing && <button onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button>}
+        </div>
+        <div className="modal-body space-y-4">
+          <p className="text-sm text-muted">Importacao isolada para admin global. Aceita o XLS de clientes do sistema antigo.</p>
+          <label className="flex items-center justify-between gap-3 border border-[var(--border)] rounded-xl p-4 cursor-pointer hover:bg-white/5 transition-colors">
+            <div><p className="text-sm font-semibold text-text">Clientes GABRIEL.xls</p><p className="text-xs text-muted">{file ? file.name : 'Clientes legado (.xls/.xlsx)'}</p></div>
+            <Upload size={18} className="text-emerald-500" />
+            <input type="file" accept=".xls,.xlsx" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+          </label>
+          {importing && <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden"><div className="bg-emerald-500 h-full transition-all duration-300" style={{ width: `${progress}%` }} /></div>}
+          {error && <p className="text-sm text-red-500">{error}</p>}
+          {summary && <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-4 text-sm text-text">Clientes: {summary.created} criados, {summary.updated} atualizados, {summary.skipped} ignorados.</div>}
+          <div className="flex gap-3"><button disabled={importing} onClick={onClose} className="btn btn-secondary flex-1 justify-center">Fechar</button><button disabled={importing || !file} onClick={executeImport} className="btn btn-primary flex-1 justify-center"><Upload size={14} /> {importing ? `${progress}%` : 'Importar Clientes'}</button></div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
 export default function PetsPage() {
   const { clients: pets, loading, load, create, update, remove, speciesIcon, age } = useClients()
   const { serviceLabel, statusBadge } = useAppointments()
   const { loadPlans, loadClientSubscriptions, saveClientSubscription } = usePetshopAdvanced()
   const { activeModuleId } = useModuleCtx()
+  const auth = useAuthCtx()
+  const isGlobalAdmin = auth?.profile?.role === 'admin'
   const [search, setSearch] = useState('')
   const [speciesFilter, setSpeciesFilter] = useState('')
   const [planFilter, setPlanFilter] = useState('')
   const [view, setView] = useState('grid')
   const [modalPet, setModalPet] = useState(null)
   const [drawerPet, setDrawerPet] = useState(null)
+  const [legacyImportModal, setLegacyImportModal] = useState(false)
   const [plans, setPlans] = useState([])
   const [subscriptions, setSubscriptions] = useState([])
   const [pageError, setPageError] = useState('')
@@ -222,7 +291,10 @@ export default function PetsPage() {
           <h1 className="page-title flex items-center gap-2"><PawPrint size={22} className="text-emerald-500" />{isPetModule ? 'Clientes & Pets' : 'Clientes'}</h1>
           <p className="page-sub">{pets.length} cadastros, {activePlanCount} com plano ativo visivel nesta aba.</p>
         </div>
-        <button onClick={() => setModalPet({})} className="btn btn-primary"><Plus size={15} /> Novo cadastro</button>
+        <div className="flex gap-2">
+          {isGlobalAdmin && <button onClick={() => setLegacyImportModal(true)} className="btn btn-secondary border-emerald-500/20 text-emerald-500"><Upload size={15} /> Import Legado</button>}
+          <button onClick={() => setModalPet({})} className="btn btn-primary"><Plus size={15} /> Novo cadastro</button>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -287,6 +359,7 @@ export default function PetsPage() {
 
       {modalPet !== null && <PetModal pet={modalPet?.id ? modalPet : null} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onClose={() => setModalPet(null)} onSave={handleSave} />}
       {drawerPet && <PetDrawer pet={drawerPet} subscription={latestSubscriptionByClient.get(drawerPet.id)} onClose={() => setDrawerPet(null)} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
+      {legacyImportModal && <LegacyClientsImportModal moduleId={activeModuleId} tenantId={auth?.activeTenantId} onClose={() => setLegacyImportModal(false)} onDone={reloadAll} />}
     </div>
   )
 }
