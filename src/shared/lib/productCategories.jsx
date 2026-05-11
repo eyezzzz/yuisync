@@ -97,14 +97,25 @@ const CATEGORY_META = {
   },
 }
 
+const CATEGORY_ALIASES = {
+  racoes: 'racao',
+  petiscos: 'petisco',
+  acessorios: 'acessorio',
+  medicamentos: 'medicamento',
+  brinquedos: 'brinquedo',
+  genericos: 'generico',
+  servicos: 'servico',
+}
+
 export function resolveCategoryMeta(category) {
   const normalized = normalizeCategory(category)
+  const key = CATEGORY_ALIASES[normalized] || normalized
 
-  if (normalized === 'importacao xml') {
+  if (key === 'importacao xml') {
     return CATEGORY_META.generico
   }
 
-  return CATEGORY_META[normalized] || {
+  return CATEGORY_META[key] || {
     label: category || 'Outro',
     icon: Package,
     iconClassName: 'text-slate-700',
