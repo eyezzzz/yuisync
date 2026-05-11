@@ -199,6 +199,83 @@ export function useAnalytics() {
     }
   }, [activeModuleId, activeTenantId])
 
+  const getChatResolutionMetrics = useCallback(async () => {
+    if (!activeModuleId) {
+      return {
+        avgCsat: null,
+        csatCount: 0,
+        aiResolved: 0,
+        humanResolved: 0,
+        closedCount: 0,
+      }
+    }
+
+    try {
+      const sessionsResponse = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+        let query = supabase
+          .from('chat_sessions')
+          .select('id, status, csat_score, created_at, closed_at')
+          .eq('module_id', activeModuleId)
+          .order('last_message_at', { ascending: false })
+          .limit(500)
+
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query
+      })
+
+      if (sessionsResponse.error) throw sessionsResponse.error
+      const sessions = sessionsResponse.data || []
+      const sessionIds = sessions.map((session) => session.id)
+      if (sessionIds.length === 0) {
+        return {
+          avgCsat: null,
+          csatCount: 0,
+          aiResolved: 0,
+          humanResolved: 0,
+          closedCount: 0,
+        }
+      }
+
+      const messagesResponse = await supabase
+        .from('chat_messages')
+        .select('session_id, role')
+        .in('session_id', sessionIds)
+
+      if (messagesResponse.error) throw messagesResponse.error
+
+      const humanHandled = new Set()
+      const assistantHandled = new Set()
+      for (const message of messagesResponse.data || []) {
+        if (message.role === 'human_agent') humanHandled.add(message.session_id)
+        if (message.role === 'assistant') assistantHandled.add(message.session_id)
+      }
+
+      const closedSessions = sessions.filter((session) => (
+        session.status === 'closed' || session.csat_score !== null || session.closed_at
+      ))
+      const ratings = sessions
+        .map((session) => Number(session.csat_score))
+        .filter((score) => Number.isFinite(score))
+
+      return {
+        avgCsat: ratings.length ? ratings.reduce((sum, score) => sum + score, 0) / ratings.length : null,
+        csatCount: ratings.length,
+        aiResolved: closedSessions.filter((session) => assistantHandled.has(session.id) && !humanHandled.has(session.id)).length,
+        humanResolved: closedSessions.filter((session) => humanHandled.has(session.id)).length,
+        closedCount: closedSessions.length,
+      }
+    } catch (e) {
+      console.error(e)
+      return {
+        avgCsat: null,
+        csatCount: 0,
+        aiResolved: 0,
+        humanResolved: 0,
+        closedCount: 0,
+      }
+    }
+  }, [activeModuleId, activeTenantId])
+
   return {
     loading,
     error,
@@ -206,5 +283,6 @@ export function useAnalytics() {
     getDynamicRevenueChart,
     getAtRiskCustomers,
     getCustomerCount,
+    getChatResolutionMetrics,
   }
 }

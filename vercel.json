@@ -18,6 +18,12 @@
     "api/admin/users/[userId]/status.ts": {
       "maxDuration": 30
     },
+    "api/admin/maintenance/reset-chat.ts": {
+      "maxDuration": 30
+    },
+    "api/admin/maintenance/reset-stock.ts": {
+      "maxDuration": 30
+    },
     "api/chat/respond.ts": {
       "maxDuration": 30
     },

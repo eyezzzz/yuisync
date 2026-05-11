@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+import { runOrderBotTurn } from '../server/lib/orderBot/orchestrator.js'
 
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -654,16 +655,18 @@ async function loadStoreContext(
 async function loadRecentHistory(supabase: SupabaseClient, sessionId: string) {
   const { data, error } = await supabase
     .from('chat_messages')
-    .select('role, content')
+    .select('id, role, content, metadata, tokens_used, sent_at')
     .eq('session_id', sessionId)
     .order('sent_at', { ascending: false })
-    .limit(RECENT_HISTORY_LIMIT)
+    .limit(40)
 
   if (error) fail(500, 'Unable to load conversation history.')
 
   return (data || []).reverse().map((message) => ({
+    ...message,
     role: message.role === 'assistant' || message.role === 'human_agent' ? 'assistant' : 'user',
     content: String(message.content || ''),
+    metadata: record(message.metadata),
   }))
 }
 
@@ -750,6 +753,7 @@ async function saveAssistantMessage(
   event: WhatsappEvent,
   content: string,
   tokensUsed = 0,
+  metadata: LooseRecord = {},
 ): Promise<SavedMessage> {
   const sentAt = new Date().toISOString()
   const inserted = await supabase
@@ -761,6 +765,7 @@ async function saveAssistantMessage(
       tokens_used: tokensUsed,
       sent_at: sentAt,
       metadata: {
+        ...metadata,
         channel: 'whatsapp',
         delivery_status: 'pending',
         whatsapp_reply_to_message_id: event.messageId,
@@ -881,20 +886,26 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   }
 
   const history = await loadRecentHistory(supabase, session.id)
-  const productContextMessage = [
-    ...history
-      .filter((message) => message.role === 'user')
-      .slice(-4)
-      .map((message) => message.content),
-    event.text,
-  ].join(' ')
-  const context = await loadStoreContext(supabase, session, productContextMessage, env)
+  const botTurn = await runOrderBotTurn({
+    supabase,
+    chatSession: session,
+    message: event.text,
+    recentMessages: history,
+  })
 
-  const completion = await callOpenAi(context, history, env)
-  const savedReply = await saveAssistantMessage(supabase, session.id, event, completion.reply, completion.tokensUsed)
+  const savedReply = await saveAssistantMessage(supabase, session.id, event, botTurn.reply, 0, botTurn.metadata)
   await sendAndMarkDelivered(supabase, env, event, savedReply)
 
-  return { sessionId: session.id, ai: true }
+  await supabase
+    .from('chat_sessions')
+    .update({
+      intent: botTurn.intent,
+      ...(!session.customer_name && botTurn.orderSession?.customerName ? { customer_name: botTurn.orderSession.customerName } : {}),
+      last_message_at: new Date().toISOString(),
+    })
+    .eq('id', session.id)
+
+  return { sessionId: session.id, ai: true, intent: botTurn.intent }
 }
 
 async function handleGet(req: IncomingMessage, res: ServerResponse) {

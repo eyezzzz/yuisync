@@ -82,3 +82,25 @@ export function issueFiscalForSale(saleId) {
     body: JSON.stringify({}),
   })
 }
+
+export function resetChatHistory({ moduleId, tenantId }) {
+  return apiRequest('/admin/maintenance/reset-chat', {
+    method: 'POST',
+    body: JSON.stringify({
+      moduleId,
+      tenantId,
+      confirm: 'RESET_CHAT_HISTORY',
+    }),
+  })
+}
+
+export function resetStock({ moduleId, tenantId }) {
+  return apiRequest('/admin/maintenance/reset-stock', {
+    method: 'POST',
+    body: JSON.stringify({
+      moduleId,
+      tenantId,
+      confirm: 'RESET_STOCK',
+    }),
+  })
+}

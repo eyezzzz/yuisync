@@ -285,7 +285,7 @@ async function handleChatRespond(req, res) {
     throw new HttpError(403, 'Requested tenant does not match this chat session.')
   }
 
-  const result = await respondToChatMessage(userSupabase, body.sessionId, body.message)
+  const result = await respondToChatMessage(adminSupabase, body.sessionId, body.message)
   sendJson(res, 200, result, getCorsHeaders(origin))
 }
 

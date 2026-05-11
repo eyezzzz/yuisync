@@ -1,6 +1,7 @@
 import { HttpError } from './http.js'
 import { serverEnv } from './env.js'
 import { logger } from './logger.js'
+import { runOrderBotTurn } from './orderBot/orchestrator.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -277,18 +278,20 @@ async function loadAppointments(supabase, moduleId, tenantId) {
 async function loadRecentMessages(supabase, sessionId) {
   const { data, error } = await supabase
     .from('chat_messages')
-    .select('role, content')
+    .select('id, role, content, metadata, tokens_used, sent_at')
     .eq('session_id', sessionId)
     .order('sent_at', { ascending: false })
-    .limit(15)
+    .limit(40)
 
   if (error) {
     throw new HttpError(500, 'Unable to load conversation history.')
   }
 
   return (data || []).reverse().map((message) => ({
+    ...message,
     role: message.role === 'human_agent' ? 'assistant' : message.role,
     content: message.content,
+    metadata: message.metadata || {},
   }))
 }
 
@@ -424,7 +427,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const { data: session, error: sessionError } = await supabase
     .from('chat_sessions')
-    .select('id, module_id, tenant_id')
+    .select('id, module_id, tenant_id, customer_phone, customer_name, status')
     .eq('id', sessionId)
     .maybeSingle()
 
@@ -436,41 +439,26 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     throw new HttpError(500, 'Chat session is missing tenant_id.')
   }
 
+  if (session.status === 'human' && !options.allowBotWhenHuman) {
+    throw new HttpError(409, 'Chat is currently assigned to a human agent.')
+  }
+
   const moduleId = String(session.module_id || '').trim().toLowerCase()
   if (!SUPPORTED_MODULES.has(moduleId)) {
     throw new HttpError(400, `Unsupported module_id "${session.module_id}".`)
   }
 
-  const [storeName, appointments, history, aiWorkspace] = await Promise.all([
-    loadStoreName(supabase, moduleId, session.tenant_id),
-    loadAppointments(supabase, moduleId, session.tenant_id),
-    loadRecentMessages(supabase, sessionId),
-    getAiWorkspace(supabase, session.tenant_id, moduleId),
-  ])
-  const productContextMessage = [
-    ...history
-      .filter((message) => message.role === 'user')
-      .slice(-4)
-      .map((message) => message.content),
-    trimmedMessage,
-  ].join(' ')
-  const products = await loadProducts(supabase, moduleId, session.tenant_id, productContextMessage)
-
-  const intent = detectIntent(trimmedMessage)
-  const systemPrompt = buildSystemPrompt({
-    storeName,
-    stockContext: buildStockContext(products),
-    appointmentsContext: buildAppointmentsContext(appointments),
-    trainingPrompt: aiWorkspace.prompt,
-    knowledgeBlock: buildKnowledgeBlock(aiWorkspace.docs),
-  })
+  const history = await loadRecentMessages(supabase, sessionId)
 
   const userSentAt = new Date().toISOString()
   const { error: userInsertError } = await supabase.from('chat_messages').insert({
     session_id: sessionId,
     role: 'user',
     content: trimmedMessage,
-    metadata: options.userMetadata || null,
+    metadata: {
+      source: options.source || 'dashboard_simulation',
+      ...(options.userMetadata || {}),
+    },
     sent_at: userSentAt,
   })
 
@@ -478,21 +466,14 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     throw new HttpError(500, 'Unable to save user message.')
   }
 
-  const completion = await callOpenAIWithTimeout({
-    model: aiWorkspace.company?.model_name || serverEnv.openAiModel,
-    temperature: Number(aiWorkspace.company?.temperature || 0.15),
-    max_tokens: 500,
-    messages: [
-      { role: 'system', content: systemPrompt },
-      ...history,
-      { role: 'user', content: trimmedMessage },
-    ],
-  }, serverEnv.openAiTimeoutMs)
+  const botTurn = await runOrderBotTurn({
+    supabase,
+    chatSession: session,
+    message: trimmedMessage,
+    recentMessages: history,
+  })
 
-  const reply = completion.choices[0]?.message?.content?.trim()
-  if (!reply) {
-    throw new HttpError(502, 'The AI response came back empty.')
-  }
+  const reply = botTurn.reply
 
   const botSentAt = new Date().toISOString()
   const { data: savedReply, error: replyInsertError } = await supabase
@@ -501,8 +482,11 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       session_id: sessionId,
       role: 'assistant',
       content: reply,
-      metadata: options.assistantMetadata || null,
-      tokens_used: completion?.usage?.total_tokens || 0,
+      metadata: {
+        ...(botTurn.metadata || {}),
+        ...(options.assistantMetadata || {}),
+      },
+      tokens_used: 0,
       sent_at: botSentAt,
     })
     .select('id, role, content, metadata, tokens_used, sent_at')
@@ -515,7 +499,8 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const { error: sessionUpdateError } = await supabase
     .from('chat_sessions')
     .update({
-      intent,
+      intent: botTurn.intent,
+      ...(!session.customer_name && botTurn.orderSession?.customerName ? { customer_name: botTurn.orderSession.customerName } : {}),
       last_message_at: botSentAt,
     })
     .eq('id', sessionId)
@@ -527,8 +512,8 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   logger.info('Chat response generated', {
     sessionId,
     moduleId,
-    intent,
-    tokens: completion?.usage?.total_tokens || 0,
+    intent: botTurn.intent,
+    engine: 'petshop_order_state_machine_v1',
   })
 
   return {
