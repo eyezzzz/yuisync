@@ -24,6 +24,9 @@
     "api/admin/maintenance/reset-stock.ts": {
       "maxDuration": 30
     },
+    "api/admin/maintenance/legacy-import.ts": {
+      "maxDuration": 30
+    },
     "api/chat/respond.ts": {
       "maxDuration": 30
     },

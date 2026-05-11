@@ -104,3 +104,15 @@ export function resetStock({ moduleId, tenantId }) {
     }),
   })
 }
+
+export function importLegacyRows({ kind, rows, moduleId, tenantId }) {
+  return apiRequest('/admin/maintenance/legacy-import', {
+    method: 'POST',
+    body: JSON.stringify({
+      kind,
+      rows,
+      moduleId,
+      tenantId,
+    }),
+  })
+}
