@@ -505,6 +505,14 @@ function getMaintenanceScope(body: JsonBody) {
   return { moduleId, tenantId }
 }
 
+function chunkArray<T>(items: T[], size = 100) {
+  const chunks: T[][] = []
+  for (let index = 0; index < items.length; index += size) {
+    chunks.push(items.slice(index, index + size))
+  }
+  return chunks
+}
+
 async function handleResetChatHistory(req: IncomingMessage, res: ServerResponse) {
   await requireGlobalAdmin(req)
   const body = await readJsonBody(req) as JsonBody
@@ -568,31 +576,37 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  const { error: upsellError } = await adminSupabase
-    .from('products')
-    .update({ upsell_link_id: null })
-    .in('upsell_link_id', productIds)
+  for (const batch of chunkArray(productIds)) {
+    const { error: upsellError } = await adminSupabase
+      .from('products')
+      .update({ upsell_link_id: null })
+      .in('upsell_link_id', batch)
 
-  if (upsellError) {
-    throw new HttpError(500, `Falha ao remover vinculos de upsell: ${upsellError.message}`)
+    if (upsellError) {
+      throw new HttpError(500, `Falha ao remover vinculos de upsell: ${upsellError.message}`)
+    }
   }
 
-  const { error: saleItemsError } = await adminSupabase
-    .from('sale_items')
-    .update({ product_id: null })
-    .in('product_id', productIds)
+  for (const batch of chunkArray(productIds)) {
+    const { error: saleItemsError } = await adminSupabase
+      .from('sale_items')
+      .update({ product_id: null })
+      .in('product_id', batch)
 
-  if (saleItemsError) {
-    throw new HttpError(500, `Falha ao desvincular produtos de vendas antigas: ${saleItemsError.message}`)
+    if (saleItemsError) {
+      throw new HttpError(500, `Falha ao desvincular produtos de vendas antigas: ${saleItemsError.message}`)
+    }
   }
 
-  const { error: deleteError } = await adminSupabase
-    .from('products')
-    .delete()
-    .in('id', productIds)
+  for (const batch of chunkArray(productIds)) {
+    const { error: deleteError } = await adminSupabase
+      .from('products')
+      .delete()
+      .in('id', batch)
 
-  if (deleteError) {
-    throw new HttpError(500, `Falha ao resetar estoque: ${deleteError.message}`)
+    if (deleteError) {
+      throw new HttpError(500, `Falha ao resetar estoque: ${deleteError.message}`)
+    }
   }
 
   sendJson(res, 200, { ok: true, deletedProducts: productIds.length })
