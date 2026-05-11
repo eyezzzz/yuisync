@@ -6,6 +6,7 @@ import { runOrderBotTurn } from '../server/lib/orderBot/orchestrator.js'
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
 const DEFAULT_OPENAI_TIMEOUT_MS = 12_000
+const DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 8_000
 const GRAPH_BASE_URL = 'https://graph.facebook.com'
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 const MAX_WHATSAPP_TEXT_CHARS = 4096
@@ -50,6 +51,7 @@ type WebhookEnv = {
   whatsappGraphVersion: string
   whatsappTenantId: string
   whatsappModuleId: string
+  whatsappReplyDebounceMs: number
 }
 
 type WhatsappEvent = {
@@ -130,6 +132,16 @@ function parsePositiveInt(value: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
+function parseNonNegativeInt(value: string, fallback: number): number {
+  if (!value) return fallback
+  const parsed = Number(value)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : fallback
+}
+
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
 function getWebhookEnv(): WebhookEnv {
   return {
     supabaseUrl: requireEnv('SUPABASE_URL'),
@@ -144,6 +156,10 @@ function getWebhookEnv(): WebhookEnv {
     whatsappGraphVersion: optionalEnv('WHATSAPP_GRAPH_VERSION', 'v25.0').replace(/^\/+/, ''),
     whatsappTenantId: optionalEnv('WHATSAPP_TENANT_ID'),
     whatsappModuleId: optionalEnv('WHATSAPP_MODULE_ID', DEFAULT_MODULE_ID).toLowerCase(),
+    whatsappReplyDebounceMs: parseNonNegativeInt(
+      optionalEnv('WHATSAPP_REPLY_DEBOUNCE_MS'),
+      DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS,
+    ),
   }
 }
 
@@ -670,6 +686,61 @@ async function loadRecentHistory(supabase: SupabaseClient, sessionId: string) {
   }))
 }
 
+async function hasNewerIncomingMessage(
+  supabase: SupabaseClient,
+  sessionId: string,
+  savedMessage: SavedMessage,
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('id, sent_at')
+    .eq('session_id', sessionId)
+    .eq('role', 'user')
+    .gt('sent_at', savedMessage.sent_at)
+    .order('sent_at', { ascending: true })
+    .limit(1)
+
+  if (error) return false
+  return Boolean(data?.length)
+}
+
+function messageTimeMs(message: { sent_at?: string }) {
+  const parsed = Date.parse(String(message.sent_at || ''))
+  return Number.isFinite(parsed) ? parsed : 0
+}
+
+function buildDebouncedUserMessage(
+  history: Array<{ role: string; content: string; sent_at?: string; metadata?: LooseRecord }>,
+  event: WhatsappEvent,
+  env: WebhookEnv,
+) {
+  const latestUserAt = history
+    .filter((message) => message.role === 'user')
+    .reduce((max, message) => Math.max(max, messageTimeMs(message)), 0)
+
+  const windowMs = Math.max(env.whatsappReplyDebounceMs * 3, 30_000)
+  const recentUserMessages = history.filter((message) => (
+    message.role === 'user'
+    && message.content
+    && latestUserAt - messageTimeMs(message) <= windowMs
+  ))
+
+  if (!recentUserMessages.length) return event.text
+
+  const lastAssistantIndex = history.reduce((lastIndex, message, index) => (
+    message.role === 'assistant' ? index : lastIndex
+  ), -1)
+
+  const messagesAfterLastAssistant = recentUserMessages.filter((message) => history.indexOf(message) > lastAssistantIndex)
+  const source = messagesAfterLastAssistant.length ? messagesAfterLastAssistant : recentUserMessages.slice(-3)
+
+  return source
+    .map((message) => clean(message.content))
+    .filter(Boolean)
+    .join('\n')
+    || event.text
+}
+
 function buildSystemPrompt(context: StoreContext): string {
   const basePrompt = context.companyPrompt || [
     `Voce e o atendente virtual oficial do ${context.storeName}.`,
@@ -865,7 +936,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     ? event.text
     : `[Mensagem ${event.type || 'nao textual'} recebida no WhatsApp]`
 
-  await saveIncomingMessage(supabase, session.id, event, incomingContent)
+  const savedIncoming = await saveIncomingMessage(supabase, session.id, event, incomingContent)
   await touchSession(supabase, session.id)
 
   if (await hasAssistantReply(supabase, session.id, event.messageId)) {
@@ -885,11 +956,24 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     return { sessionId: session.id, handedToHuman: true }
   }
 
+  if (env.whatsappReplyDebounceMs > 0) {
+    await sleep(env.whatsappReplyDebounceMs)
+
+    if (await hasNewerIncomingMessage(supabase, session.id, savedIncoming)) {
+      return { sessionId: session.id, debounced: true }
+    }
+
+    if (await hasAssistantReply(supabase, session.id, event.messageId)) {
+      return { sessionId: session.id, duplicate: true }
+    }
+  }
+
   const history = await loadRecentHistory(supabase, session.id)
+  const debouncedMessage = buildDebouncedUserMessage(history, event, env)
   const botTurn = await runOrderBotTurn({
     supabase,
     chatSession: session,
-    message: event.text,
+    message: debouncedMessage,
     recentMessages: history,
   })
 
