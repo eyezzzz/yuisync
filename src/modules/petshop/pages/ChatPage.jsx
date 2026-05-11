@@ -9,6 +9,7 @@ import { useChat }    from '../../../shared/hooks/useChat'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { fmtDateTime } from '../../../lib/supabase'
+import { resetChatHistory } from '../../../lib/api'
 
 // ── Message Bubble ────────────────────────────────────────────────────────────
 function isImageUrl(value = '') {
@@ -217,8 +218,10 @@ export default function ChatPage() {
   const [statusFilter, setStatusFilter] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [sending, setSending]     = useState(false)
+  const [resettingHistory, setResettingHistory] = useState(false)
   const [mobileView, setMobileView] = useState('list') // 'list' | 'chat' (mobile only)
   const bottomRef = useRef(null)
+  const isGlobalAdmin = auth?.profile?.role === 'admin'
 
   useEffect(() => {
     loadSessions(statusFilter || undefined)
@@ -252,6 +255,23 @@ export default function ChatPage() {
     }
   }
 
+  const handleResetHistory = async () => {
+    if (!isGlobalAdmin || resettingHistory) return
+    const ok = window.confirm('Resetar todo o historico de mensagens e conversas deste modulo/negocio? Esta acao e permanente.')
+    if (!ok) return
+    setResettingHistory(true)
+    try {
+      await resetChatHistory({
+        moduleId: activeModule.id,
+        tenantId: auth?.activeTenantId,
+      })
+      setActiveSession(null)
+      await loadSessions(statusFilter || undefined)
+    } finally {
+      setResettingHistory(false)
+    }
+  }
+
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend() }
   }
@@ -278,9 +298,16 @@ export default function ChatPage() {
             </h1>
             <p className="page-sub">Central de atendimento</p>
           </div>
-          <button onClick={() => setShowModal(true)} className="btn btn-primary">
-            <Plus size={16}/> Nova Conversa
-          </button>
+          <div className="flex items-center gap-2">
+            {isGlobalAdmin && (
+              <button onClick={handleResetHistory} disabled={resettingHistory} className="btn btn-secondary text-red-500 border-red-500/20">
+                <RefreshCw size={16} className={resettingHistory ? 'animate-spin' : ''}/> Reset Historico
+              </button>
+            )}
+            <button onClick={() => setShowModal(true)} className="btn btn-primary">
+              <Plus size={16}/> Nova Conversa
+            </button>
+          </div>
         </div>
         {/* Summary pills */}
         <div className="flex items-center gap-2 flex-wrap">

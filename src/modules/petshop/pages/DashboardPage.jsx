@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState, useCallback } from 'react'
-import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, X, CheckCircle, ShieldAlert } from 'lucide-react'
+import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, X, CheckCircle, ShieldAlert, Star, UserCheck } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import { useProducts }      from '../../../shared/hooks/useProducts'
 import { useAppointments }  from '../../../shared/hooks/useAppointments'
@@ -9,6 +9,7 @@ import { useFinance }       from '../../../shared/hooks/useFinance'
 import { supabase, fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
+import { useAnalytics } from '../../../shared/hooks/useAnalytics'
 import AIHoursSavedCard from '../components/AIHoursSavedCard'
 import { AI_HOURS_SAVED_MOCK, AI_HOURS_SAVED_SERIES } from '../constants/aiHoursSavedMock'
 import { buildAIHoursFromScopedSessions } from '../utils/aiHoursSaved'
@@ -148,20 +149,23 @@ export default function DashboardPage({ setPage }) {
   
   const isAdmin = auth?.profile?.role === 'admin' || 
                  (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
+  const isGlobalAdmin = auth?.profile?.role === 'admin'
 
   const { getCriticalStock }                        = useProducts()
   const { load, appointments, todayStats, serviceLabel, statusBadge } = useAppointments()
   const { loadMetrics, getDailyStats, dailyRevenue } = useSales()
   const { loadSessions, sessions }                  = useChat()
   const { invoices, loadInvoices, deleteInvoice } = useFinance()
+  const { getChatResolutionMetrics } = useAnalytics()
   // const { activeModuleId } = useModuleCtx()
 
   const [critical, setCritical]     = useState([])
   const [stats, setStats]           = useState({ revenue: 0, count: 0, upsells: 0, salesMix: [] })
+  const [chatQuality, setChatQuality] = useState({ avgCsat: null, csatCount: 0, aiResolved: 0, humanResolved: 0, closedCount: 0 })
   const [loading, setLoading]       = useState(true)
   const [showResetModal, setShowResetModal] = useState(false)
   const [isWiping, setIsWiping]     = useState(false)
-  const canWipeData = import.meta.env.DEV && isAdmin
+  const canWipeData = isGlobalAdmin
 
   const reloadAll = useCallback(async () => {
     setLoading(true)
@@ -172,9 +176,10 @@ export default function DashboardPage({ setPage }) {
       loadInvoices(),
       getCriticalStock().then(setCritical),
       getDailyStats().then(setStats),
+      getChatResolutionMetrics().then(setChatQuality),
     ])
     setLoading(false)
-  }, [load, loadMetrics, loadSessions, loadInvoices, getCriticalStock, getDailyStats])
+  }, [load, loadMetrics, loadSessions, loadInvoices, getCriticalStock, getDailyStats, getChatResolutionMetrics])
 
   useEffect(() => {
     reloadAll()
@@ -289,6 +294,24 @@ export default function DashboardPage({ setPage }) {
             label="Chats Ativos"
             value={openChats}
             sub={sessions.filter(s => s.status === 'bot').length + ' no bot'}
+            onClick={() => setPage('chat')}
+          />
+        </div>
+        <div className="xl:col-span-4 h-full">
+          <KpiCard
+            accent="primary" icon={Star}
+            label="Satisfacao IA"
+            value={chatQuality.avgCsat === null ? '-' : chatQuality.avgCsat.toFixed(1)}
+            sub={`${chatQuality.csatCount} avaliacao${chatQuality.csatCount !== 1 ? 'oes' : ''} coletada${chatQuality.csatCount !== 1 ? 's' : ''}`}
+            onClick={() => setPage('chat')}
+          />
+        </div>
+        <div className="xl:col-span-4 h-full">
+          <KpiCard
+            accent="amber" icon={UserCheck}
+            label="Resolucao Chat"
+            value={`${chatQuality.aiResolved}/${chatQuality.humanResolved}`}
+            sub={`IA / humano em ${chatQuality.closedCount} encerrado${chatQuality.closedCount !== 1 ? 's' : ''}`}
             onClick={() => setPage('chat')}
           />
         </div>

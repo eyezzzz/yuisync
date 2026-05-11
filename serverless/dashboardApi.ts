@@ -414,7 +414,7 @@ async function handleChatRespond(req: IncomingMessage, res: ServerResponse) {
 
   ensureChatSessionAccess(requester, session)
 
-  const result = await respondToChatMessage(userSupabase, sessionId, body.message)
+  const result = await respondToChatMessage(adminSupabase, sessionId, body.message)
   sendJson(res, 200, result)
 }
 
@@ -482,6 +482,87 @@ function extractSaleId(req: IncomingMessage) {
   const match = getUrl(req).pathname.match(/^\/api\/fiscal\/sales\/([^/]+)\/issue\/?$/)
   if (!match?.[1]) throw new HttpError(400, 'Venda invalida.')
   return decodeURIComponent(match[1])
+}
+
+async function requireGlobalAdmin(req: IncomingMessage) {
+  const accessToken = getBearerToken(req)
+  const requester = await requireAuthenticatedProfile(accessToken)
+  if (requester.role !== 'admin') {
+    throw new HttpError(403, 'Apenas admins globais podem executar manutencao.')
+  }
+  return requester
+}
+
+function getMaintenanceScope(body: JsonBody) {
+  const moduleId = typeof body.moduleId === 'string' && body.moduleId.trim()
+    ? body.moduleId.trim()
+    : 'petshop'
+  const tenantId = typeof body.tenantId === 'string' && body.tenantId.trim()
+    ? body.tenantId.trim()
+    : ''
+
+  if (tenantId) validateUUID(tenantId, 'tenantId')
+  return { moduleId, tenantId }
+}
+
+async function handleResetChatHistory(req: IncomingMessage, res: ServerResponse) {
+  await requireGlobalAdmin(req)
+  const body = await readJsonBody(req) as JsonBody
+  if (body.confirm !== 'RESET_CHAT_HISTORY') {
+    throw new HttpError(400, 'Confirmacao invalida para resetar historico.')
+  }
+
+  const { moduleId, tenantId } = getMaintenanceScope(body)
+  let sessionQuery = adminSupabase
+    .from('chat_sessions')
+    .select('id')
+    .eq('module_id', moduleId)
+
+  if (tenantId) sessionQuery = sessionQuery.eq('tenant_id', tenantId)
+  const { data: sessions, error: sessionError } = await sessionQuery
+  if (sessionError) throw new HttpError(500, `Falha ao localizar chats: ${sessionError.message}`)
+
+  const sessionIds = (sessions || []).map((session) => session.id)
+  if (sessionIds.length > 0) {
+    const { error: messageError } = await adminSupabase
+      .from('chat_messages')
+      .delete()
+      .in('session_id', sessionIds)
+
+    if (messageError) throw new HttpError(500, `Falha ao apagar mensagens: ${messageError.message}`)
+
+    const { error: deleteSessionError } = await adminSupabase
+      .from('chat_sessions')
+      .delete()
+      .in('id', sessionIds)
+
+    if (deleteSessionError) throw new HttpError(500, `Falha ao apagar conversas: ${deleteSessionError.message}`)
+  }
+
+  sendJson(res, 200, {
+    ok: true,
+    deletedSessions: sessionIds.length,
+  })
+}
+
+async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
+  await requireGlobalAdmin(req)
+  const body = await readJsonBody(req) as JsonBody
+  if (body.confirm !== 'RESET_STOCK') {
+    throw new HttpError(400, 'Confirmacao invalida para resetar estoque.')
+  }
+
+  const { moduleId, tenantId } = getMaintenanceScope(body)
+  let productQuery = adminSupabase
+    .from('products')
+    .delete()
+    .eq('module_id', moduleId)
+
+  if (tenantId) productQuery = productQuery.eq('tenant_id', tenantId)
+  const { error } = await productQuery
+  if (error) throw new HttpError(500, `Falha ao resetar estoque: ${error.message}`)
+
+  sendJson(res, 200, { ok: true })
 }
 
 export async function handleAdminUsers(req: IncomingMessage, res: ServerResponse) {
@@ -576,6 +657,34 @@ export async function handleFiscalFocusWebhookRoute(req: IncomingMessage, res: S
       throw new HttpError(405, 'Metodo nao permitido.')
     }
     return await handleFiscalFocusWebhook(req, res)
+  } catch (error) {
+    handleApiError(res, error)
+  }
+}
+
+export async function handleResetChatHistoryRoute(req: IncomingMessage, res: ServerResponse) {
+  if (req.method === 'OPTIONS') return sendEmpty(res)
+
+  try {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST, OPTIONS')
+      throw new HttpError(405, 'Metodo nao permitido.')
+    }
+    return await handleResetChatHistory(req, res)
+  } catch (error) {
+    handleApiError(res, error)
+  }
+}
+
+export async function handleResetStockRoute(req: IncomingMessage, res: ServerResponse) {
+  if (req.method === 'OPTIONS') return sendEmpty(res)
+
+  try {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST, OPTIONS')
+      throw new HttpError(405, 'Metodo nao permitido.')
+    }
+    return await handleResetStock(req, res)
   } catch (error) {
     handleApiError(res, error)
   }

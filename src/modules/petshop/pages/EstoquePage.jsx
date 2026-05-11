@@ -11,6 +11,7 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, normalizeCategory, resolveCategoryMeta } from '../../../shared/lib/productCategories'
+import { resetStock } from '../../../lib/api'
 
 const BASE_CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -377,6 +378,7 @@ export default function EstoquePage() {
   
   const isAdmin = auth?.profile?.role === 'admin' || 
                  (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
+  const isGlobalAdmin = auth?.profile?.role === 'admin'
 
   const { products, loading, load, create, update, adjustStock, remove, stockStatus } = useProducts()
 
@@ -386,6 +388,7 @@ export default function EstoquePage() {
   const [modal, setModal]       = useState(null)   // null | {} | product
   const [importModal, setImportModal] = useState(false)
   const [adjusting, setAdjusting] = useState(null) // product | null
+  const [resettingStock, setResettingStock] = useState(false)
 
   useEffect(() => {
     load({ activeOnly: false })
@@ -434,6 +437,22 @@ export default function EstoquePage() {
     return                       { cls: 'badge-green', label: 'Normal',    cellCls: 'stock-ok'      }
   }
 
+  const handleResetStock = async () => {
+    if (!isGlobalAdmin || resettingStock) return
+    const ok = window.confirm('Resetar o estoque deste modulo/negocio apagando todos os produtos? Esta acao e permanente.')
+    if (!ok) return
+    setResettingStock(true)
+    try {
+      await resetStock({
+        moduleId: activeModuleId,
+        tenantId: auth?.activeTenantId,
+      })
+      await load({ activeOnly: false })
+    } finally {
+      setResettingStock(false)
+    }
+  }
+
   return (
     <div className="page animate-content">
       {/* Header */}
@@ -446,6 +465,11 @@ export default function EstoquePage() {
           <p className="page-sub !mt-1">Controle de produtos e inventário global</p>
         </div>
         <div className="flex gap-2">
+           {isGlobalAdmin && (
+             <button onClick={handleResetStock} disabled={resettingStock} className="btn btn-secondary text-red-500 border-red-500/20">
+                <RefreshCw size={16} className={resettingStock ? 'animate-spin' : ''}/> Resetar Estoque
+             </button>
+           )}
            {isAdmin && (
              <button onClick={() => setImportModal(true)} className="btn btn-secondary border border-white/10">
                 Importar CSV
