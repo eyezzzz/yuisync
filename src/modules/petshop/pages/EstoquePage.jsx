@@ -556,11 +556,14 @@ export default function EstoquePage() {
     if (!ok) return
     setResettingStock(true)
     try {
-      await resetStock({
+      const result = await resetStock({
         moduleId: activeModuleId,
         tenantId: auth?.activeTenantId,
       })
       await load({ activeOnly: false })
+      window.alert(`${Number(result.deletedProducts || 0)} produto(s) removido(s) do estoque.`)
+    } catch (err) {
+      window.alert(err?.message || 'Nao foi possivel resetar o estoque.')
     } finally {
       setResettingStock(false)
     }

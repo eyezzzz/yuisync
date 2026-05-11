@@ -555,14 +555,47 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
   const { moduleId, tenantId } = getMaintenanceScope(body)
   let productQuery = adminSupabase
     .from('products')
-    .delete()
+    .select('id')
     .eq('module_id', moduleId)
 
   if (tenantId) productQuery = productQuery.eq('tenant_id', tenantId)
-  const { error } = await productQuery
-  if (error) throw new HttpError(500, `Falha ao resetar estoque: ${error.message}`)
+  const { data: products, error: loadError } = await productQuery
+  if (loadError) throw new HttpError(500, `Falha ao localizar estoque: ${loadError.message}`)
 
-  sendJson(res, 200, { ok: true })
+  const productIds = (products || []).map((product) => product.id).filter(Boolean)
+  if (!productIds.length) {
+    sendJson(res, 200, { ok: true, deletedProducts: 0 })
+    return
+  }
+
+  const { error: upsellError } = await adminSupabase
+    .from('products')
+    .update({ upsell_link_id: null })
+    .in('upsell_link_id', productIds)
+
+  if (upsellError) {
+    throw new HttpError(500, `Falha ao remover vinculos de upsell: ${upsellError.message}`)
+  }
+
+  const { error: saleItemsError } = await adminSupabase
+    .from('sale_items')
+    .update({ product_id: null })
+    .in('product_id', productIds)
+
+  if (saleItemsError) {
+    throw new HttpError(500, `Falha ao desvincular produtos de vendas antigas: ${saleItemsError.message}`)
+  }
+
+  const { error: deleteError } = await adminSupabase
+    .from('products')
+    .delete()
+    .in('id', productIds)
+
+  if (deleteError) {
+    throw new HttpError(500, `Falha ao resetar estoque: ${deleteError.message}`)
+  }
+
+  sendJson(res, 200, { ok: true, deletedProducts: productIds.length })
 }
 
 function normalizeLegacyString(value: unknown) {
