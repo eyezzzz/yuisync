@@ -590,11 +590,11 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
   for (const batch of chunkArray(productIds)) {
     const { error: saleItemsError } = await adminSupabase
       .from('sale_items')
-      .update({ product_id: null })
+      .delete()
       .in('product_id', batch)
 
     if (saleItemsError) {
-      throw new HttpError(500, `Falha ao desvincular produtos de vendas antigas: ${saleItemsError.message}`)
+      throw new HttpError(500, `Falha ao remover itens de vendas antigas ligados ao estoque: ${saleItemsError.message}`)
     }
   }
 
