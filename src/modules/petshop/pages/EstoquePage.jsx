@@ -25,6 +25,21 @@ const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0
 
 const PRODUCT_CATEGORIES = BASE_PRODUCT_CATEGORIES
 const normalizeProductCategory = normalizeCategory
+const PRODUCT_NAME_KEEP_UPPER = new Set(['KG', 'G', 'ML', 'UN', 'SRD', 'JR', 'AD', 'C', 'N'])
+
+function formatProductName(value = '') {
+  const text = String(value || '').replace(/\s+/g, ' ').trim()
+  if (!text) return ''
+  if (text !== text.toUpperCase()) return text
+
+  return text
+    .toLocaleLowerCase('pt-BR')
+    .replace(/\b[\p{L}\d/.-]+\b/gu, (word) => {
+      const upper = word.toLocaleUpperCase('pt-BR')
+      if (PRODUCT_NAME_KEEP_UPPER.has(upper) || /\d/.test(word)) return upper
+      return word.charAt(0).toLocaleUpperCase('pt-BR') + word.slice(1)
+    })
+}
 
 const emptyForm = {
   name: '', barcode: '', category: 'Ração', description: '', price: '',
@@ -683,7 +698,18 @@ export default function EstoquePage() {
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="tbl">
+            <table className="tbl table-fixed min-w-[1120px]">
+              <colgroup>
+                <col className="w-[28%]" />
+                <col className="w-[15%]" />
+                <col className="w-[9%]" />
+                {isAdmin && <col className="w-[9%]" />}
+                {isAdmin && <col className="w-[8%]" />}
+                <col className="w-[7%]" />
+                <col className="w-[6%]" />
+                <col className="w-[9%]" />
+                <col className="w-[9%]" />
+              </colgroup>
               <thead><tr>
                 <th>Produto</th><th>Categoria</th><th>Preço</th>
                 {isAdmin && <th>Custo</th>}
@@ -700,10 +726,10 @@ export default function EstoquePage() {
                   return (
                     <tr key={p.id} className={!p.active ? 'opacity-50' : ''}>
                       <td>
-                        <p className="font-semibold text-text">{p.name}</p>
+                        <p className="font-semibold text-text truncate" title={p.name}>{formatProductName(p.name)}</p>
                         {p.upsell_product && (
-                          <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1">
-                            <ArrowUpRight size={10}/> {p.upsell_product.name}
+                          <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1 min-w-0">
+                            <ArrowUpRight size={10} className="flex-shrink-0"/> <span className="truncate">{formatProductName(p.upsell_product.name)}</span>
                           </p>
                         )}
                         {!p.active && <span className="badge badge-gray text-[10px] mt-0.5">Inativo</span>}
@@ -713,11 +739,11 @@ export default function EstoquePage() {
                           const meta = resolveCategoryMeta(p.category)
                           const Icon = meta.icon
                           return (
-                            <span className={`badge flex items-center gap-2 border ${meta.chipClassName}`}>
-                              <span className={`flex h-5 w-5 items-center justify-center rounded-md ${meta.tileClassName}`}>
+                            <span className={`badge inline-flex max-w-full items-center gap-2 border ${meta.chipClassName}`}>
+                              <span className={`flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-md ${meta.tileClassName}`}>
                                 <Icon size={11} />
                               </span>
-                              {meta.label}
+                              <span className="truncate">{meta.label}</span>
                             </span>
                           )
                         })()}
