@@ -11,6 +11,7 @@ import {
   isModuleAdmin,
   listManageableProfiles,
   normalizeManagedEmail,
+  normalizeManagedPassword,
   normalizeUserPayload,
   requireAuthenticatedProfile,
   validateManagedEmail,
@@ -371,18 +372,19 @@ async function handleUserCreate(req, res) {
   const requester = await requireAuthenticatedProfile(accessToken)
   const body = await readJsonBody(req)
   const email = normalizeManagedEmail(body.email)
+  const password = normalizeManagedPassword(body.password)
 
-  if (!email || !body.password) {
+  if (!email || !password) {
     throw new HttpError(400, 'Email and password are required.')
   }
 
   validateManagedEmail(email)
-  validateManagedPassword(body.password)
+  validateManagedPassword(password)
 
   const profileData = normalizeUserPayload(body, requester, body.scopeModuleId)
   const { data, error } = await adminSupabase.auth.admin.createUser({
     email,
-    password: body.password,
+    password,
     email_confirm: true,
     user_metadata: {
       full_name: profileData.full_name,
@@ -432,6 +434,7 @@ async function handleUserUpdate(req, res, userId) {
   const accessToken = getBearerToken(req)
   const requester = await requireAuthenticatedProfile(accessToken)
   const body = await readJsonBody(req)
+  const password = normalizeManagedPassword(body.password)
 
   validateUUID(userId, 'userId')
 
@@ -476,6 +479,14 @@ async function handleUserUpdate(req, res, userId) {
 
   if (updateError) {
     throw new HttpError(500, 'Unable to update user.')
+  }
+
+  if (password) {
+    validateManagedPassword(password)
+    const { error: authUpdateError } = await adminSupabase.auth.admin.updateUserById(userId, { password })
+    if (authUpdateError) {
+      throw new HttpError(500, 'Unable to update user password.')
+    }
   }
 
   const tenantResult = await syncManagedUserTenants(userId, requester, body)

@@ -8,6 +8,7 @@ import {
   isModuleAdmin,
   listManageableProfiles,
   normalizeManagedEmail,
+  normalizeManagedPassword,
   normalizeUserPayload,
   requireAuthenticatedProfile,
   validateManagedEmail,
@@ -278,18 +279,19 @@ async function handleUserCreate(req: IncomingMessage, res: ServerResponse) {
   const requester = await requireAuthenticatedProfile(accessToken)
   const body = await readJsonBody(req) as JsonBody
   const email = normalizeManagedEmail(body.email)
+  const password = normalizeManagedPassword(body.password)
 
-  if (!email || !body.password) {
+  if (!email || !password) {
     throw new HttpError(400, 'Email e senha sao obrigatorios.')
   }
 
   validateManagedEmail(email)
-  validateManagedPassword(body.password)
+  validateManagedPassword(password)
 
   const profileData = normalizeUserPayloadForRoute(body, requester, body.scopeModuleId)
   const { data, error } = await adminSupabase.auth.admin.createUser({
     email,
-    password: String(body.password || ''),
+    password,
     email_confirm: true,
     user_metadata: {
       full_name: profileData.full_name,
@@ -321,6 +323,7 @@ async function handleUserUpdate(req: IncomingMessage, res: ServerResponse, userI
   const accessToken = getBearerToken(req)
   const requester = await requireAuthenticatedProfile(accessToken)
   const body = await readJsonBody(req) as JsonBody
+  const password = normalizeManagedPassword(body.password)
 
   validateUUID(userId, 'userId')
 
@@ -350,6 +353,15 @@ async function handleUserUpdate(req: IncomingMessage, res: ServerResponse, userI
 
   const profileData = normalizeUserPayloadForRoute(body, requester, body.scopeModuleId, existingProfile)
   await updateProfile(userId, profileData)
+
+  if (password) {
+    validateManagedPassword(password)
+    const { error: authUpdateError } = await adminSupabase.auth.admin.updateUserById(userId, { password })
+    if (authUpdateError) {
+      throw new HttpError(500, 'Nao foi possivel atualizar a senha do usuario.')
+    }
+  }
+
   const tenantResult = await syncManagedUserTenants(userId, requester, body)
 
   sendJson(res, 200, {
