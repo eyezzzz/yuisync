@@ -32,9 +32,13 @@ export function useAuth() {
         .from('profiles')
         .select('*')
         .eq('id', userId)
-        .single()
+        .maybeSingle()
 
       if (error) throw error
+      if (!data) {
+        await supabase.auth.signOut()
+        throw new Error('Perfil da dashboard nao encontrado para este acesso.')
+      }
 
       if (!data.active) {
         await supabase.auth.signOut()
@@ -50,7 +54,8 @@ export function useAuth() {
   }
 
   const signIn = async (email, password) => {
-    const result = await supabase.auth.signInWithPassword({ email, password })
+    const normalizedEmail = String(email || '').trim().toLowerCase()
+    const result = await supabase.auth.signInWithPassword({ email: normalizedEmail, password })
 
     if (result.error || !result.data.session?.user?.id) {
       return result
@@ -67,7 +72,15 @@ export function useAuth() {
       return { data: { user: null, session: null }, error }
     }
 
-    if (!profile?.active) {
+    if (!profile) {
+      await supabase.auth.signOut()
+      return {
+        data: { user: null, session: null },
+        error: new Error('Conta autenticada, mas sem perfil na dashboard. Recrie ou repare este acesso no painel de usuarios.'),
+      }
+    }
+
+    if (!profile.active) {
       await supabase.auth.signOut()
       return {
         data: { user: null, session: null },

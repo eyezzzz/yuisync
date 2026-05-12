@@ -87,6 +87,10 @@ export function normalizeManagedEmail(value) {
   return typeof value === 'string' ? value.trim().toLowerCase() : ''
 }
 
+export function normalizeManagedPassword(value) {
+  return typeof value === 'string' ? value.trim() : ''
+}
+
 export function normalizeManagedStaffType(value) {
   const normalized = typeof value === 'string' ? value.trim().toLowerCase() : ''
   return STAFF_TYPES.includes(normalized) ? normalized : 'funcionario'
@@ -99,7 +103,7 @@ export function validateManagedEmail(email) {
 }
 
 export function validateManagedPassword(password) {
-  if (!PASSWORD_RE.test(password || '')) {
+  if (!PASSWORD_RE.test(normalizeManagedPassword(password))) {
     throw new HttpError(400, 'Temporary password must have at least 12 characters, with uppercase, lowercase and number.')
   }
 }

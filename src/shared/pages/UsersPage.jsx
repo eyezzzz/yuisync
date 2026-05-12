@@ -116,10 +116,12 @@ function UserModal({
   }
 
   async function handleSubmit() {
+    const cleanPassword = form.password.trim()
+
     if (!form.email) return setErr('Email e obrigatorio.')
     if (!form.full_name.trim()) return setErr('Nome e obrigatorio.')
-    if (!isEditing && !form.password) return setErr('Senha e obrigatoria.')
-    if (!isEditing && !TEMP_PASSWORD_RE.test(form.password)) {
+    if (!isEditing && !cleanPassword) return setErr('Senha e obrigatoria.')
+    if (cleanPassword && !TEMP_PASSWORD_RE.test(cleanPassword)) {
       return setErr('A senha temporaria precisa ter 12 caracteres ou mais, com letra maiuscula, minuscula e numero.')
     }
 
@@ -146,12 +148,15 @@ function UserModal({
       }
 
       if (isEditing) {
-        await updateManagedUser(editingUser.id, payload)
+        await updateManagedUser(editingUser.id, {
+          ...payload,
+          ...(cleanPassword ? { password: cleanPassword } : {}),
+        })
       } else {
         await createManagedUser({
           ...payload,
           email: form.email.trim(),
-          password: form.password,
+          password: cleanPassword,
         })
       }
 
@@ -208,18 +213,19 @@ function UserModal({
               />
             </div>
 
-            {!isEditing && (
-              <div>
-                <label className="inp-label">Senha temporaria *</label>
-                <input
-                  className="inp"
-                  type="password"
-                  placeholder="********"
-                  value={form.password}
-                  onChange={(event) => setField('password', event.target.value)}
-                />
-              </div>
-            )}
+            <div>
+              <label className="inp-label">{isEditing ? 'Nova senha temporaria' : 'Senha temporaria *'}</label>
+              <input
+                className="inp"
+                type="password"
+                placeholder={isEditing ? 'Deixe em branco para manter' : '********'}
+                value={form.password}
+                onChange={(event) => setField('password', event.target.value)}
+              />
+              {isEditing && (
+                <p className="text-xs text-muted mt-1">Preencha apenas se quiser redefinir o acesso deste usuario.</p>
+              )}
+            </div>
           </div>
 
           {form.role === 'employee' && (
