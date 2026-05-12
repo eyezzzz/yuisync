@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Settings, Save, Store, Printer, MapPin, Phone, RefreshCw, AlertCircle, Check,
-  FileText, Building2, Users2, Plus,
+  FileText, Building2, Users2, Plus, Bot, Truck,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuthCtx } from '../../context/AuthContext'
@@ -29,6 +29,8 @@ const INITIAL_FORM = {
   fiscal_provider: 'mock_local',
   provider_base_url: '',
   fiscal_notes: '',
+  bot_prompt: '',
+  delivery_fee: '10.00',
   issuer_legal_name: '',
   issuer_trade_name: '',
   issuer_cnpj: '',
@@ -52,6 +54,15 @@ function isFiscalSchemaError(error) {
     || msg.includes('schema cache')
     || msg.includes('relation')
     || msg.includes('column')
+  )
+}
+
+function isDeliveryFeeSchemaError(error) {
+  const msg = String(error?.message || '').toLowerCase()
+  return msg.includes('delivery_fee') && (
+    msg.includes('schema cache')
+    || msg.includes('column')
+    || msg.includes('does not exist')
   )
 }
 
@@ -151,6 +162,8 @@ export default function SettingsPage() {
           store_phone: data.store_phone || '',
           printer_width: data.printer_width || '80',
           fiscal_id: data.fiscal_id || '',
+          bot_prompt: data.bot_prompt || '',
+          delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
         }
       }
 
@@ -236,7 +249,13 @@ export default function SettingsPage() {
         }, activeTenantId, includeTenant)
 
         const conflict = includeTenant ? 'tenant_id,module_id' : 'module_id'
-        return supabase.from('settings').upsert(row, { onConflict: conflict })
+        const firstTry = await supabase.from('settings').upsert(row, { onConflict: conflict })
+        if (firstTry.error && isDeliveryFeeSchemaError(firstTry.error)) {
+          const fallbackRow = { ...row }
+          delete fallbackRow.delivery_fee
+          return supabase.from('settings').upsert(fallbackRow, { onConflict: conflict })
+        }
+        return firstTry
       })
 
       if (upsertResponse.error) {
@@ -637,6 +656,46 @@ export default function SettingsPage() {
                     <p className="text-sm text-muted italic">Este modulo usa exportacao PDF (A4) para documentos.</p>
                   </div>
                 )}
+              </div>
+            </div>
+
+            <div className={showGeneralSettings ? 'col-span-1 md:col-span-2 space-y-4' : 'hidden'}>
+              <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
+                <Bot size={14} /> Prompt do bot
+              </h3>
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm">
+                <label className="inp-label">Instrucao customizada deste tenant</label>
+                <textarea
+                  className="inp min-h-[180px] resize-y"
+                  placeholder="Ex: Priorize banho e tosa, informe horarios de atendimento, tom de voz da marca, politicas comerciais confirmadas..."
+                  disabled={!canEdit}
+                  value={form.bot_prompt}
+                  onChange={(event) => setForm((prev) => ({ ...prev, bot_prompt: event.target.value }))}
+                />
+                <p className="text-xs text-muted mt-3">
+                  O bot sempre usa dados reais do banco para loja, estoque, agenda e historico. Este campo adiciona apenas regras especificas deste cliente.
+                </p>
+              </div>
+            </div>
+
+            <div className={showGeneralSettings ? 'space-y-4' : 'hidden'}>
+              <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
+                <Truck size={14} /> Entrega
+              </h3>
+              <div className="bg-card border border-white/5 rounded-3xl p-8 space-y-6 shadow-sm">
+                <div>
+                  <label className="inp-label">Taxa de entrega padrao</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="inp"
+                    placeholder="10.00"
+                    disabled={!canEdit}
+                    value={form.delivery_fee}
+                    onChange={(event) => setForm((prev) => ({ ...prev, delivery_fee: event.target.value }))}
+                  />
+                </div>
               </div>
             </div>
 

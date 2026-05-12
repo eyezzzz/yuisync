@@ -1,7 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import { runOrderBotTurn } from '../server/lib/orderBot/orchestrator.js'
 
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -35,6 +34,78 @@ const PRODUCT_STOP_WORDS = new Set([
   'vcs',
   'voces',
 ])
+const DEFAULT_DELIVERY_FEE = 10
+const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
+const BUSY_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
+const PETBOT_TOOLS = [
+  {
+    type: 'function',
+    function: {
+      name: 'update_customer_profile',
+      description: 'Atualiza o cadastro do cliente/pet quando o cliente informou dados novos na conversa.',
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          customer_name: { type: 'string' },
+          pet_name: { type: 'string' },
+          species: { type: 'string' },
+          size: { type: 'string' },
+          breed: { type: 'string' },
+          symptom: { type: 'string' },
+          address: { type: 'string' },
+          neighborhood: { type: 'string' },
+          city: { type: 'string' },
+        },
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'create_confirmed_petshop_order',
+      description: 'Registra venda, ordem operacional e/ou agendamento somente depois do cliente confirmar o resumo final.',
+      parameters: {
+        type: 'object',
+        required: ['customer_name', 'order_type', 'items', 'total', 'payment_method', 'fulfillment_type'],
+        additionalProperties: false,
+        properties: {
+          customer_name: { type: 'string' },
+          pet_name: { type: 'string' },
+          species: { type: 'string' },
+          size: { type: 'string' },
+          order_type: { type: 'string', enum: ['produto', 'banho_tosa', 'veterinaria'] },
+          items: {
+            type: 'array',
+            items: {
+              type: 'object',
+              required: ['name', 'quantity', 'unit_price'],
+              additionalProperties: false,
+              properties: {
+                product_id: { type: 'string' },
+                name: { type: 'string' },
+                quantity: { type: 'number' },
+                unit_price: { type: 'number' },
+                upsell: { type: 'boolean' },
+              },
+            },
+          },
+          service_type: { type: 'string' },
+          scheduled_at: { type: 'string' },
+          total: { type: 'number' },
+          payment_method: { type: 'string', enum: ['pix', 'dinheiro', 'cartao'] },
+          change_for: { type: 'number' },
+          fulfillment_type: { type: 'string', enum: ['entrega', 'retirada', 'servico'] },
+          delivery_address: { type: 'string' },
+          delivery_neighborhood: { type: 'string' },
+          delivery_city: { type: 'string' },
+          delivery_reference: { type: 'string' },
+          notes: { type: 'string' },
+        },
+      },
+    },
+  },
+]
 
 type LooseRecord = Record<string, any>
 
@@ -72,6 +143,7 @@ type ChatSession = {
   customer_phone: string
   customer_name: string | null
   status: string
+  client_id?: string | null
 }
 
 type SavedMessage = {
@@ -85,7 +157,14 @@ type SavedMessage = {
 
 type StoreContext = {
   storeName: string
-  companyPrompt: string
+  storePhone: string
+  storeAddress: string
+  storeNeighborhood: string
+  storeCity: string
+  botPrompt: string
+  deliveryFee: number
+  customerContext: string
+  examplesContext: string
   modelName: string
   temperature: number
   productContext: string
@@ -107,6 +186,22 @@ function fail(status: number, message: string): never {
 
 function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizePhone(value: unknown): string {
+  return clean(value).replace(/\D/g, '')
+}
+
+function isPlaceholderName(value: unknown): boolean {
+  const name = clean(value).toLowerCase()
+  return !name || ['cliente', 'cliente whatsapp', 'whatsapp', 'sem nome'].includes(name) || /^cliente[-\s]?\d+/i.test(name)
+}
+
+function normalizeSpecies(value: unknown): string {
+  const lower = clean(value).toLowerCase()
+  if (lower.includes('cach') || lower.includes('dog')) return 'dog'
+  if (lower.includes('gat') || lower.includes('cat')) return 'cat'
+  return lower
 }
 
 function record(value: unknown): LooseRecord {
@@ -375,7 +470,7 @@ async function getOrCreateSession(
 
   const existing = await supabase
     .from('chat_sessions')
-    .select('id, tenant_id, module_id, customer_phone, customer_name, status')
+    .select('id, tenant_id, module_id, customer_phone, customer_name, status, client_id')
     .eq('tenant_id', tenantId)
     .eq('module_id', env.whatsappModuleId)
     .eq('customer_phone', event.from)
@@ -395,7 +490,7 @@ async function getOrCreateSession(
       .from('chat_sessions')
       .update(patch)
       .eq('id', existing.data.id)
-      .select('id, tenant_id, module_id, customer_phone, customer_name, status')
+      .select('id, tenant_id, module_id, customer_phone, customer_name, status, client_id')
       .single()
 
     if (updated.error) fail(500, 'Unable to update WhatsApp chat session.')
@@ -414,7 +509,7 @@ async function getOrCreateSession(
       last_message_at: now,
       opened_at: now,
     })
-    .select('id, tenant_id, module_id, customer_phone, customer_name, status')
+    .select('id, tenant_id, module_id, customer_phone, customer_name, status, client_id')
     .single()
 
   if (created.error) fail(500, 'Unable to create WhatsApp chat session.')
@@ -511,6 +606,21 @@ function detectProductIntent(message: string): boolean {
   return /\b(racao|petisco|brinquedo|shampoo|coleira|comprar|preco|estoque|produto|produtos|tem|voces tem|vcs tem)\b/.test(normalized)
 }
 
+function detectConversationIntent(message: string): string {
+  const lower = normalizeSearchText(message)
+  if (/racao|petisc|brinquedo|shampoo|coleira|comprar|preco|estoque|tem |tem\?|voces tem/i.test(lower)) {
+    return 'produto'
+  }
+  if (/banho|tosa|agend/i.test(lower)) return 'banho_tosa'
+  if (/vet(erinario|erinaria)?|consulta|vacina|sintoma|doente|vomit|diarre|machuc/i.test(lower)) return 'veterinaria'
+  if (/desconto|barato|melhor preco/i.test(lower)) return 'desconto'
+  return 'geral'
+}
+
+function escapeIlike(value: string): string {
+  return value.replace(/[%_\\]/g, (char) => `\\${char}`)
+}
+
 function buildSearchTerms(message: string): string[] {
   return normalizeSearchText(message)
     .replace(/[^a-z0-9]+/g, ' ')
@@ -597,19 +707,416 @@ function buildProductsContext(products: LooseRecord[] | null | undefined): strin
 }
 
 function buildAppointmentsContext(appointments: LooseRecord[] | null | undefined): string {
-  if (!appointments?.length) return 'Agenda de hoje sem horarios ocupados confirmados no contexto.'
+  if (!appointments?.length) {
+    return 'Nenhum horario cadastrado na agenda para os proximos dias. Nao prometa horario; pergunte se deseja falar com atendente.'
+  }
 
-  return appointments
+  const lines = appointments
+    .slice(0, 30)
     .map((appointment) => {
       const time = new Date(appointment.scheduled_at).toLocaleTimeString('pt-BR', {
         hour: '2-digit',
         minute: '2-digit',
         timeZone: 'America/Sao_Paulo',
       })
-      return `${time} - ${clean(appointment.service_type) || 'Atendimento'} (${clean(appointment.status) || 'status nao informado'})`
+      const date = new Date(appointment.scheduled_at).toLocaleDateString('pt-BR', {
+        day: '2-digit',
+        month: '2-digit',
+        timeZone: 'America/Sao_Paulo',
+      })
+      const status = clean(appointment.status).toLowerCase()
+      const availability = AVAILABLE_STATUSES.has(status)
+        ? 'DISPONIVEL'
+        : BUSY_STATUSES.has(status)
+          ? 'OCUPADO'
+          : `STATUS ${status || 'nao informado'}`
+      const price = Number(appointment.price || 0) > 0 ? ` | R$ ${Number(appointment.price).toFixed(2)}` : ''
+      return `${date} ${time} - ${clean(appointment.service_type) || 'Atendimento'} | ${availability}${price}`
     })
-    .join('\n')
-    .slice(0, 3000)
+
+  if (!lines.some((line) => line.includes('DISPONIVEL'))) {
+    lines.push('Nao ha horario explicitamente disponivel no contexto. Ofereca consultar outros horarios com a equipe.')
+  }
+
+  return lines.join('\n').slice(0, 3000)
+}
+
+function buildCustomerContext(customer: { client: LooseRecord | null; phone: string; isKnown: boolean }): string {
+  if (!customer.client) {
+    return [
+      'Cliente nao encontrado no cadastro pelo telefone.',
+      `Telefone: ${customer.phone || 'Nao informado'}`,
+      'Nome confirmado: nao. Pergunte o nome antes de vender.',
+    ].join('\n')
+  }
+
+  const details = record(customer.client.details)
+  const address = [customer.client.address, customer.client.neighborhood, customer.client.city].filter(Boolean).join(' - ')
+  return [
+    'Cliente cadastrado pelo telefone: sim',
+    `Nome: ${customer.isKnown ? clean(customer.client.name) : 'nao confirmado'}`,
+    `Telefone: ${clean(customer.client.phone) || customer.phone || 'Nao informado'}`,
+    `Pet: ${clean(details.pet_name) || 'Nao informado'}`,
+    `Especie: ${clean(details.species) || 'Nao informado'}`,
+    `Porte/peso: ${clean(details.size || details.weight_kg) || 'Nao informado'}`,
+    `Raca: ${clean(details.breed) || 'Nao informado'}`,
+    `Endereco cadastrado: ${address || 'Nao informado'}`,
+    `Nome confirmado: ${customer.isKnown ? 'sim' : 'nao'}`,
+  ].join('\n')
+}
+
+async function findClientByPhone(
+  supabase: SupabaseClient,
+  moduleId: string,
+  tenantId: string,
+  phone: string,
+): Promise<LooseRecord | null> {
+  const digits = normalizePhone(phone)
+  if (!digits) return null
+
+  const { data, error } = await supabase
+    .from('clients')
+    .select('*')
+    .eq('module_id', moduleId)
+    .eq('tenant_id', tenantId)
+    .limit(200)
+
+  if (error) return null
+  return ((data || []) as LooseRecord[]).find((client) => normalizePhone(client.phone) === digits) || null
+}
+
+async function ensureCustomerProfile(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  patch: LooseRecord = {},
+): Promise<{ client: LooseRecord | null; phone: string; isKnown: boolean }> {
+  const phone = normalizePhone(session.customer_phone)
+  let client: LooseRecord | null = null
+
+  if (session.client_id) {
+    const { data } = await supabase
+      .from('clients')
+      .select('*')
+      .eq('id', session.client_id)
+      .maybeSingle()
+    client = (data as LooseRecord | null) || null
+  }
+
+  if (!client) {
+    client = await findClientByPhone(supabase, session.module_id, session.tenant_id, phone)
+  }
+
+  const customerName = clean(patch.customer_name) || clean(client?.name) || clean(session.customer_name)
+  const hasConfirmedName = Boolean(clean(patch.customer_name)) || Boolean(client && !isPlaceholderName(client.name) && record(client.details).name_confirmed !== false)
+  const nextDetails = {
+    ...record(client?.details),
+    ...(clean(patch.pet_name) ? { pet_name: clean(patch.pet_name) } : {}),
+    ...(clean(patch.species) ? { species: normalizeSpecies(patch.species) } : {}),
+    ...(clean(patch.size) ? { size: clean(patch.size) } : {}),
+    ...(clean(patch.breed) ? { breed: clean(patch.breed) } : {}),
+    ...(clean(patch.symptom) ? { last_symptom: clean(patch.symptom) } : {}),
+    name_confirmed: hasConfirmedName,
+  }
+
+  if (!client) {
+    const { data, error } = await supabase
+      .from('clients')
+      .insert({
+        tenant_id: session.tenant_id,
+        module_id: session.module_id,
+        type: 'pet',
+        name: customerName || `Cliente ${phone || 'WhatsApp'}`,
+        phone: phone || session.customer_phone || null,
+        active: true,
+        details: nextDetails,
+      })
+      .select('*')
+      .single()
+
+    if (!error) client = data as LooseRecord
+  }
+
+  if (client?.id) {
+    await supabase
+      .from('chat_sessions')
+      .update({
+        client_id: client.id,
+        customer_phone: phone || session.customer_phone,
+        ...(hasConfirmedName && client.name ? { customer_name: client.name } : {}),
+      })
+      .eq('id', session.id)
+  }
+
+  return {
+    client,
+    phone: phone || session.customer_phone,
+    isKnown: Boolean(hasConfirmedName),
+  }
+}
+
+function isBotExamplesSchemaError(error: unknown): boolean {
+  const message = String((error as { message?: string })?.message || '').toLowerCase()
+  return message.includes('bot_conversation_examples') && (
+    message.includes('does not exist')
+    || message.includes('schema cache')
+    || message.includes('relation')
+    || message.includes('column')
+  )
+}
+
+function scoreConversationExample(example: LooseRecord, terms: string[], intent: string): number {
+  let score = 0
+  if (clean(example.intent).toLowerCase() === intent.toLowerCase()) score += 12
+  if (clean(example.intent).toLowerCase() === 'geral') score += 3
+
+  const tags = Array.isArray(example.tags) ? example.tags : []
+  const haystack = [
+    example.intent,
+    example.stage,
+    example.user_message,
+    example.ideal_reply,
+    example.notes,
+    ...tags,
+  ].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+  for (const term of terms) {
+    if (haystack.includes(term)) score += 2
+  }
+
+  return score
+}
+
+function buildExamplesContext(examples: LooseRecord[]): string {
+  if (!examples?.length) return ''
+
+  return examples
+    .slice(0, 3)
+    .map((example, index) => [
+      `Exemplo ${index + 1} (${clean(example.intent) || 'geral'} / ${clean(example.stage) || 'geral'}):`,
+      `Cliente: ${clean(example.user_message)}`,
+      `PetBot: ${clean(example.ideal_reply)}`,
+      clean(example.notes) ? `Notas: ${clean(example.notes)}` : null,
+    ].filter(Boolean).join('\n'))
+    .join('\n---\n')
+}
+
+async function loadConversationExamples(
+  supabase: SupabaseClient,
+  moduleId: string,
+  tenantId: string,
+  message: string,
+  intent: string,
+): Promise<string> {
+  let query = supabase
+    .from('bot_conversation_examples')
+    .select('intent,stage,user_message,ideal_reply,notes,tags,created_at')
+    .eq('module_id', moduleId)
+    .eq('active', true)
+    .limit(80)
+
+  if (tenantId) {
+    query = query.or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
+  }
+
+  const { data, error } = await query
+  if (error) {
+    if (isBotExamplesSchemaError(error)) return ''
+    return ''
+  }
+
+  const terms = buildSearchTerms(message)
+  const ranked = ((data || []) as LooseRecord[])
+    .map((example) => ({
+      example,
+      score: scoreConversationExample(example, terms, intent),
+    }))
+    .sort((a, b) => b.score - a.score)
+    .filter((item) => item.score > 0)
+    .map((item) => item.example)
+
+  const selected = ranked.length > 0 ? ranked : ((data || []) as LooseRecord[]).slice(0, 2)
+  return buildExamplesContext(selected)
+}
+
+async function createConfirmedPetshopOrder(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  context: StoreContext,
+  args: LooseRecord = {},
+) {
+  const customer = await ensureCustomerProfile(supabase, session, args)
+  const items = Array.isArray(args.items) ? args.items as LooseRecord[] : []
+  if (!items.length) throw new Error('Pedido sem itens para registrar.')
+
+  const subtotal = items.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
+  const deliveryFee = args.fulfillment_type === 'entrega' ? Number(context.deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
+  const total = Number(args.total || 0) || subtotal + deliveryFee
+  const orderType = args.order_type === 'produto' ? 'entrega' : 'servico'
+  const fulfillmentType = args.order_type === 'produto'
+    ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
+    : 'servico'
+
+  const notes = [
+    'Origem: PetBot WhatsApp',
+    `Sessao: ${session.id}`,
+    clean(args.notes),
+    args.fulfillment_type === 'retirada' ? 'Retirada na loja' : null,
+    clean(args.delivery_reference) ? `Referencia: ${clean(args.delivery_reference)}` : null,
+    Number(args.change_for || 0) > 0 ? `Troco para R$ ${Number(args.change_for).toFixed(2)}` : null,
+  ].filter(Boolean).join(' | ')
+
+  const { data: sale, error: saleError } = await supabase
+    .from('sales')
+    .insert({
+      tenant_id: session.tenant_id,
+      module_id: session.module_id,
+      client_id: customer.client?.id || null,
+      customer_name: clean(args.customer_name) || clean(customer.client?.name) || session.customer_name || 'Cliente',
+      customer_phone: customer.phone,
+      payment_method: args.payment_method || null,
+      subtotal,
+      discount: 0,
+      total_price: total,
+      status: 'concluido',
+      source: 'whatsapp',
+      fulfillment_type: fulfillmentType,
+      notes,
+    })
+    .select('id,total_price')
+    .single()
+
+  if (saleError) throw new Error(`Falha ao registrar venda: ${saleError.message}`)
+
+  const saleItems = items.map((item) => ({
+    tenant_id: session.tenant_id,
+    sale_id: sale.id,
+    product_id: clean(item.product_id) || null,
+    quantity: Number(item.quantity || 1),
+    unit_price: Number(item.unit_price || 0),
+    subtotal: Number(item.quantity || 1) * Number(item.unit_price || 0),
+    upsell: Boolean(item.upsell),
+  }))
+
+  const { error: itemsError } = await supabase.from('sale_items').insert(saleItems)
+  if (itemsError) throw new Error(`Falha ao registrar itens: ${itemsError.message}`)
+
+  for (const item of saleItems) {
+    if (!item.product_id) continue
+    const { data: product } = await supabase
+      .from('products')
+      .select('stock_quantity')
+      .eq('id', item.product_id)
+      .maybeSingle()
+    if (!product) continue
+    const nextStock = Math.max(0, Number(product.stock_quantity || 0) - Number(item.quantity || 0))
+    await supabase.from('products').update({ stock_quantity: nextStock }).eq('id', item.product_id)
+  }
+
+  let appointment: LooseRecord | null = null
+  if (args.order_type !== 'produto' && clean(args.scheduled_at)) {
+    const { data, error } = await supabase
+      .from('appointments')
+      .insert({
+        tenant_id: session.tenant_id,
+        module_id: session.module_id,
+        client_id: customer.client?.id || null,
+        pet_id: customer.client?.id || null,
+        service_type: clean(args.service_type) || clean(args.order_type),
+        scheduled_at: clean(args.scheduled_at),
+        duration_min: 60,
+        price: total,
+        status: 'agendado',
+        source: 'whatsapp',
+        customer_name: clean(args.customer_name) || clean(customer.client?.name) || session.customer_name || 'Cliente',
+        customer_phone: customer.phone,
+        description: notes,
+        notes,
+      })
+      .select('id,scheduled_at')
+      .single()
+    if (error) throw new Error(`Falha ao registrar agendamento: ${error.message}`)
+    appointment = data as LooseRecord
+  }
+
+  const { data: order, error: orderError } = await supabase
+    .from('service_delivery_orders')
+    .insert({
+      tenant_id: session.tenant_id,
+      module_id: session.module_id,
+      sale_id: sale.id,
+      client_id: customer.client?.id || null,
+      session_id: session.id,
+      source: 'whatsapp',
+      order_type: orderType,
+      status: orderType === 'servico' ? 'agendado' : 'separacao',
+      scheduled_for: appointment?.scheduled_at || null,
+      delivery_address: args.fulfillment_type === 'entrega' ? clean(args.delivery_address) || clean(customer.client?.address) || null : null,
+      delivery_neighborhood: args.fulfillment_type === 'entrega' ? clean(args.delivery_neighborhood) || clean(customer.client?.neighborhood) || null : null,
+      delivery_city: args.fulfillment_type === 'entrega' ? clean(args.delivery_city) || clean(customer.client?.city) || null : null,
+      contact_phone: customer.phone,
+      notes,
+    })
+    .select('id')
+    .single()
+
+  if (orderError && !String(orderError.message || '').includes('duplicate')) {
+    throw new Error(`Falha ao registrar ordem operacional: ${orderError.message}`)
+  }
+
+  await supabase
+    .from('chat_sessions')
+    .update({
+      intent: 'pedido_confirmado',
+      context: {
+        last_sale_id: sale.id,
+        last_order_id: order?.id || null,
+        last_appointment_id: appointment?.id || null,
+      },
+      last_message_at: new Date().toISOString(),
+    })
+    .eq('id', session.id)
+
+  return {
+    sale_id: sale.id,
+    order_id: order?.id || null,
+    appointment_id: appointment?.id || null,
+    total,
+  }
+}
+
+async function executePetbotTool(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  context: StoreContext,
+  toolCall: LooseRecord,
+) {
+  const name = clean(record(toolCall.function).name)
+  let args: LooseRecord = {}
+  try {
+    args = JSON.parse(clean(record(toolCall.function).arguments) || '{}')
+  } catch {
+    args = {}
+  }
+
+  if (name === 'update_customer_profile') {
+    const customer = await ensureCustomerProfile(supabase, session, args)
+    return {
+      ok: true,
+      action: name,
+      client_id: customer.client?.id || null,
+      name_confirmed: customer.isKnown,
+    }
+  }
+
+  if (name === 'create_confirmed_petshop_order') {
+    return {
+      ok: true,
+      action: name,
+      ...await createConfirmedPetshopOrder(supabase, session, context, args),
+    }
+  }
+
+  return { ok: false, error: `Ferramenta desconhecida: ${name}` }
 }
 
 async function loadStoreContext(
@@ -619,51 +1126,86 @@ async function loadStoreContext(
   env: WebhookEnv,
 ): Promise<StoreContext> {
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+  const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+  const terms = buildSearchTerms(latestUserMessage)
+  const intent = detectConversationIntent(latestUserMessage)
 
-  const [settingsResult, companyResult, productsResult, appointmentsResult] = await Promise.all([
+  let productsQuery = supabase
+    .from('products')
+    .select('name, category, price, stock_quantity, active')
+    .eq('tenant_id', session.tenant_id)
+    .eq('module_id', session.module_id)
+    .eq('active', true)
+    .limit(12)
+
+  if (terms.length > 0) {
+    const orQuery = terms
+      .flatMap((term) => {
+        const escaped = escapeIlike(term)
+        return [`name.ilike.%${escaped}%`, `category.ilike.%${escaped}%`]
+      })
+      .join(',')
+    productsQuery = productsQuery.or(orQuery)
+  }
+
+  const customer = await ensureCustomerProfile(supabase, session)
+
+  const [settingsResult, companyResult, productsResult, appointmentsResult, examplesContext] = await Promise.all([
     supabase
       .from('settings')
-      .select('store_name')
+      .select('*')
       .eq('tenant_id', session.tenant_id)
       .eq('module_id', session.module_id)
       .maybeSingle(),
     supabase
       .from('companies')
-      .select('name, bot_name, model_name, temperature, system_prompt')
+      .select('name, bot_name, model_name, temperature')
       .eq('tenant_id', session.tenant_id)
       .eq('module_id', session.module_id)
       .eq('is_active', true)
       .order('created_at', { ascending: true })
       .limit(1)
       .maybeSingle(),
-    supabase
-      .from('products')
-      .select('name, category, description, species_target, price, stock_quantity, active')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .eq('active', true)
-      .order('stock_quantity', { ascending: false })
-      .limit(120),
+    productsQuery,
     supabase
       .from('appointments')
-      .select('service_type, scheduled_at, status')
+      .select('service_type, scheduled_at, status, price')
       .eq('tenant_id', session.tenant_id)
       .eq('module_id', session.module_id)
       .gte('scheduled_at', `${today}T00:00:00-03:00`)
-      .lte('scheduled_at', `${today}T23:59:59-03:00`)
-      .in('status', ['agendado', 'confirmado', 'em_andamento'])
+      .lte('scheduled_at', `${end}T23:59:59-03:00`)
       .order('scheduled_at')
-      .limit(20),
+      .limit(40),
+    loadConversationExamples(supabase, session.module_id, session.tenant_id, latestUserMessage, intent),
   ])
 
+  let productRows = productsResult.data || []
+  if (!productsResult.error && productRows.length === 0 && terms.length > 0) {
+    const fallback = await supabase
+      .from('products')
+      .select('name, category, price, stock_quantity, active')
+      .eq('tenant_id', session.tenant_id)
+      .eq('module_id', session.module_id)
+      .eq('active', true)
+      .gt('stock_quantity', 0)
+      .order('stock_quantity', { ascending: false })
+      .limit(8)
+    productRows = fallback.data || []
+  }
+
   return {
-    storeName: clean(settingsResult.data?.store_name) || clean(companyResult.data?.name) || 'Petshop Quatro Patas',
-    companyPrompt: clean(companyResult.data?.system_prompt),
+    storeName: clean(settingsResult.data?.store_name) || clean(companyResult.data?.name) || 'YuiSync',
+    storePhone: clean(settingsResult.data?.store_phone),
+    storeAddress: clean(settingsResult.data?.store_address),
+    storeNeighborhood: clean(settingsResult.data?.store_neighborhood),
+    storeCity: clean(settingsResult.data?.store_city),
+    botPrompt: clean(settingsResult.data?.bot_prompt),
+    deliveryFee: Number(settingsResult.data?.delivery_fee ?? DEFAULT_DELIVERY_FEE),
+    customerContext: buildCustomerContext(customer),
+    examplesContext,
     modelName: clean(companyResult.data?.model_name) || env.openAiModel,
     temperature: Number(companyResult.data?.temperature ?? 0.2),
-    productContext: productsResult.error
-      ? 'Catalogo indisponivel no momento.'
-      : buildProductsContext(selectRelevantProducts(productsResult.data, latestUserMessage)),
+    productContext: productsResult.error ? 'Catalogo indisponivel no momento.' : buildProductsContext(productRows),
     appointmentsContext: appointmentsResult.error ? 'Agenda indisponivel no momento.' : buildAppointmentsContext(appointmentsResult.data),
   }
 }
@@ -742,40 +1284,82 @@ function buildDebouncedUserMessage(
 }
 
 function buildSystemPrompt(context: StoreContext): string {
-  const basePrompt = context.companyPrompt || [
-    `Voce e o atendente virtual oficial do ${context.storeName}.`,
-    'Atenda clientes do Petshop Quatro Patas em portugues do Brasil.',
-    'Seja cordial, objetivo e prestativo. Responda como atendimento de WhatsApp.',
-  ].join('\n')
+  const customInstructions = clean(context.botPrompt)
+  const storeLocation = [
+    context.storeAddress,
+    context.storeNeighborhood,
+    context.storeCity,
+  ].filter(Boolean).join(' - ') || 'Nao informado'
 
   return [
-    basePrompt,
+    `Voce e o atendente virtual oficial de ${context.storeName || 'esta loja'}.`,
+    'Responda em portugues do Brasil, com tom cordial, claro e objetivo.',
+    'Use somente os dados confirmados no contexto operacional abaixo.',
+    'Nunca invente preco, estoque, horario, disponibilidade, endereco, politica comercial ou procedimento veterinario.',
+    'Se o cliente pedir algo fora do contexto, peca os dados necessarios ou encaminhe para atendimento humano.',
+    'Para agendamentos, nao confirme disponibilidade sem haver horario confirmado no contexto de agenda.',
+    'Nunca aplique desconto. Se pedirem desconto, responda gentilmente: "Infelizmente nao conseguimos aplicar desconto nesse pedido."',
+    'Mantenha respostas curtas e naturais para conversa de WhatsApp.',
+    'Seu foco e vender, mas sem pressionar: se o cliente recusar o upsell, continue o pedido normalmente.',
+    'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar a equipe.',
     '',
-    'Regras de producao:',
-    '- Use somente informacoes confirmadas no contexto abaixo.',
-    '- Nao invente precos, horarios, estoque, procedimentos veterinarios ou promessas de disponibilidade.',
-    '- Se o catalogo listar produtos, cite nomes, precos e estoque desses itens quando o cliente perguntar sobre produtos.',
-    '- Nao diga que nao ha produto ou racao quando houver itens listados no catalogo/estoque relevante.',
-    '- Quando faltar dado essencial, peca o dado de forma simples.',
-    '- Se o cliente pedir algo sensivel ou fora do contexto, encaminhe para atendimento humano.',
-    '- Mantenha respostas curtas, naturais e adequadas para WhatsApp.',
+    'Fluxo obrigatorio:',
+    '1. Saudacao + nome; 2. Intencao; 3. dados minimos do pet; 4. opcoes/horarios reais; 5. valor antes de confirmar; 6. um upsell; 7. resumo parcial; 8. pagamento; 9. troco se dinheiro; 10. entrega/retirada; 11. endereco se entrega; 12. resumo final; 13. confirmar separacao/agendamento; 14. avaliacao 0-10.',
+    'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
+    'Dados minimos produto: cliente, especie, porte/peso ou categoria, marca se mencionada.',
+    'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca e horario real disponivel.',
+    'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
+    'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
+    'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
     '',
-    'Contexto do Petshop Quatro Patas:',
+    'Configuracao customizada deste tenant:',
+    customInstructions || 'Nenhuma instrucao customizada cadastrada.',
+    '',
+    'Contexto operacional do banco de dados:',
     `Loja: ${context.storeName}`,
+    `Telefone da loja: ${context.storePhone || 'Nao informado'}`,
+    `Endereco: ${storeLocation}`,
+    `Taxa de entrega: R$ ${Number(context.deliveryFee ?? DEFAULT_DELIVERY_FEE).toFixed(2)}`,
     '',
-    'Catalogo/estoque relevante:',
+    'Cliente atual:',
+    context.customerContext,
+    '',
+    'Estoque relevante:',
     context.productContext,
     '',
-    'Agenda de hoje:',
+    'Agenda dos proximos dias:',
     context.appointmentsContext,
+    '',
+    'Exemplos aprovados de conversa:',
+    context.examplesContext || 'Nenhum exemplo cadastrado para este contexto.',
+    'Use os exemplos apenas como modelo de estilo e fluxo. Nunca copie precos, estoque, horarios, nomes ou enderecos dos exemplos.',
+    '',
+    'Formato do resumo parcial:',
+    '**Pedido em andamento:**\n• Cliente: [NOME]\n• Pet: [NOME/ESPECIE/PORTE]\n• [PRODUTO/SERVICO]: [DETALHE]\n• Extra: [UPSELL OU "nao adicionado"]\n• Total parcial: R$ [VALOR]\n• Pagamento: aguardando\n• Entrega/retirada: aguardando',
+    '',
+    'Pagamento: pergunte exatamente "Qual forma prefere? pix, dinheiro ou cartão?"',
+    'Entrega/retirada: pergunte exatamente "Será entrega ou retirada na loja?"',
+    'Resumo final: termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
+    'Apos confirmacao final do cliente, responda: "Pedido confirmado! 🎉\\n\\nDe 0 a 10, como avalia o atendimento?"',
   ].join('\n')
 }
 
-async function callOpenAi(context: StoreContext, history: Array<{ role: string; content: string }>, env: WebhookEnv) {
+async function callOpenAi(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  context: StoreContext,
+  history: Array<{ role: string; content: string }>,
+  env: WebhookEnv,
+) {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), env.openAiTimeoutMs)
 
   try {
+    const messages = [
+      { role: 'system', content: buildSystemPrompt(context) },
+      ...history,
+    ]
+
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
       method: 'POST',
       headers: {
@@ -787,10 +1371,9 @@ async function callOpenAi(context: StoreContext, history: Array<{ role: string; 
         model: context.modelName || env.openAiModel,
         temperature: Number.isFinite(context.temperature) ? context.temperature : 0.2,
         max_tokens: 500,
-        messages: [
-          { role: 'system', content: buildSystemPrompt(context) },
-          ...history,
-        ],
+        messages,
+        tools: PETBOT_TOOLS,
+        tool_choice: 'auto',
       }),
     })
 
@@ -800,7 +1383,59 @@ async function callOpenAi(context: StoreContext, history: Array<{ role: string; 
       fail(502, `OpenAI request failed: ${detail}`)
     }
 
-    const reply = clean(payload.choices?.[0]?.message?.content)
+    let assistantMessage = record(payload.choices?.[0]?.message)
+    const toolCalls = Array.isArray(assistantMessage.tool_calls) ? assistantMessage.tool_calls as LooseRecord[] : []
+
+    if (toolCalls.length > 0) {
+      const toolResults = []
+      for (const toolCall of toolCalls) {
+        try {
+          toolResults.push({
+            tool_call_id: toolCall.id,
+            role: 'tool',
+            name: record(toolCall.function).name,
+            content: JSON.stringify(await executePetbotTool(supabase, session, context, toolCall)),
+          })
+        } catch (toolError) {
+          toolResults.push({
+            tool_call_id: toolCall.id,
+            role: 'tool',
+            name: record(toolCall.function).name,
+            content: JSON.stringify({ ok: false, error: toolError instanceof Error ? toolError.message : String(toolError) }),
+          })
+        }
+      }
+
+      const followUp = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${env.openAiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        signal: controller.signal,
+        body: JSON.stringify({
+          model: context.modelName || env.openAiModel,
+          temperature: Number.isFinite(context.temperature) ? context.temperature : 0.2,
+          max_tokens: 500,
+          messages: [
+            ...messages,
+            assistantMessage,
+            ...toolResults,
+          ],
+        }),
+      })
+
+      const followPayload = await followUp.json().catch(() => ({})) as LooseRecord
+      if (!followUp.ok) {
+        const detail = clean(record(followPayload.error).message) || `HTTP ${followUp.status}`
+        fail(502, `OpenAI request failed: ${detail}`)
+      }
+
+      assistantMessage = record(followPayload.choices?.[0]?.message)
+      payload.usage = followPayload.usage || payload.usage
+    }
+
+    const reply = clean(assistantMessage.content)
     if (!reply) fail(502, 'OpenAI response came back empty.')
 
     return {
@@ -970,26 +1605,21 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
 
   const history = await loadRecentHistory(supabase, session.id)
   const debouncedMessage = buildDebouncedUserMessage(history, event, env)
-  const botTurn = await runOrderBotTurn({
-    supabase,
-    chatSession: session,
-    message: debouncedMessage,
-    recentMessages: history,
-  })
-
-  const savedReply = await saveAssistantMessage(supabase, session.id, event, botTurn.reply, 0, botTurn.metadata)
+  const context = await loadStoreContext(supabase, session, debouncedMessage, env)
+  const completion = await callOpenAi(supabase, session, context, history, env)
+  const savedReply = await saveAssistantMessage(supabase, session.id, event, completion.reply, completion.tokensUsed)
   await sendAndMarkDelivered(supabase, env, event, savedReply)
 
+  const intent = detectConversationIntent(debouncedMessage)
   await supabase
     .from('chat_sessions')
     .update({
-      intent: botTurn.intent,
-      ...(!session.customer_name && botTurn.orderSession?.customerName ? { customer_name: botTurn.orderSession.customerName } : {}),
+      intent,
       last_message_at: new Date().toISOString(),
     })
     .eq('id', session.id)
 
-  return { sessionId: session.id, ai: true, intent: botTurn.intent }
+  return { sessionId: session.id, ai: true, intent }
 }
 
 async function handleGet(req: IncomingMessage, res: ServerResponse) {

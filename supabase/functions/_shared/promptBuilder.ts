@@ -1,18 +1,18 @@
 import { getAdminSupabase } from './supabaseClient.ts'
 import type { IntentResult } from './intentParser.ts'
-import { buildKnowledgeRag } from './knowledgeBuilder.ts'
 import { buildBusinessContextRag } from './businessContextBuilder.ts'
 
 const TZ = 'America/Sao_Paulo'
 
 const YUI_CORE = `
-Você é uma assistente conversacional da plataforma YuiSync.
+Voce e uma assistente conversacional da plataforma YuiSync.
 Regras universais:
-- Seja clara, educada e objetiva em português do Brasil.
-- Nunca invente dados de agenda, estoque ou documentos.
+- Seja clara, educada e objetiva em portugues do Brasil.
+- Use somente dados confirmados no contexto do banco.
+- Nunca invente dados de agenda, estoque, preco, endereco ou documentos.
 - Nunca exponha identificadores internos como slot_id para o cliente final.
-- Quando houver sinal de emergência, priorize transferência para humano.
-- Em confirmações, sempre valide disponibilidade real antes de confirmar.
+- Quando houver sinal de emergencia, priorize transferencia para humano.
+- Em confirmacoes, sempre valide disponibilidade real antes de confirmar.
 `
 
 type BuildPromptInput = {
@@ -26,8 +26,8 @@ type BuildPromptInput = {
 type CompanyRow = {
   id: string
   name: string
-  niche_id: string
-  system_prompt: string
+  tenant_id: string | null
+  module_id: string
   bot_name: string
   temperature: number
   model_name: string
@@ -35,10 +35,13 @@ type CompanyRow = {
   is_active: boolean
 }
 
-type NicheRow = {
-  id: string
-  name: string
-  base_prompt: string
+type SettingsRow = {
+  store_name?: string | null
+  store_phone?: string | null
+  store_address?: string | null
+  store_neighborhood?: string | null
+  store_city?: string | null
+  bot_prompt?: string | null
 }
 
 function todayWeekdayPtBr(): string {
@@ -56,7 +59,7 @@ export async function buildPromptLayers(input: BuildPromptInput): Promise<{
 
   const { data: companyData, error: companyError } = await supabase
     .from('companies')
-    .select('id,name,niche_id,system_prompt,bot_name,temperature,model_name,welcome_message,is_active')
+    .select('id,name,tenant_id,module_id,bot_name,temperature,model_name,welcome_message,is_active')
     .eq('id', input.companyId)
     .maybeSingle()
 
@@ -64,34 +67,30 @@ export async function buildPromptLayers(input: BuildPromptInput): Promise<{
     throw new Error(`Falha ao buscar empresa: ${companyError.message}`)
   }
   if (!companyData) {
-    throw new Error('Empresa não encontrada.')
+    throw new Error('Empresa nao encontrada.')
   }
   if (!companyData.is_active) {
     throw new Error('Empresa inativa para atendimento.')
   }
 
-  const { data: nicheData, error: nicheError } = await supabase
-    .from('niches')
-    .select('id,name,base_prompt')
-    .eq('id', companyData.niche_id)
+  const company = companyData as CompanyRow
+  const { data: settingsData } = await supabase
+    .from('settings')
+    .select('*')
+    .eq('tenant_id', company.tenant_id || '')
+    .eq('module_id', company.module_id || 'petshop')
     .maybeSingle()
 
-  if (nicheError) {
-    throw new Error(`Falha ao buscar nicho: ${nicheError.message}`)
-  }
-  if (!nicheData) {
-    throw new Error('Nicho da empresa não encontrado.')
-  }
+  const settings = (settingsData || {}) as SettingsRow
+  const storeLocation = [
+    settings.store_address,
+    settings.store_neighborhood,
+    settings.store_city,
+  ].filter(Boolean).join(' - ') || 'Nao informado'
 
   const contextText = input.conversationContext
     ? JSON.stringify(input.conversationContext, null, 2)
     : '{}'
-
-  const knowledgeBlock = await buildKnowledgeRag({
-    companyId: input.companyId,
-    userMessage: input.userMessage,
-    limit: 3,
-  })
 
   const businessBlock = await buildBusinessContextRag({
     companyId: input.companyId,
@@ -102,29 +101,33 @@ export async function buildPromptLayers(input: BuildPromptInput): Promise<{
     `Dia da semana atual no Brasil: ${todayWeekdayPtBr()}.`,
     `Intent detectada: ${input.intent.intent}.`,
     `Data alvo: ${input.intent.target_date ?? 'null'}.`,
-    `Período alvo: ${input.intent.period ?? 'null'}.`,
-    'Contexto de sessão:',
+    `Periodo alvo: ${input.intent.period ?? 'null'}.`,
+    'Contexto de sessao:',
     contextText,
     '',
-    'RAG clientes/produtos:',
+    'Contexto operacional clientes/produtos:',
     businessBlock,
     '',
-    'RAG documental:',
-    knowledgeBlock,
-    '',
-    'RAG em tempo real (agenda):',
+    'Contexto em tempo real agenda:',
     input.ragBlock || '- Sem dados adicionais.',
   ].join('\n')
 
   const composedPrompt = [
     `Camada 1 - Yui Core\n${YUI_CORE.trim()}`,
-    `Camada 2 - Nicho (${nicheData.name})\n${nicheData.base_prompt}`,
-    `Camada 3 - Empresa (${companyData.name})\nBot: ${companyData.bot_name}\n${companyData.system_prompt}`,
-    `Camada 4 - RAG/Sessão\n${sessionLayer}`,
+    [
+      `Camada 2 - Configuracao do tenant (${settings.store_name || company.name})`,
+      `Bot: ${company.bot_name}`,
+      `Telefone da loja: ${settings.store_phone || 'Nao informado'}`,
+      `Endereco: ${storeLocation}`,
+      '',
+      'Instrucao customizada:',
+      settings.bot_prompt || 'Nenhuma instrucao customizada cadastrada.',
+    ].join('\n'),
+    `Camada 3 - Contexto do banco/Sessao\n${sessionLayer}`,
   ].join('\n---\n')
 
   return {
-    company: companyData as CompanyRow,
+    company,
     composedPrompt,
   }
 }
