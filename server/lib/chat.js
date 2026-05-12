@@ -26,6 +26,13 @@ const PRODUCT_STOP_WORDS = new Set([
   'tenho',
   'vcs',
   'voces',
+  'ola',
+  'opa',
+  'bom',
+  'boa',
+  'dia',
+  'tarde',
+  'noite',
 ])
 
 const DEFAULT_BOT_MODEL = serverEnv.openAiModel
@@ -134,6 +141,32 @@ function cleanText(value = '') {
   return String(value || '').trim()
 }
 
+function parseJsonObject(value) {
+  if (!value) return {}
+  if (typeof value === 'object' && !Array.isArray(value)) return value
+  try {
+    const parsed = JSON.parse(String(value))
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function isUuid(value = '') {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cleanText(value))
+}
+
+function parseRating(value = '') {
+  const text = cleanText(value)
+  if (!/^(10|[0-9])$/.test(text)) return null
+  return Number(text)
+}
+
+function hasConfirmedOrderContext(session) {
+  const context = parseJsonObject(session?.context)
+  return Boolean(context.last_sale_id || context.last_order_id || context.last_appointment_id)
+}
+
 function isPlaceholderName(value = '') {
   const name = cleanText(value).toLowerCase()
   return !name || ['cliente', 'cliente whatsapp', 'whatsapp', 'sem nome'].includes(name) || /^cliente[-\s]?\d+/i.test(name)
@@ -152,7 +185,17 @@ function buildSearchTerms(message = '') {
     .split(/\s+/)
     .map((term) => term.trim())
     .filter((term) => term.length >= 3 && !PRODUCT_STOP_WORDS.has(term))
-    .slice(0, 6)
+    .slice(0, 12)
+}
+
+function buildCatalogSearchText(history = [], message = '') {
+  const recentUserText = (history || [])
+    .filter((entry) => entry?.role === 'user')
+    .slice(-6)
+    .map((entry) => cleanText(entry.content))
+    .filter(Boolean)
+    .join(' ')
+  return [recentUserText, message].filter(Boolean).join(' ')
 }
 
 function isMissingTenantColumnError(error) {
@@ -332,16 +375,24 @@ function buildSystemPrompt({
     'Mantenha respostas curtas e naturais para conversa de WhatsApp.',
     'Seu foco e vender, mas sem pressionar: se o cliente recusar o upsell, continue o pedido normalmente.',
     'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar a equipe.',
+    'Se o cliente ainda nao tem nome confirmado, peca o nome antes de qualquer triagem ou oferta, inclusive em saudacao simples.',
     '',
     'Fluxo obrigatorio:',
     '1. Saudacao + nome; 2. Intencao; 3. dados minimos do pet; 4. opcoes/horarios reais; 5. valor antes de confirmar; 6. um upsell; 7. resumo parcial; 8. pagamento; 9. troco se dinheiro; 10. entrega/retirada; 11. endereco se entrega; 12. resumo final; 13. confirmar separacao/agendamento; 14. avaliacao 0-10.',
     'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
-    'Dados minimos produto: cliente, especie, porte/peso ou categoria, marca se mencionada.',
+    'Dados minimos produto: cliente, especie, porte/peso ou categoria, marca se mencionada. Para produto, nome do pet e opcional; nao pergunte nome do pet antes de especie/porte.',
     'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca e horario real disponivel.',
     'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
+    'Nunca assuma especie. Se o cliente nao disse cachorro/gato, pergunte. Nao diga "e cachorro, certo?".',
     'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
     'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
     'Depois do cliente confirmar o resumo final, use a ferramenta create_confirmed_petshop_order antes de responder a avaliacao.',
+    'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmacao final quando o resumo final ja foi exibido.',
+    'Depois de responder "Pedido confirmado", se o cliente enviar uma nota de 0 a 10, nao registre pedido de novo; apenas agradeca a avaliacao.',
+    'Faca uma pergunta operacional por vez: primeiro pagamento, depois entrega/retirada, depois endereco se for entrega.',
+    'Se o cliente responder pagamento e entrega juntos, aceite os dois e siga para endereco.',
+    'Entrega: informe explicitamente a taxa configurada antes do resumo final. Some a taxa ao total final. Nunca deixe a taxa de entrega fora do total.',
+    'Endereco de entrega minimo: rua/avenida, numero, bairro e ponto de referencia. Se faltar bairro ou referencia, peca o dado faltante antes de confirmar.',
     '',
     'Configuracao customizada deste tenant:',
     customInstructions || 'Nenhuma instrucao customizada cadastrada.',
@@ -370,7 +421,8 @@ function buildSystemPrompt({
     '',
     'Pagamento: pergunte exatamente "Qual forma prefere? pix, dinheiro ou cartão?"',
     'Entrega/retirada: pergunte exatamente "Será entrega ou retirada na loja?"',
-    'Resumo final: termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
+    'Se for entrega, antes do resumo final diga: "A taxa de entrega é R$ [TAXA]. O total com entrega fica R$ [TOTAL]."',
+    'Resumo final de entrega deve mostrar subtotal, taxa de entrega e total final. Termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
     'Apos confirmar e registrar com a ferramenta, responda: "Pedido confirmado! 🎉\\n\\nDe 0 a 10, como avalia o atendimento?"',
   ].join('\n')
 }
@@ -676,13 +728,27 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
 }
 
 async function createConfirmedPetshopOrder(supabase, session, settings, args = {}) {
+  const sessionContext = parseJsonObject(session.context)
+  if (sessionContext.last_sale_id) {
+    return {
+      sale_id: sessionContext.last_sale_id,
+      order_id: sessionContext.last_order_id || null,
+      appointment_id: sessionContext.last_appointment_id || null,
+      total: Number(sessionContext.last_total || 0),
+      duplicated: true,
+    }
+  }
+
   const customer = await ensureCustomerProfile(supabase, session, args)
   const items = Array.isArray(args.items) ? args.items : []
   if (!items.length) throw new Error('Pedido sem itens para registrar.')
 
   const subtotal = items.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
   const deliveryFee = args.fulfillment_type === 'entrega' ? Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
-  const total = Number(args.total || 0) || subtotal + deliveryFee
+  const providedTotal = Number(args.total || 0)
+  const total = args.fulfillment_type === 'entrega'
+    ? Number((subtotal + deliveryFee).toFixed(2))
+    : Number((providedTotal || subtotal).toFixed(2))
   const orderType = args.order_type === 'produto' ? 'entrega' : 'servico'
   const fulfillmentType = args.order_type === 'produto'
     ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
@@ -722,7 +788,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   const saleItems = items.map((item) => ({
     tenant_id: session.tenant_id,
     sale_id: sale.id,
-    product_id: cleanText(item.product_id) || null,
+    product_id: isUuid(item.product_id) ? cleanText(item.product_id) : null,
     quantity: Number(item.quantity || 1),
     unit_price: Number(item.unit_price || 0),
     subtotal: Number(item.quantity || 1) * Number(item.unit_price || 0),
@@ -773,29 +839,61 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   const deliveryAddress = cleanText(args.delivery_address) || customer.client.address || null
   const deliveryNeighborhood = cleanText(args.delivery_neighborhood) || customer.client.neighborhood || null
   const deliveryCity = cleanText(args.delivery_city) || customer.client.city || null
+  const orderPayload = {
+    tenant_id: session.tenant_id,
+    module_id: session.module_id,
+    sale_id: sale.id,
+    client_id: customer.client.id,
+    session_id: session.id,
+    source: 'whatsapp',
+    order_type: orderType,
+    status: orderType === 'servico' ? 'agendado' : 'separacao',
+    scheduled_for: appointment?.scheduled_at || null,
+    delivery_address: args.fulfillment_type === 'entrega' ? deliveryAddress : null,
+    delivery_neighborhood: args.fulfillment_type === 'entrega' ? deliveryNeighborhood : null,
+    delivery_city: args.fulfillment_type === 'entrega' ? deliveryCity : null,
+    contact_phone: customer.phone,
+    notes,
+  }
 
-  const { data: order, error: orderError } = await supabase
+  let { data: order, error: orderError } = await supabase
     .from('service_delivery_orders')
-    .insert({
-      tenant_id: session.tenant_id,
-      module_id: session.module_id,
-      sale_id: sale.id,
-      client_id: customer.client.id,
-      session_id: session.id,
-      source: 'whatsapp',
-      order_type: orderType,
-      status: orderType === 'servico' ? 'agendado' : 'separacao',
-      scheduled_for: appointment?.scheduled_at || null,
-      delivery_address: args.fulfillment_type === 'entrega' ? deliveryAddress : null,
-      delivery_neighborhood: args.fulfillment_type === 'entrega' ? deliveryNeighborhood : null,
-      delivery_city: args.fulfillment_type === 'entrega' ? deliveryCity : null,
-      contact_phone: customer.phone,
-      notes,
-    })
+    .update(orderPayload)
+    .eq('sale_id', sale.id)
     .select('id')
-    .single()
+    .maybeSingle()
 
-  if (orderError && !String(orderError.message || '').includes('duplicate')) {
+  if (!order && !orderError) {
+    const insertedOrder = await supabase
+      .from('service_delivery_orders')
+      .insert(orderPayload)
+      .select('id')
+      .single()
+    order = insertedOrder.data
+    orderError = insertedOrder.error
+  }
+
+  if (orderError && String(orderError.message || '').includes('duplicate')) {
+    const updatedOrder = await supabase
+      .from('service_delivery_orders')
+      .update({
+        status: orderPayload.status,
+        scheduled_for: orderPayload.scheduled_for,
+        delivery_address: orderPayload.delivery_address,
+        delivery_neighborhood: orderPayload.delivery_neighborhood,
+        delivery_city: orderPayload.delivery_city,
+        contact_phone: orderPayload.contact_phone,
+        notes: orderPayload.notes,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('sale_id', sale.id)
+      .select('id')
+      .maybeSingle()
+    order = updatedOrder.data
+    orderError = updatedOrder.error
+  }
+
+  if (orderError) {
     throw new Error(`Falha ao registrar ordem operacional: ${orderError.message}`)
   }
 
@@ -807,6 +905,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
         last_sale_id: sale.id,
         last_order_id: order?.id || null,
         last_appointment_id: appointment?.id || null,
+        last_total: total,
       },
       last_message_at: new Date().toISOString(),
     })
@@ -849,6 +948,24 @@ async function executePetbotTool(supabase, session, settings, toolCall) {
   }
 
   return { ok: false, error: `Ferramenta desconhecida: ${name}` }
+}
+
+async function saveSatisfactionRating(supabase, sessionId, rating) {
+  const closedAt = new Date().toISOString()
+  const { error } = await supabase
+    .from('chat_sessions')
+    .update({
+      csat_score: rating,
+      status: 'closed',
+      intent: 'satisfacao_coletada',
+      closed_at: closedAt,
+      last_message_at: closedAt,
+    })
+    .eq('id', sessionId)
+
+  if (error) {
+    throw new HttpError(500, 'Unable to save satisfaction rating.')
+  }
 }
 
 async function loadBotRuntimeConfig(supabase, tenantId, moduleId) {
@@ -920,7 +1037,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const { data: session, error: sessionError } = await supabase
     .from('chat_sessions')
-    .select('id, module_id, tenant_id, customer_phone, customer_name, status, client_id')
+    .select('id, module_id, tenant_id, customer_phone, customer_name, status, client_id, context, csat_score')
     .eq('id', sessionId)
     .maybeSingle()
 
@@ -930,6 +1047,35 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   if (!session.tenant_id) {
     throw new HttpError(500, 'Chat session is missing tenant_id.')
+  }
+
+  const rating = parseRating(trimmedMessage)
+  if (rating !== null && hasConfirmedOrderContext(session)) {
+    await saveSatisfactionRating(supabase, sessionId, rating)
+    const reply = `Obrigado pela nota ${rating}! Atendimento encerrado.`
+    const botSentAt = new Date().toISOString()
+    const { data: savedReply, error: replyInsertError } = await supabase
+      .from('chat_messages')
+      .insert({
+        session_id: sessionId,
+        role: 'assistant',
+        content: reply,
+        metadata: {
+          source: options.source || 'dashboard_simulation',
+          csat_score: rating,
+          ...(options.assistantMetadata || {}),
+        },
+        tokens_used: 0,
+        sent_at: botSentAt,
+      })
+      .select('id, role, content, metadata, tokens_used, sent_at')
+      .single()
+
+    if (replyInsertError) {
+      throw new HttpError(500, 'Unable to save assistant response.')
+    }
+
+    return { reply, savedMessage: savedReply }
   }
 
   if (session.status === 'human' && !options.allowBotWhenHuman) {
@@ -942,12 +1088,13 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   }
 
   const intent = detectIntent(trimmedMessage)
-  const [storeSettings, products, appointments, examplesContext, history, botConfig] = await Promise.all([
+  const history = await loadRecentMessages(supabase, sessionId)
+  const catalogSearchText = buildCatalogSearchText(history, trimmedMessage)
+  const [storeSettings, products, appointments, examplesContext, botConfig] = await Promise.all([
     loadStoreSettings(supabase, moduleId, session.tenant_id),
-    loadProducts(supabase, moduleId, session.tenant_id, trimmedMessage),
+    loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
     loadAppointments(supabase, moduleId, session.tenant_id),
     loadConversationExamples(supabase, moduleId, session.tenant_id, trimmedMessage, intent),
-    loadRecentMessages(supabase, sessionId),
     loadBotRuntimeConfig(supabase, session.tenant_id, moduleId),
   ])
   const customer = await ensureCustomerProfile(supabase, session)
