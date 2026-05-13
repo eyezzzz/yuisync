@@ -18,19 +18,23 @@ const STAFF_TYPE_OPTIONS = [
 ]
 
 const TEMP_PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}$/
-const USER_PERMISSION_MODULE_IDS = Object.keys(MODULES).filter((moduleId) => moduleId !== 'system')
+function getUserPermissionModuleIds() {
+  return Object.keys(MODULES).filter((moduleId) => moduleId !== 'system')
+}
 
 function defaultEmployeePermissions(moduleId = 'petshop') {
-  const safeModuleId = USER_PERMISSION_MODULE_IDS.includes(moduleId) ? moduleId : 'petshop'
+  const userPermissionModuleIds = getUserPermissionModuleIds()
+  const safeModuleId = userPermissionModuleIds.includes(moduleId) ? moduleId : 'petshop'
   const roleId = MODULES[safeModuleId]?.roles?.[1]?.id || MODULES[safeModuleId]?.roles?.[0]?.id
   return roleId ? { [safeModuleId]: roleId } : {}
 }
 
 function sanitizeModulePermissions(permissions = {}, fallbackModuleId = 'petshop', withFallback = false) {
   const next = {}
+  const userPermissionModuleIds = getUserPermissionModuleIds()
 
   for (const [moduleId, roleId] of Object.entries(permissions || {})) {
-    if (!USER_PERMISSION_MODULE_IDS.includes(moduleId)) continue
+    if (!userPermissionModuleIds.includes(moduleId)) continue
     const allowedRole = MODULES[moduleId]?.roles?.some((roleEntry) => roleEntry.id === roleId)
     if (allowedRole) next[moduleId] = roleId
   }
@@ -94,7 +98,7 @@ function UserModal({
   }, [isAdminGlobal, isEditing, activeModuleId, currentActiveTenantId])
 
   const toggleModule = (moduleId, roleId) => {
-    if (!USER_PERMISSION_MODULE_IDS.includes(moduleId)) return
+    if (!getUserPermissionModuleIds().includes(moduleId)) return
     if (!isAdminGlobal && moduleId !== activeModuleId) return
     setForm((prev) => {
       const nextPermissions = { ...prev.permissions }
