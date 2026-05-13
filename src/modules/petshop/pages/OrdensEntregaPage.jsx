@@ -52,6 +52,19 @@ function orderSessionId(order) {
   return order.session_id || extractNoteValue(order.notes || order.sale?.notes, 'Sessao')
 }
 
+function orderOriginAddress(order) {
+  return orderAddress(order) || extractNoteValue(order.notes || order.sale?.notes, 'Endereco')
+}
+
+function visibleOrderNotes(order) {
+  return String(order.notes || order.sale?.notes || '')
+    .split('|')
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .filter((entry) => !/^(origem|sessao|itens|endereco|taxa de entrega):/i.test(entry))
+    .join(' | ')
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;',
@@ -72,9 +85,10 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
     storeSettings?.store_neighborhood,
     storeSettings?.store_city,
   ].filter(Boolean).join(' - ')
-  const address = orderAddress(order)
+  const address = orderOriginAddress(order)
   const directItems = orderItems(order)
   const items = directItems.length ? directItems : fallbackItems
+  const publicNotes = visibleOrderNotes(order)
   const createdAt = order.created_at ? new Date(order.created_at).toLocaleString('pt-BR') : new Date().toLocaleString('pt-BR')
   const total = Number(order.sale?.total_price || 0)
   const subtotal = Number(order.sale?.subtotal || 0)
@@ -135,7 +149,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
         <div class="row"><span>Pagamento</span><span>${escapeHtml(order.sale?.payment_method || '-')}</span></div>
         <div class="hr"></div>
         <div class="muted wrap">Origem: ${escapeHtml(address || sourceLabel(order))}</div>
-        ${order.notes ? `<div class="muted wrap">${escapeHtml(order.notes)}</div>` : ''}
+        ${publicNotes ? `<div class="muted wrap">${escapeHtml(publicNotes)}</div>` : ''}
       </body>
     </html>
   `
@@ -155,8 +169,8 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
   const address = orderAddress(order)
   const directItems = orderItems(order)
   const items = directItems.length ? directItems : fallbackItems
-  const notesAddress = extractNoteValue(order.notes || order.sale?.notes, 'Endereco')
-  const originAddress = address || notesAddress
+  const originAddress = address || orderOriginAddress(order)
+  const publicNotes = visibleOrderNotes(order)
 
   return (
     <div className="bg-card border border-[var(--border)] rounded-2xl p-4 space-y-4">
@@ -228,32 +242,42 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
         <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-2">Origem</p>
         <div className="flex items-start gap-2">
           <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />
-          <span>Origem: {originAddress || 'Endereco nao informado na ordem.'}</span>
+          <span className="leading-snug">{originAddress || 'Endereco nao informado na ordem.'}</span>
         </div>
         <p className="text-[11px] text-muted mt-2">Canal: {sourceLabel(order)}</p>
       </div>
 
-      {order.notes && !originAddress && (
+      {publicNotes && (
         <div className="rounded-xl bg-white/5 border border-[var(--border)] px-4 py-3 text-sm text-muted">
-          {order.notes}
+          {publicNotes}
         </div>
       )}
 
-      <div className="flex gap-2">
+      <div className="grid grid-cols-[minmax(0,1fr)_44px_44px] gap-2">
         {nextStep ? (
-          <button onClick={() => onAdvance(order, nextStep.id)} className="btn btn-primary flex-1 justify-center">
-            <Truck size={15} /> Avancar para {nextStep.label}
+          <button
+            onClick={() => onAdvance(order, nextStep.id)}
+            className="btn btn-primary min-w-0 justify-center px-3 text-xs"
+            title={`Avancar para ${nextStep.label}`}
+          >
+            <Truck size={15} className="flex-shrink-0" />
+            <span className="truncate">Avancar para {nextStep.label}</span>
           </button>
         ) : (
-          <div className="flex-1 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-4 py-3 text-sm text-emerald-400 text-center">
+          <div className="min-w-0 rounded-xl bg-emerald-500/10 border border-emerald-500/20 px-3 py-3 text-xs text-emerald-400 text-center truncate">
             Ordem concluida
           </div>
         )}
-        <button onClick={() => onPrint(order, items)} className="btn btn-secondary" title="Imprimir ordem 80mm" aria-label="Imprimir ordem 80mm">
+        <button
+          onClick={() => onPrint(order, items)}
+          className="btn btn-secondary btn-icon h-11 w-11 justify-center"
+          title="Imprimir ordem 80mm"
+          aria-label="Imprimir ordem 80mm"
+        >
           <Printer size={15} />
         </button>
         {setPage && (
-          <button onClick={() => setPage('chat')} className="btn btn-secondary">
+          <button onClick={() => setPage('chat')} className="btn btn-secondary btn-icon h-11 w-11 justify-center" title="Abrir chat" aria-label="Abrir chat">
             <MessageSquare size={15} />
           </button>
         )}
