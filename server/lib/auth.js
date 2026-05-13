@@ -4,6 +4,8 @@ import { adminSupabase } from './supabase.js'
 const MODULE_ROLE_MAP = {
   petshop: ['admin_pet', 'funcionario_pet'],
 }
+const DEFAULT_EMPLOYEE_MODULE = 'petshop'
+const DEFAULT_EMPLOYEE_ROLE = 'funcionario_pet'
 
 const STAFF_TYPES = ['funcionario', 'banho_tosa', 'veterinaria', 'motodog']
 
@@ -22,6 +24,25 @@ function asArray(value) {
 
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
+}
+
+function sanitizeSupportedPermissions(permissions) {
+  const nextPermissions = {}
+
+  for (const [moduleId, roleId] of Object.entries(asObject(permissions))) {
+    const allowedRoles = MODULE_ROLE_MAP[moduleId]
+    if (!allowedRoles) continue
+    if (!allowedRoles.includes(roleId)) {
+      throw new HttpError(400, `Invalid role assignment for module "${moduleId}".`)
+    }
+    nextPermissions[moduleId] = roleId
+  }
+
+  return nextPermissions
+}
+
+function defaultEmployeePermissions() {
+  return { [DEFAULT_EMPLOYEE_MODULE]: DEFAULT_EMPLOYEE_ROLE }
 }
 
 export function isTenantSchemaError(error) {
@@ -137,19 +158,13 @@ export function normalizeUserPayload(payload, requester, scopeModuleId, existing
   }
 
   if (requester.role === 'admin') {
-    const nextPermissions = {}
-
-    for (const [moduleId, roleId] of Object.entries(permissions)) {
-      const allowedRoles = MODULE_ROLE_MAP[moduleId]
-      if (!allowedRoles || !allowedRoles.includes(roleId)) {
-        throw new HttpError(400, `Invalid role assignment for module "${moduleId}".`)
-      }
-
-      nextPermissions[moduleId] = roleId
+    let nextPermissions = sanitizeSupportedPermissions(permissions)
+    if (Object.keys(nextPermissions).length === 0 && existingProfile) {
+      nextPermissions = sanitizeSupportedPermissions(existingProfile.module_permissions)
     }
 
     if (Object.keys(nextPermissions).length === 0) {
-      throw new HttpError(400, 'Select at least one module permission.')
+      nextPermissions = defaultEmployeePermissions()
     }
 
     return {

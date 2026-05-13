@@ -18,6 +18,29 @@ const STAFF_TYPE_OPTIONS = [
 ]
 
 const TEMP_PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}$/
+const USER_PERMISSION_MODULE_IDS = Object.keys(MODULES).filter((moduleId) => moduleId !== 'system')
+
+function defaultEmployeePermissions(moduleId = 'petshop') {
+  const safeModuleId = USER_PERMISSION_MODULE_IDS.includes(moduleId) ? moduleId : 'petshop'
+  const roleId = MODULES[safeModuleId]?.roles?.[1]?.id || MODULES[safeModuleId]?.roles?.[0]?.id
+  return roleId ? { [safeModuleId]: roleId } : {}
+}
+
+function sanitizeModulePermissions(permissions = {}, fallbackModuleId = 'petshop', withFallback = false) {
+  const next = {}
+
+  for (const [moduleId, roleId] of Object.entries(permissions || {})) {
+    if (!USER_PERMISSION_MODULE_IDS.includes(moduleId)) continue
+    const allowedRole = MODULES[moduleId]?.roles?.some((roleEntry) => roleEntry.id === roleId)
+    if (allowedRole) next[moduleId] = roleId
+  }
+
+  if (withFallback && Object.keys(next).length === 0) {
+    return defaultEmployeePermissions(fallbackModuleId)
+  }
+
+  return next
+}
 
 function getStaffTypeLabel(value) {
   return STAFF_TYPE_OPTIONS.find((item) => item.value === value)?.label || 'Funcionario'
@@ -44,7 +67,11 @@ function UserModal({
     password: '',
     role: editingUser?.role || 'employee',
     staff_type: editingUser?.staff_type || 'funcionario',
-    permissions: editingUser?.module_permissions || {},
+    permissions: sanitizeModulePermissions(
+      editingUser?.module_permissions || {},
+      activeModuleId,
+      (editingUser?.role || 'employee') === 'employee',
+    ),
     tenantIds: editingUser?.tenant_ids || (currentActiveTenantId ? [currentActiveTenantId] : []),
     activeTenantId: editingUser?.active_tenant_id || currentActiveTenantId || null,
   })
@@ -59,7 +86,7 @@ function UserModal({
     if (!isAdminGlobal && !isEditing) {
       setForm((prev) => ({
         ...prev,
-        permissions: { [activeModuleId]: MODULES[activeModuleId].roles[1].id },
+        permissions: defaultEmployeePermissions(activeModuleId),
         tenantIds: currentActiveTenantId ? [currentActiveTenantId] : prev.tenantIds,
         activeTenantId: currentActiveTenantId || prev.activeTenantId,
       }))
@@ -67,6 +94,7 @@ function UserModal({
   }, [isAdminGlobal, isEditing, activeModuleId, currentActiveTenantId])
 
   const toggleModule = (moduleId, roleId) => {
+    if (!USER_PERMISSION_MODULE_IDS.includes(moduleId)) return
     if (!isAdminGlobal && moduleId !== activeModuleId) return
     setForm((prev) => {
       const nextPermissions = { ...prev.permissions }
@@ -74,6 +102,16 @@ function UserModal({
       else nextPermissions[moduleId] = roleId
       return { ...prev, permissions: nextPermissions }
     })
+  }
+
+  const handleRoleChange = (role) => {
+    setForm((prev) => ({
+      ...prev,
+      role,
+      permissions: role === 'employee'
+        ? sanitizeModulePermissions(prev.permissions, activeModuleId, true)
+        : sanitizeModulePermissions(prev.permissions, activeModuleId, false),
+    }))
   }
 
   const toggleTenant = (tenantId) => {
@@ -137,11 +175,12 @@ function UserModal({
     setErr('')
 
     try {
+      const permissions = sanitizeModulePermissions(form.permissions, activeModuleId, form.role === 'employee')
       const payload = {
         full_name: form.full_name.trim(),
         role: form.role,
         staff_type: form.role === 'employee' ? form.staff_type : null,
-        permissions: form.permissions,
+        permissions,
         scopeModuleId: activeModuleId,
         tenantIds: canManageBusiness ? form.tenantIds : (currentActiveTenantId ? [currentActiveTenantId] : []),
         activeTenantId: canManageBusiness ? form.activeTenantId : currentActiveTenantId,
@@ -194,7 +233,7 @@ function UserModal({
             {isAdminGlobal && (
               <div className="md:col-span-2">
                 <label className="inp-label">Tipo de conta</label>
-                <select className="inp" value={form.role} onChange={(event) => setField('role', event.target.value)}>
+                <select className="inp" value={form.role} onChange={(event) => handleRoleChange(event.target.value)}>
                   <option value="employee">Restrito por modulo</option>
                   <option value="admin">Administrador global</option>
                 </select>
@@ -529,7 +568,7 @@ export default function UsersPage() {
                               Admin Global
                             </span>
                           ) : (
-                            Object.entries(profile.module_permissions || {}).map(([moduleId, roleId]) => {
+                            Object.entries(sanitizeModulePermissions(profile.module_permissions || {})).map(([moduleId, roleId]) => {
                               const moduleItem = MODULES[moduleId]
                               const roleEntry = moduleItem?.roles?.find((entry) => entry.id === roleId)
                               return (
@@ -537,7 +576,11 @@ export default function UsersPage() {
                                   {moduleItem?.shortName}: {roleEntry?.label}
                                 </span>
                               )
-                            })
+                            }).concat(
+                              Object.keys(sanitizeModulePermissions(profile.module_permissions || {})).length === 0
+                                ? [<span key="empty" className="text-xs text-muted">Sem modulo</span>]
+                                : [],
+                            )
                           )}
                         </div>
                       </td>
