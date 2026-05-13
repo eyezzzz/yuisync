@@ -37,7 +37,7 @@ const DEFAULT_PAYMENT_SPLITS = [
   createPaymentSplit(1, 'dinheiro', ''),
   createPaymentSplit(2, 'credito', ''),
 ]
-const PDV_PRODUCT_RENDER_LIMIT = 160
+const PRODUCT_PAGE_SIZE_OPTIONS = [50, 100, 200]
 
 const CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -366,6 +366,8 @@ export default function VendasPage() {
   })
   const [search, setSearch]     = useState('')
   const [catFilter, setCatFilter] = useState('')
+  const [productPageSize, setProductPageSize] = useState(PRODUCT_PAGE_SIZE_OPTIONS[0])
+  const [productPage, setProductPage] = useState(1)
   const [payment, setPayment]   = useState('dinheiro')
   const [discount, setDiscount] = useState(0)
   const [customerName, setCustomerName] = useState('')
@@ -437,7 +439,22 @@ export default function VendasPage() {
   const cartByProductId = useMemo(() => new Map(cart.map((item) => [item.product_id, item])), [cart])
   const selectedProducts = useMemo(() => filtered.filter(p => cartProductIds.has(p.id)), [filtered, cartProductIds])
   const otherProducts = useMemo(() => filtered.filter(p => !cartProductIds.has(p.id)), [filtered, cartProductIds])
-  const visibleOtherProducts = useMemo(() => otherProducts.slice(0, PDV_PRODUCT_RENDER_LIMIT), [otherProducts])
+  const productTotalPages = Math.max(1, Math.ceil(otherProducts.length / productPageSize))
+  const currentProductPage = Math.min(productPage, productTotalPages)
+  const productPageStart = otherProducts.length ? (currentProductPage - 1) * productPageSize : 0
+  const productPageEnd = Math.min(productPageStart + productPageSize, otherProducts.length)
+  const visibleOtherProducts = useMemo(
+    () => otherProducts.slice(productPageStart, productPageEnd),
+    [otherProducts, productPageStart, productPageEnd]
+  )
+
+  useEffect(() => {
+    setProductPage(1)
+  }, [search, catFilter, productPageSize])
+
+  useEffect(() => {
+    setProductPage((page) => Math.min(page, productTotalPages))
+  }, [productTotalPages])
 
   const subtotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
   const total    = Math.max(0, subtotal - (Number(discount) || 0))
@@ -783,26 +800,56 @@ export default function VendasPage() {
               )}
 
               <div>
-                <h3 className="text-[10px] font-black uppercase tracking-widest text-muted mb-4 flex items-center gap-2">
-                  <Package size={12}/>
-                  Itens Gerais ({otherProducts.length})
-                  {otherProducts.length > visibleOtherProducts.length && (
-                    <span className="text-[10px] font-semibold text-muted">
-                      mostrando {visibleOtherProducts.length}
-                    </span>
+                <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-[10px] font-black uppercase tracking-widest text-muted flex items-center gap-2">
+                    <Package size={12}/>
+                    Itens Gerais ({otherProducts.length})
+                  </h3>
+                  {otherProducts.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-muted">
+                        {productPageStart + 1}-{productPageEnd} de {otherProducts.length}
+                      </span>
+                      <label className="flex items-center gap-2 text-muted">
+                        Exibir
+                        <select
+                          className="inp py-1.5 w-auto text-xs"
+                          value={productPageSize}
+                          onChange={(event) => setProductPageSize(Number(event.target.value))}
+                        >
+                          {PRODUCT_PAGE_SIZE_OPTIONS.map((size) => (
+                            <option key={size} value={size}>{size}</option>
+                          ))}
+                        </select>
+                      </label>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm disabled:opacity-50"
+                        disabled={currentProductPage <= 1}
+                        onClick={() => setProductPage((page) => Math.max(1, page - 1))}
+                      >
+                        Anterior
+                      </button>
+                      <span className="text-muted">
+                        Pagina {currentProductPage} de {productTotalPages}
+                      </span>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm disabled:opacity-50"
+                        disabled={currentProductPage >= productTotalPages}
+                        onClick={() => setProductPage((page) => Math.min(productTotalPages, page + 1))}
+                      >
+                        Proxima
+                      </button>
+                    </div>
                   )}
-                </h3>
+                </div>
                 {otherProducts.length === 0 ? (
                   <div className="py-12 text-center">
                     <p className="text-muted text-sm italic">Nenhum outro produto encontrado.</p>
                   </div>
                 ) : (
                   <>
-                    {otherProducts.length > visibleOtherProducts.length && (
-                      <p className="text-xs text-muted mb-4">
-                        Mostrando os primeiros {visibleOtherProducts.length} produtos. Use busca ou categoria para encontrar itens especificos.
-                      </p>
-                    )}
                     <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
                       {visibleOtherProducts.map(p => (
                         <ProductCard
@@ -814,6 +861,29 @@ export default function VendasPage() {
                         />
                       ))}
                     </div>
+                    {productTotalPages > 1 && (
+                      <div className="mt-5 flex flex-wrap items-center justify-end gap-2 text-xs">
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm disabled:opacity-50"
+                          disabled={currentProductPage <= 1}
+                          onClick={() => setProductPage((page) => Math.max(1, page - 1))}
+                        >
+                          Anterior
+                        </button>
+                        <span className="text-muted">
+                          Pagina {currentProductPage} de {productTotalPages}
+                        </span>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm disabled:opacity-50"
+                          disabled={currentProductPage >= productTotalPages}
+                          onClick={() => setProductPage((page) => Math.min(productTotalPages, page + 1))}
+                        >
+                          Proxima
+                        </button>
+                      </div>
+                    )}
                   </>
                 )}
               </div>

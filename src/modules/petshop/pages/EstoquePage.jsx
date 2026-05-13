@@ -26,7 +26,7 @@ const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0
 const PRODUCT_CATEGORIES = BASE_PRODUCT_CATEGORIES
 const normalizeProductCategory = normalizeCategory
 const PRODUCT_NAME_KEEP_UPPER = new Set(['KG', 'G', 'ML', 'UN', 'SRD', 'JR', 'AD', 'C', 'N'])
-const STOCK_RENDER_STEP = 250
+const PRODUCT_PAGE_SIZE_OPTIONS = [50, 100, 200]
 
 function formatProductName(value = '') {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
@@ -512,15 +512,16 @@ export default function EstoquePage() {
   const [legacyImportModal, setLegacyImportModal] = useState(false)
   const [adjusting, setAdjusting] = useState(null) // product | null
   const [resettingStock, setResettingStock] = useState(false)
-  const [visibleCount, setVisibleCount] = useState(STOCK_RENDER_STEP)
+  const [pageSize, setPageSize] = useState(PRODUCT_PAGE_SIZE_OPTIONS[0])
+  const [page, setPage] = useState(1)
 
   useEffect(() => {
     load({ activeOnly: false })
   }, [load])
 
   useEffect(() => {
-    setVisibleCount(STOCK_RENDER_STEP)
-  }, [search, catFilter, statusFilter])
+    setPage(1)
+  }, [search, catFilter, statusFilter, pageSize])
 
   const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
 
@@ -553,7 +554,18 @@ export default function EstoquePage() {
     
     return matchQ && matchC && matchS
   }), [products, search, catFilter, statusFilter])
-  const visibleProducts = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
+  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const pageStart = filtered.length ? (currentPage - 1) * pageSize : 0
+  const pageEnd = Math.min(pageStart + pageSize, filtered.length)
+  const visibleProducts = useMemo(
+    () => filtered.slice(pageStart, pageEnd),
+    [filtered, pageStart, pageEnd]
+  )
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages))
+  }, [totalPages])
 
   const criticalCount = products.filter(p => stockStatus(p) === 'critico').length
   const outCount      = products.filter(p => stockStatus(p) === 'esgotado').length
@@ -674,6 +686,47 @@ export default function EstoquePage() {
           </button>
         </div>
       </div>
+
+      {filtered.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-card px-4 py-3">
+          <p className="text-xs font-semibold text-muted">
+            Mostrando {pageStart + 1}-{pageEnd} de {filtered.length} produto(s)
+          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label className="flex items-center gap-2 text-muted">
+              Exibir
+              <select
+                className="inp py-1.5 w-auto text-xs"
+                value={pageSize}
+                onChange={(event) => setPageSize(Number(event.target.value))}
+              >
+                {PRODUCT_PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm disabled:opacity-50"
+              disabled={currentPage <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              Anterior
+            </button>
+            <span className="text-muted">
+              Pagina {currentPage} de {totalPages}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm disabled:opacity-50"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              Proxima
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Critical alert */}
       {(criticalCount > 0 || outCount > 0) && !statusFilter && !search && !catFilter && (
@@ -799,15 +852,32 @@ export default function EstoquePage() {
                 })}
               </tbody>
             </table>
-            {filtered.length > visibleProducts.length && (
-              <div className="flex items-center justify-center border-t border-[var(--border2)] bg-surface/70 p-4">
-                <button
-                  type="button"
-                  onClick={() => setVisibleCount((count) => count + STOCK_RENDER_STEP)}
-                  className="btn btn-secondary btn-sm"
-                >
-                  Mostrar mais {Math.min(STOCK_RENDER_STEP, filtered.length - visibleProducts.length)} de {filtered.length}
-                </button>
+            {totalPages > 1 && (
+              <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border2)] bg-surface/70 p-4">
+                <p className="text-xs font-semibold text-muted">
+                  Mostrando {pageStart + 1}-{pageEnd} de {filtered.length}
+                </p>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm disabled:opacity-50"
+                    disabled={currentPage <= 1}
+                    onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  >
+                    Anterior
+                  </button>
+                  <span className="text-muted">
+                    Pagina {currentPage} de {totalPages}
+                  </span>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm disabled:opacity-50"
+                    disabled={currentPage >= totalPages}
+                    onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+                  >
+                    Proxima
+                  </button>
+                </div>
               </div>
             )}
           </div>
