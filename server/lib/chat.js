@@ -1,6 +1,13 @@
 import { HttpError } from './http.js'
 import { serverEnv } from './env.js'
 import { logger } from './logger.js'
+import {
+  buildPetbotSearchText,
+  markPetbotOrderError,
+  markPetbotOrderSaved,
+  mergePetbotContext,
+  runPetbotGuard,
+} from './petbotGuard.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -899,12 +906,100 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   const items = Array.isArray(args.items) ? args.items : []
   if (!items.length) throw new Error('Pedido sem itens para registrar.')
 
-  const subtotal = items.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
+  if (!['pix', 'dinheiro', 'cartao'].includes(args.payment_method)) {
+    throw new Error('Forma de pagamento ausente ou invalida.')
+  }
+
+  const productIds = [...new Set(items.map((item) => cleanText(item.product_id)).filter(Boolean))]
+  let productMap = new Map()
+  if (productIds.length > 0) {
+    const { data: productRows, error: productError } = await supabase
+      .from('products')
+      .select('id,name,price,stock_quantity,active')
+      .eq('tenant_id', session.tenant_id)
+      .eq('module_id', session.module_id)
+      .in('id', productIds)
+
+    if (productError) throw new Error(`Falha ao validar estoque: ${productError.message}`)
+    productMap = new Map((productRows || []).map((product) => [String(product.id), product]))
+  }
+
+  if (args.order_type === 'produto' && productIds.length !== items.length) {
+    throw new Error('Produto sem ID do estoque nao pode ser registrado.')
+  }
+
+  const normalizedItems = items.map((item) => {
+    const productId = cleanText(item.product_id)
+    const quantity = Math.max(1, Number(item.quantity || 1))
+    if (!productId) {
+      if (args.order_type === 'produto') throw new Error('Produto sem ID do estoque nao pode ser registrado.')
+      return {
+        product_id: null,
+        name: cleanText(item.name) || cleanText(args.service_type) || 'Servico',
+        quantity,
+        unit_price: Number(item.unit_price || 0),
+        upsell: Boolean(item.upsell),
+      }
+    }
+
+    const product = productMap.get(productId)
+    if (!product || product.active === false) throw new Error(`Produto indisponivel no estoque: ${cleanText(item.name) || productId}`)
+    if (Number(product.stock_quantity || 0) < quantity) throw new Error(`Estoque insuficiente para ${product.name}.`)
+
+    return {
+      product_id: productId,
+      name: cleanText(product.name) || cleanText(item.name),
+      quantity,
+      unit_price: Number(product.price || 0),
+      upsell: Boolean(item.upsell),
+    }
+  })
+
+  if (args.order_type === 'produto') {
+    if (!['entrega', 'retirada'].includes(args.fulfillment_type)) {
+      throw new Error('Entrega ou retirada precisa estar definida antes de registrar.')
+    }
+    if (args.fulfillment_type === 'entrega') {
+      const deliveryAddress = cleanText(args.delivery_address)
+      const deliveryNeighborhood = cleanText(args.delivery_neighborhood)
+      const deliveryReference = cleanText(args.delivery_reference)
+      if (!deliveryAddress || !/\d/.test(deliveryAddress) || !deliveryNeighborhood || !deliveryReference) {
+        throw new Error('Endereco de entrega incompleto.')
+      }
+    }
+  }
+
+  let validatedAppointment = null
+  if (args.order_type !== 'produto') {
+    const appointmentId = cleanText(args.appointment_id)
+    const scheduledAt = cleanText(args.scheduled_at)
+    if (!appointmentId && !scheduledAt) throw new Error('Horario real da agenda ausente.')
+
+    let appointmentQuery = supabase
+      .from('appointments')
+      .select('id,service_type,scheduled_at,status,price')
+      .eq('tenant_id', session.tenant_id)
+      .eq('module_id', session.module_id)
+
+    appointmentQuery = appointmentId ? appointmentQuery.eq('id', appointmentId) : appointmentQuery.eq('scheduled_at', scheduledAt)
+
+    const { data, error } = await appointmentQuery.limit(1).maybeSingle()
+    if (error) throw new Error(`Falha ao validar agenda: ${error.message}`)
+    if (!data) throw new Error('Horario nao encontrado na agenda.')
+
+    const status = cleanText(data.status).toLowerCase()
+    if (!AVAILABLE_STATUSES.has(status)) throw new Error('Horario nao esta mais disponivel.')
+
+    validatedAppointment = data
+    args.scheduled_at = data.scheduled_at
+    args.service_type = cleanText(data.service_type) || cleanText(args.service_type) || args.order_type
+    normalizedItems[0].unit_price = Number(data.price || normalizedItems[0].unit_price || 0)
+    normalizedItems[0].name = cleanText(data.service_type) || normalizedItems[0].name
+  }
+
+  const subtotal = normalizedItems.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
   const deliveryFee = args.fulfillment_type === 'entrega' ? Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
-  const providedTotal = Number(args.total || 0)
-  const total = args.fulfillment_type === 'entrega'
-    ? Number((subtotal + deliveryFee).toFixed(2))
-    : Number((providedTotal || subtotal).toFixed(2))
+  const total = subtotal + deliveryFee
   const orderType = args.order_type === 'produto' ? 'entrega' : 'servico'
   const fulfillmentType = args.order_type === 'produto'
     ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
@@ -916,7 +1011,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   const deliveryNeighborhood = cleanText(args.delivery_neighborhood) || customer.client.neighborhood || null
   const deliveryCity = cleanText(args.delivery_city) || customer.client.city || null
   const deliveryLine = [deliveryAddress, deliveryNeighborhood, deliveryCity].filter(Boolean).join(' - ')
-  const resolvedItems = await resolveOrderItems(supabase, session, items)
+  const resolvedItems = await resolveOrderItems(supabase, session, normalizedItems)
   const itemSummary = resolvedItems
     .map((item) => `${Number(item.quantity || 1)}x ${item.display_name} - R$ ${Number(item.subtotal || 0).toFixed(2)}`)
     .join('; ')
@@ -976,25 +1071,28 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   }
 
   let appointment = null
-  if (args.order_type !== 'produto' && cleanText(args.scheduled_at)) {
+  if (args.order_type !== 'produto' && validatedAppointment) {
+    const payload = {
+      tenant_id: session.tenant_id,
+      module_id: session.module_id,
+      client_id: customer.client.id,
+      pet_id: customer.client.id,
+      service_type: cleanText(args.service_type) || args.order_type,
+      scheduled_at: cleanText(args.scheduled_at),
+      duration_min: 60,
+      price: total,
+      status: 'agendado',
+      source: 'whatsapp',
+      customer_name: cleanText(args.customer_name) || customer.client.name,
+      customer_phone: customer.phone,
+      description: notes,
+      notes,
+    }
+
     const { data, error } = await supabase
       .from('appointments')
-      .insert({
-        tenant_id: session.tenant_id,
-        module_id: session.module_id,
-        client_id: customer.client.id,
-        pet_id: customer.client.id,
-        service_type: cleanText(args.service_type) || args.order_type,
-        scheduled_at: cleanText(args.scheduled_at),
-        duration_min: 60,
-        price: total,
-        status: 'agendado',
-        source: 'whatsapp',
-        customer_name: cleanText(args.customer_name) || customer.client.name,
-        customer_phone: customer.phone,
-        description: notes,
-        notes,
-      })
+      .update(payload)
+      .eq('id', validatedAppointment.id)
       .select('id,scheduled_at')
       .single()
     if (error) throw new Error(`Falha ao registrar agendamento: ${error.message}`)
@@ -1064,6 +1162,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
     .update({
       intent: 'pedido_confirmado',
       context: {
+        ...(session.context || {}),
         last_sale_id: sale.id,
         last_order_id: order?.id || null,
         last_appointment_id: appointment?.id || null,
@@ -1372,81 +1471,47 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const intent = detectIntent(trimmedMessage)
   const history = await loadRecentMessages(supabase, sessionId)
-  const catalogSearchText = buildCatalogSearchText(history, trimmedMessage)
-  const [storeSettings, products, appointments, examplesContext, botConfig] = await Promise.all([
+  const catalogSearchText = buildPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), session.context || {})
+  const [storeSettings, products, appointments] = await Promise.all([
     loadStoreSettings(supabase, moduleId, session.tenant_id),
     loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
     loadAppointments(supabase, moduleId, session.tenant_id),
-    loadConversationExamples(supabase, moduleId, session.tenant_id, trimmedMessage, intent),
-    loadBotRuntimeConfig(supabase, session.tenant_id, moduleId),
   ])
   const customer = await ensureCustomerProfile(supabase, session)
-
-  const systemPrompt = buildSystemPrompt({
-    ...storeSettings,
-    customerContext: buildCustomerContext(customer),
-    stockContext: buildStockContext(products),
-    appointmentsContext: buildAppointmentsContext(appointments),
-    examplesContext,
-  })
 
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
   await insertUserMessages(supabase, sessionId, userMessages)
 
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...history,
-    { role: 'user', content: trimmedMessage },
-  ]
+  let guard = runPetbotGuard({
+    message: trimmedMessage,
+    session,
+    customer,
+    products,
+    appointments,
+    settings: storeSettings,
+  })
+  let reply = guard.reply?.trim()
+  let state = guard.state
+  let orderResult = null
 
-  let completion = await callOpenAIWithTimeout({
-    model: botConfig.modelName || serverEnv.openAiModel,
-    temperature: Number.isFinite(botConfig.temperature) ? botConfig.temperature : DEFAULT_BOT_TEMPERATURE,
-    max_tokens: 500,
-    messages,
-    tools: PETBOT_TOOLS,
-    tool_choice: 'auto',
-  }, serverEnv.openAiTimeoutMs)
-
-  let assistantMessage = completion.choices[0]?.message || {}
-  const toolCalls = assistantMessage.tool_calls || []
-
-  if (toolCalls.length > 0) {
-    const toolResults = []
-    for (const toolCall of toolCalls) {
-      try {
-        toolResults.push({
-          tool_call_id: toolCall.id,
-          role: 'tool',
-          name: toolCall.function?.name,
-          content: JSON.stringify(await executePetbotTool(supabase, session, storeSettings, toolCall)),
-        })
-      } catch (error) {
-        toolResults.push({
-          tool_call_id: toolCall.id,
-          role: 'tool',
-          name: toolCall.function?.name,
-          content: JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) }),
-        })
-      }
+  if (guard.shouldSaveOrder) {
+    try {
+      orderResult = await createConfirmedPetshopOrder(supabase, session, storeSettings, guard.orderArgs)
+      state = markPetbotOrderSaved(state, orderResult)
+      reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
+    } catch (error) {
+      state = markPetbotOrderError(state, error)
+      reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar a equipe para resolver isso antes de finalizar.'
+      logger.warn('PetBot guarded order save failed', {
+        sessionId,
+        moduleId,
+        error: error instanceof Error ? error.message : String(error),
+      })
     }
-
-    completion = await callOpenAIWithTimeout({
-      model: botConfig.modelName || serverEnv.openAiModel,
-      temperature: Number.isFinite(botConfig.temperature) ? botConfig.temperature : DEFAULT_BOT_TEMPERATURE,
-      max_tokens: 500,
-      messages: [
-        ...messages,
-        assistantMessage,
-        ...toolResults,
-      ],
-    }, serverEnv.openAiTimeoutMs)
-    assistantMessage = completion.choices[0]?.message || {}
   }
 
-  const reply = assistantMessage.content?.trim()
   if (!reply) {
-    throw new HttpError(502, 'The AI response came back empty.')
+    throw new HttpError(502, 'The PetBot response came back empty.')
   }
 
   const botSentAt = new Date().toISOString()
@@ -1457,9 +1522,16 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       role: 'assistant',
       content: reply,
       metadata: {
+        source: options.source || 'dashboard_simulation',
         ...(options.assistantMetadata || {}),
+        petbot_guard: {
+          version: state?.version || 1,
+          intent: guard.intent,
+          blocked_reasons: state?.blockedReasons || [],
+          order_saved: Boolean(orderResult),
+        },
       },
-      tokens_used: completion?.usage?.total_tokens || 0,
+      tokens_used: 0,
       sent_at: botSentAt,
     })
     .select('id, role, content, metadata, tokens_used, sent_at')
@@ -1472,7 +1544,16 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const { error: sessionUpdateError } = await supabase
     .from('chat_sessions')
     .update({
-      intent,
+      intent: guard.intent || intent,
+      context: mergePetbotContext({
+        ...(session.context || {}),
+        ...(orderResult ? {
+          last_sale_id: orderResult.sale_id,
+          last_order_id: orderResult.order_id || null,
+          last_appointment_id: orderResult.appointment_id || null,
+        } : {}),
+      }, state),
+      ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: botSentAt } : {}),
       last_message_at: botSentAt,
     })
     .eq('id', sessionId)
@@ -1484,8 +1565,10 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   logger.info('Chat response generated', {
     sessionId,
     moduleId,
-    intent,
-    engine: 'petbot_structured_prompt_v1',
+    intent: guard.intent || intent,
+    tokens: 0,
+    guarded: true,
+    engine: 'petbot_guard_v1',
   })
 
   return {
