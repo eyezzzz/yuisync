@@ -171,13 +171,16 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
   const items = directItems.length ? directItems : fallbackItems
   const originAddress = address || orderOriginAddress(order)
   const publicNotes = visibleOrderNotes(order)
+  const ownerName = order.client?.owner_name || order.sale?.customer_name || 'Cliente'
+  const petName = order.client?.pet_name && order.client.pet_name !== ownerName ? order.client.pet_name : ''
+  const subtitle = petName ? `Pet: ${petName}` : sourceLabel(order)
 
   return (
     <div className="bg-card border border-[var(--border)] rounded-2xl p-4 space-y-4">
       <div className="flex items-start justify-between gap-3">
-        <div>
-          <p className="font-display font-bold text-lg text-text">{order.client.pet_name || order.sale?.customer_name || 'Pedido WhatsApp'}</p>
-          <p className="text-xs text-muted">{order.client.owner_name || order.sale?.customer_name || 'Cliente'}</p>
+        <div className="min-w-0">
+          <p className="font-display font-bold text-lg text-text truncate">{ownerName}</p>
+          <p className="text-xs text-muted truncate">{subtitle}</p>
         </div>
         <span className="badge badge-blue capitalize">{order.order_type}</span>
       </div>
