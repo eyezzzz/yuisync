@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import {
   ShoppingCart, Search, Plus, Minus, Trash2, X,
@@ -37,6 +37,7 @@ const DEFAULT_PAYMENT_SPLITS = [
   createPaymentSplit(1, 'dinheiro', ''),
   createPaymentSplit(2, 'credito', ''),
 ]
+const PDV_PRODUCT_RENDER_LIMIT = 160
 
 const CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -403,7 +404,7 @@ export default function VendasPage() {
   const [showResults, setShowResults] = useState(false)
   const searchRef = useRef(null)
 
-  const filteredPets = (pets || []).filter(p => {
+  const filteredPets = useMemo(() => (pets || []).filter(p => {
     const raw = (v) => (v || '').toString().replace(/\D/g, '')
     const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
     const query = normalize(customerSearch)
@@ -418,7 +419,7 @@ export default function VendasPage() {
     const matchDigit = queryDigits && digitFields.some(f => raw(f).includes(queryDigits))
 
     return matchText || matchDigit
-  })
+  }), [pets, customerSearch])
 
   useEffect(() => {
     const handleClick = (e) => { if (searchRef.current && !searchRef.current.contains(e.target)) setShowResults(false) }
@@ -426,14 +427,17 @@ export default function VendasPage() {
     return () => document.removeEventListener('mousedown', handleClick)
   }, [])
 
-  const filtered = (products || []).filter(p => {
+  const filtered = useMemo(() => (products || []).filter(p => {
     const matchesSearch = !search || p.name.toLowerCase().includes(search.toLowerCase())
     const matchesCat = !catFilter || p.category === catFilter
     return matchesSearch && matchesCat
-  })
+  }), [products, search, catFilter])
   
-  const selectedProducts = filtered.filter(p => cart.some(i => i.product_id === p.id))
-  const otherProducts    = filtered.filter(p => !cart.some(i => i.product_id === p.id))
+  const cartProductIds = useMemo(() => new Set(cart.map((item) => item.product_id)), [cart])
+  const cartByProductId = useMemo(() => new Map(cart.map((item) => [item.product_id, item])), [cart])
+  const selectedProducts = useMemo(() => filtered.filter(p => cartProductIds.has(p.id)), [filtered, cartProductIds])
+  const otherProducts = useMemo(() => filtered.filter(p => !cartProductIds.has(p.id)), [filtered, cartProductIds])
+  const visibleOtherProducts = useMemo(() => otherProducts.slice(0, PDV_PRODUCT_RENDER_LIMIT), [otherProducts])
 
   const subtotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
   const total    = Math.max(0, subtotal - (Number(discount) || 0))
@@ -764,7 +768,7 @@ export default function VendasPage() {
                       <ProductCard 
                         key={p.id} 
                         product={p} 
-                        cartItem={cart.find(i => i.product_id === p.id)} 
+                        cartItem={cartByProductId.get(p.id)}
                         onAdd={addToCart} 
                         onRemove={changeQty}
                       />
@@ -782,23 +786,35 @@ export default function VendasPage() {
                 <h3 className="text-[10px] font-black uppercase tracking-widest text-muted mb-4 flex items-center gap-2">
                   <Package size={12}/>
                   Itens Gerais ({otherProducts.length})
+                  {otherProducts.length > visibleOtherProducts.length && (
+                    <span className="text-[10px] font-semibold text-muted">
+                      mostrando {visibleOtherProducts.length}
+                    </span>
+                  )}
                 </h3>
                 {otherProducts.length === 0 ? (
                   <div className="py-12 text-center">
                     <p className="text-muted text-sm italic">Nenhum outro produto encontrado.</p>
                   </div>
                 ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {otherProducts.map(p => (
-                      <ProductCard 
-                        key={p.id} 
-                        product={p} 
-                        cartItem={cart.find(i => i.product_id === p.id)} 
-                        onAdd={addToCart} 
-                        onRemove={changeQty}
-                      />
-                    ))}
-                  </div>
+                  <>
+                    {otherProducts.length > visibleOtherProducts.length && (
+                      <p className="text-xs text-muted mb-4">
+                        Mostrando os primeiros {visibleOtherProducts.length} produtos. Use busca ou categoria para encontrar itens especificos.
+                      </p>
+                    )}
+                    <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
+                      {visibleOtherProducts.map(p => (
+                        <ProductCard
+                          key={p.id}
+                          product={p}
+                          cartItem={cartByProductId.get(p.id)}
+                          onAdd={addToCart}
+                          onRemove={changeQty}
+                        />
+                      ))}
+                    </div>
+                  </>
                 )}
               </div>
             </div>

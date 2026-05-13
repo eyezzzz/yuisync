@@ -26,6 +26,7 @@ const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0
 const PRODUCT_CATEGORIES = BASE_PRODUCT_CATEGORIES
 const normalizeProductCategory = normalizeCategory
 const PRODUCT_NAME_KEEP_UPPER = new Set(['KG', 'G', 'ML', 'UN', 'SRD', 'JR', 'AD', 'C', 'N'])
+const STOCK_RENDER_STEP = 250
 
 function formatProductName(value = '') {
   const text = String(value || '').replace(/\s+/g, ' ').trim()
@@ -511,10 +512,15 @@ export default function EstoquePage() {
   const [legacyImportModal, setLegacyImportModal] = useState(false)
   const [adjusting, setAdjusting] = useState(null) // product | null
   const [resettingStock, setResettingStock] = useState(false)
+  const [visibleCount, setVisibleCount] = useState(STOCK_RENDER_STEP)
 
   useEffect(() => {
     load({ activeOnly: false })
   }, [load])
+
+  useEffect(() => {
+    setVisibleCount(STOCK_RENDER_STEP)
+  }, [search, catFilter, statusFilter])
 
   const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
 
@@ -531,7 +537,7 @@ export default function EstoquePage() {
     return results.sort()
   }, [products])
 
-  const filtered = (products || []).filter(p => {
+  const filtered = useMemo(() => (products || []).filter(p => {
     // Filtro de Busca (Nome ou Categoria)
     const q = normalize(search)
     const matchQ = !search || 
@@ -546,7 +552,8 @@ export default function EstoquePage() {
     const matchS = !statusFilter || stockStatus(p) === statusFilter
     
     return matchQ && matchC && matchS
-  })
+  }), [products, search, catFilter, statusFilter])
+  const visibleProducts = useMemo(() => filtered.slice(0, visibleCount), [filtered, visibleCount])
 
   const criticalCount = products.filter(p => stockStatus(p) === 'critico').length
   const outCount      = products.filter(p => stockStatus(p) === 'esgotado').length
@@ -718,7 +725,7 @@ export default function EstoquePage() {
                 <th>Mín.</th><th>Status</th><th className="text-right">Ações</th>
               </tr></thead>
               <tbody>
-                {filtered.map(p => {
+                {visibleProducts.map(p => {
                   const sb = stockBadge(p)
                   const margin = p.cost_price
                     ? (((p.price - p.cost_price) / p.price) * 100).toFixed(0)
@@ -792,6 +799,17 @@ export default function EstoquePage() {
                 })}
               </tbody>
             </table>
+            {filtered.length > visibleProducts.length && (
+              <div className="flex items-center justify-center border-t border-[var(--border2)] bg-surface/70 p-4">
+                <button
+                  type="button"
+                  onClick={() => setVisibleCount((count) => count + STOCK_RENDER_STEP)}
+                  className="btn btn-secondary btn-sm"
+                >
+                  Mostrar mais {Math.min(STOCK_RENDER_STEP, filtered.length - visibleProducts.length)} de {filtered.length}
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
