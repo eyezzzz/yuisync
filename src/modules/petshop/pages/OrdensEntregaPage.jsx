@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ClipboardList, MapPin, MessageSquare, RefreshCw, Truck, UserCheck } from 'lucide-react'
+import { ClipboardList, MapPin, MessageSquare, Package, Printer, RefreshCw, Truck, UserCheck } from 'lucide-react'
+import { useAuthCtx } from '../../../context/AuthContext'
 import { fmtCurrency } from '../../../lib/supabase'
 import { SERVICE_ORDER_FLOW, usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 
@@ -11,11 +12,151 @@ const ALL_STATUS_STEPS = [
   { id: 'concluida', label: 'Concluida' },
 ]
 
-function OrderCard({ order, assignees, onAssign, onAdvance, setPage }) {
+function orderAddress(order) {
+  return [
+    order.delivery_address || order.client?.owner_address,
+    order.delivery_neighborhood || order.client?.owner_neighborhood,
+    order.delivery_city || order.client?.owner_city,
+  ].filter(Boolean).join(' - ')
+}
+
+function extractNoteValue(notes = '', label = '') {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const match = String(notes || '').match(new RegExp(`${escaped}:\\s*([^|]+)`, 'i'))
+  return match?.[1]?.trim() || ''
+}
+
+function orderItems(order) {
+  const saleItems = order.sale?.sale_items || []
+  if (saleItems.length) {
+    return saleItems.map((item) => ({
+      name: item.products?.name || 'Produto sem vinculo',
+      quantity: Number(item.quantity || 1),
+      unitPrice: Number(item.unit_price || 0),
+      subtotal: Number(item.subtotal || Number(item.quantity || 1) * Number(item.unit_price || 0)),
+    }))
+  }
+
+  const notesItems = extractNoteValue(order.notes || order.sale?.notes, 'Itens')
+  if (!notesItems) return []
+  return notesItems.split(';').map((entry) => ({ raw: entry.trim() })).filter((entry) => entry.raw)
+}
+
+function sourceLabel(order) {
+  if (order.sale?.source === 'whatsapp' || String(order.notes || '').toLowerCase().includes('petbot')) return 'PetBot WhatsApp'
+  if (order.sale?.source === 'pdv') return 'PDV'
+  return order.sale?.source || order.source || 'Operacional'
+}
+
+function orderSessionId(order) {
+  return order.session_id || extractNoteValue(order.notes || order.sale?.notes, 'Sessao')
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (char) => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;',
+  }[char]))
+}
+
+function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
+  const printWindow = window.open('', '_blank')
+  if (!printWindow) return
+
+  const width = storeSettings?.printer_width === '58' ? '58mm' : '80mm'
+  const storeAddress = [
+    storeSettings?.store_address,
+    storeSettings?.store_neighborhood,
+    storeSettings?.store_city,
+  ].filter(Boolean).join(' - ')
+  const address = orderAddress(order)
+  const directItems = orderItems(order)
+  const items = directItems.length ? directItems : fallbackItems
+  const createdAt = order.created_at ? new Date(order.created_at).toLocaleString('pt-BR') : new Date().toLocaleString('pt-BR')
+  const total = Number(order.sale?.total_price || 0)
+  const subtotal = Number(order.sale?.subtotal || 0)
+  const discount = Number(order.sale?.discount || 0)
+  const orderLabel = String(order.id || '').slice(0, 8)
+  const saleLabel = String(order.sale_id || '').slice(0, 8) || '-'
+
+  const html = `
+    <html>
+      <head>
+        <title>Ordem ${escapeHtml(orderLabel)}</title>
+        <style>
+          @page { size: ${width} auto; margin: 0; }
+          * { box-sizing: border-box; }
+          body { width: ${width}; margin: 0 auto; padding: 10px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; }
+          .center { text-align: center; }
+          .header { font-size: 15px; font-weight: 700; text-transform: uppercase; }
+          .muted { font-size: 10px; }
+          .hr { border-top: 1px dashed #000; margin: 8px 0; }
+          .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
+          .label { font-weight: 700; text-transform: uppercase; }
+          .wrap { white-space: normal; word-break: break-word; }
+          .item { margin: 5px 0; }
+          .total { font-size: 15px; font-weight: 700; }
+        </style>
+      </head>
+      <body>
+        <div class="center">
+          <div class="header">${escapeHtml(storeSettings?.store_name || 'PETSHOP')}</div>
+          <div class="muted wrap">${escapeHtml(storeAddress || 'Endereco da loja nao configurado')}</div>
+          <div class="muted">Tel: ${escapeHtml(storeSettings?.store_phone || '-')}</div>
+        </div>
+        <div class="hr"></div>
+        <div class="center label">ORDEM DE ${escapeHtml(order.order_type === 'servico' ? 'SERVICO' : 'ENTREGA')}</div>
+        <div class="row"><span>Ordem</span><span>#${escapeHtml(orderLabel)}</span></div>
+        <div class="row"><span>Venda</span><span>#${escapeHtml(saleLabel)}</span></div>
+        <div class="row"><span>Status</span><span>${escapeHtml(order.status || '-')}</span></div>
+        <div class="row"><span>Data</span><span>${escapeHtml(createdAt)}</span></div>
+        <div class="hr"></div>
+        <div class="label">Cliente</div>
+        <div class="wrap">${escapeHtml(order.client?.owner_name || order.sale?.customer_name || 'Cliente')}</div>
+        <div>Contato: ${escapeHtml(order.contact_phone || order.client?.phone || '-')}</div>
+        ${address ? `<div class="hr"></div><div class="label">Endereco</div><div class="wrap">${escapeHtml(address)}</div>` : ''}
+        <div class="hr"></div>
+        <div class="label">Itens</div>
+        ${items.length ? items.map((item) => item.raw ? `
+          <div class="item wrap">${escapeHtml(item.raw)}</div>
+        ` : `
+          <div class="item">
+            <div class="wrap">${escapeHtml(`${item.quantity}x ${item.name}`)}</div>
+            <div class="row"><span>${fmtCurrency(item.unitPrice)} un.</span><span>${fmtCurrency(item.subtotal)}</span></div>
+          </div>
+        `).join('') : '<div class="wrap">Sem itens vinculados nesta ordem.</div>'}
+        <div class="hr"></div>
+        ${subtotal > 0 ? `<div class="row"><span>Subtotal</span><span>${fmtCurrency(subtotal)}</span></div>` : ''}
+        ${discount > 0 ? `<div class="row"><span>Desconto</span><span>-${fmtCurrency(discount)}</span></div>` : ''}
+        <div class="row total"><span>Total</span><span>${fmtCurrency(total)}</span></div>
+        <div class="row"><span>Pagamento</span><span>${escapeHtml(order.sale?.payment_method || '-')}</span></div>
+        <div class="hr"></div>
+        <div class="muted wrap">Origem: ${escapeHtml(address || sourceLabel(order))}</div>
+        ${order.notes ? `<div class="muted wrap">${escapeHtml(order.notes)}</div>` : ''}
+      </body>
+    </html>
+  `
+
+  printWindow.document.write(html)
+  printWindow.document.close()
+  setTimeout(() => {
+    printWindow.print()
+    printWindow.close()
+  }, 350)
+}
+
+function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackItems = [], setPage }) {
   const flow = SERVICE_ORDER_FLOW[order.order_type] || []
   const currentIndex = flow.findIndex((step) => step.id === order.status)
   const nextStep = flow[currentIndex + 1] || null
-  const address = [order.delivery_address, order.delivery_neighborhood, order.delivery_city].filter(Boolean).join(' - ')
+  const address = orderAddress(order)
+  const directItems = orderItems(order)
+  const items = directItems.length ? directItems : fallbackItems
+  const notesAddress = extractNoteValue(order.notes || order.sale?.notes, 'Endereco')
+  const originAddress = address || notesAddress
 
   return (
     <div className="bg-card border border-[var(--border)] rounded-2xl p-4 space-y-4">
@@ -46,6 +187,29 @@ function OrderCard({ order, assignees, onAssign, onAdvance, setPage }) {
         </div>
       </div>
 
+      <div className="rounded-xl bg-white/5 border border-[var(--border)] px-4 py-3 text-sm text-text">
+        <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-2">Itens</p>
+        {items.length ? (
+          <div className="space-y-2">
+            {items.map((item, index) => (
+              <div key={`${order.id}-item-${index}`} className="flex items-start justify-between gap-3">
+                <div className="flex items-start gap-2 min-w-0">
+                  <Package size={15} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+                  <span className="text-sm leading-snug line-clamp-2">
+                    {item.raw || `${item.quantity}x ${item.name}`}
+                  </span>
+                </div>
+                {!item.raw && (
+                  <span className="text-xs font-semibold text-muted whitespace-nowrap">{fmtCurrency(item.subtotal)}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <p className="text-sm text-amber-500">Sem itens vinculados nesta ordem.</p>
+        )}
+      </div>
+
       <div>
         <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-2">Responsavel</p>
         <select
@@ -60,16 +224,16 @@ function OrderCard({ order, assignees, onAssign, onAdvance, setPage }) {
         </select>
       </div>
 
-      {address && (
-        <div className="rounded-xl bg-white/5 border border-[var(--border)] px-4 py-3 text-sm text-text">
-          <div className="flex items-start gap-2">
-            <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />
-            <span>{address}</span>
-          </div>
+      <div className="rounded-xl bg-white/5 border border-[var(--border)] px-4 py-3 text-sm text-text">
+        <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-2">Origem</p>
+        <div className="flex items-start gap-2">
+          <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />
+          <span>Origem: {originAddress || 'Endereco nao informado na ordem.'}</span>
         </div>
-      )}
+        <p className="text-[11px] text-muted mt-2">Canal: {sourceLabel(order)}</p>
+      </div>
 
-      {order.notes && (
+      {order.notes && !originAddress && (
         <div className="rounded-xl bg-white/5 border border-[var(--border)] px-4 py-3 text-sm text-muted">
           {order.notes}
         </div>
@@ -85,6 +249,9 @@ function OrderCard({ order, assignees, onAssign, onAdvance, setPage }) {
             Ordem concluida
           </div>
         )}
+        <button onClick={() => onPrint(order, items)} className="btn btn-secondary" title="Imprimir ordem 80mm" aria-label="Imprimir ordem 80mm">
+          <Printer size={15} />
+        </button>
         {setPage && (
           <button onClick={() => setPage('chat')} className="btn btn-secondary">
             <MessageSquare size={15} />
@@ -97,6 +264,7 @@ function OrderCard({ order, assignees, onAssign, onAdvance, setPage }) {
 
 export default function OrdensEntregaPage({ setPage }) {
   const { loadOrderAssignees, loadServiceOrders, updateServiceOrder } = usePetshopAdvanced()
+  const { storeSettings } = useAuthCtx()
   const [orderType, setOrderType] = useState('entrega')
   const [orders, setOrders] = useState([])
   const [assignees, setAssignees] = useState([])
@@ -140,6 +308,22 @@ export default function OrdensEntregaPage({ setPage }) {
     } catch (err) {
       setError(err.message)
     }
+  }
+
+  const itemsBySession = useMemo(() => {
+    const map = new Map()
+    orders.forEach((order) => {
+      const sessionId = orderSessionId(order)
+      const items = orderItems(order)
+      if (sessionId && items.length && !map.has(sessionId)) {
+        map.set(sessionId, items)
+      }
+    })
+    return map
+  }, [orders])
+
+  function handlePrint(order, fallbackItems = []) {
+    printOrderReceipt(order, storeSettings, fallbackItems)
   }
 
   const steps = orderType ? (SERVICE_ORDER_FLOW[orderType] || ALL_STATUS_STEPS) : ALL_STATUS_STEPS
@@ -240,6 +424,8 @@ export default function OrdensEntregaPage({ setPage }) {
                       assignees={assignees}
                       onAssign={handleAssign}
                       onAdvance={handleAdvance}
+                      onPrint={handlePrint}
+                      fallbackItems={itemsBySession.get(orderSessionId(order)) || []}
                       setPage={setPage}
                     />
                   ))}

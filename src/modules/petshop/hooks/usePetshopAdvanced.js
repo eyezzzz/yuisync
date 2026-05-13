@@ -8,7 +8,7 @@ import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '..
 const DEFAULT_LOYALTY_SETTINGS = { points_per_real: 1, points_per_service: 10, redemption_rate: 100, expiry_days: 365 }
 const CLIENT_SELECT = 'id,name,phone,email,address,neighborhood,city,details'
 const PLAN_SELECT = 'id,name,price,billing_cycle,services,active'
-const ORDER_SELECT = `*,clients(${CLIENT_SELECT}),sales(id,customer_name,payment_method,total_price,created_at,fulfillment_type,source)`
+const ORDER_SELECT = `*,clients(${CLIENT_SELECT}),sales(id,customer_name,payment_method,subtotal,discount,total_price,created_at,fulfillment_type,source,notes,sale_items(id,quantity,unit_price,subtotal,upsell,products(id,name,category)))`
 const APPT_BASE_SELECT = 'id,module_id,client_id,groomer_id,service_type,scheduled_at,duration_min,price,status,live_status,checkin_at,ready_at,notes,subscription_benefit_used'
 const APPT_SELECT = `${APPT_BASE_SELECT},clients(${CLIENT_SELECT})`
 const STAFF_TYPES = ['funcionario', 'banho_tosa', 'veterinaria', 'motodog']

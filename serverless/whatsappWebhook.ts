@@ -1017,12 +1017,26 @@ async function createConfirmedPetshopOrder(
   const fulfillmentType = args.order_type === 'produto'
     ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
     : 'servico'
+  const inferredAddress = args.fulfillment_type === 'entrega'
+    ? await inferDeliveryAddressFromMessages(supabase, session.id)
+    : ''
+  const deliveryAddress = clean(args.delivery_address) || inferredAddress || clean(customer.client?.address) || null
+  const deliveryNeighborhood = clean(args.delivery_neighborhood) || clean(customer.client?.neighborhood) || null
+  const deliveryCity = clean(args.delivery_city) || clean(customer.client?.city) || null
+  const deliveryLine = [deliveryAddress, deliveryNeighborhood, deliveryCity].filter(Boolean).join(' - ')
+  const resolvedItems = await resolveOrderItems(supabase, session, items)
+  const itemSummary = resolvedItems
+    .map((item) => `${Number(item.quantity || 1)}x ${clean(item.display_name)} - R$ ${Number(item.subtotal || 0).toFixed(2)}`)
+    .join('; ')
 
   const notes = [
     'Origem: PetBot WhatsApp',
     `Sessao: ${session.id}`,
+    itemSummary ? `Itens: ${itemSummary}` : null,
+    deliveryLine ? `Endereco: ${deliveryLine}` : null,
     clean(args.notes),
     args.fulfillment_type === 'retirada' ? 'Retirada na loja' : null,
+    args.fulfillment_type === 'entrega' ? `Taxa de entrega: R$ ${deliveryFee.toFixed(2)}` : null,
     clean(args.delivery_reference) ? `Referencia: ${clean(args.delivery_reference)}` : null,
     Number(args.change_for || 0) > 0 ? `Troco para R$ ${Number(args.change_for).toFixed(2)}` : null,
   ].filter(Boolean).join(' | ')
@@ -1049,15 +1063,13 @@ async function createConfirmedPetshopOrder(
 
   if (saleError) throw new Error(`Falha ao registrar venda: ${saleError.message}`)
 
-  const saleItems = items.map((item) => ({
-    tenant_id: session.tenant_id,
-    sale_id: sale.id,
-    product_id: isUuid(item.product_id) ? clean(item.product_id) : null,
-    quantity: Number(item.quantity || 1),
-    unit_price: Number(item.unit_price || 0),
-    subtotal: Number(item.quantity || 1) * Number(item.unit_price || 0),
-    upsell: Boolean(item.upsell),
-  }))
+  const saleItems: LooseRecord[] = resolvedItems.map((row) => {
+    const { display_name: _displayName, ...item } = row
+    return {
+      ...item,
+      sale_id: sale.id,
+    }
+  })
 
   const { error: itemsError } = await supabase.from('sale_items').insert(saleItems)
   if (itemsError) throw new Error(`Falha ao registrar itens: ${itemsError.message}`)
@@ -1110,9 +1122,9 @@ async function createConfirmedPetshopOrder(
     order_type: orderType,
     status: orderType === 'servico' ? 'agendado' : 'separacao',
     scheduled_for: appointment?.scheduled_at || null,
-    delivery_address: args.fulfillment_type === 'entrega' ? clean(args.delivery_address) || clean(customer.client?.address) || null : null,
-    delivery_neighborhood: args.fulfillment_type === 'entrega' ? clean(args.delivery_neighborhood) || clean(customer.client?.neighborhood) || null : null,
-    delivery_city: args.fulfillment_type === 'entrega' ? clean(args.delivery_city) || clean(customer.client?.city) || null : null,
+    delivery_address: args.fulfillment_type === 'entrega' ? deliveryAddress : null,
+    delivery_neighborhood: args.fulfillment_type === 'entrega' ? deliveryNeighborhood : null,
+    delivery_city: args.fulfillment_type === 'entrega' ? deliveryCity : null,
     contact_phone: customer.phone,
     notes,
   }
@@ -1231,6 +1243,74 @@ async function saveSatisfactionRating(supabase: SupabaseClient, sessionId: strin
     .eq('id', sessionId)
 
   if (error) fail(500, 'Unable to save satisfaction rating.')
+}
+
+async function resolveOrderItems(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  items: LooseRecord[],
+): Promise<LooseRecord[]> {
+  const rows: LooseRecord[] = []
+
+  for (const item of items) {
+    let productId = isUuid(item.product_id) ? clean(item.product_id) : null
+    let productName = clean(item.name)
+
+    if (!productId && productName) {
+      const { data: product } = await supabase
+        .from('products')
+        .select('id,name')
+        .eq('module_id', session.module_id)
+        .eq('tenant_id', session.tenant_id)
+        .ilike('name', productName)
+        .limit(1)
+        .maybeSingle()
+
+      if (product?.id) {
+        productId = product.id
+        productName ||= clean(product.name)
+      }
+    }
+
+    const quantity = Number(item.quantity || 1)
+    const unitPrice = Number(item.unit_price || 0)
+    rows.push({
+      tenant_id: session.tenant_id,
+      sale_id: null,
+      product_id: productId,
+      quantity,
+      unit_price: unitPrice,
+      subtotal: quantity * unitPrice,
+      upsell: Boolean(item.upsell),
+      display_name: productName || 'Produto nao identificado',
+    })
+  }
+
+  return rows
+}
+
+async function inferDeliveryAddressFromMessages(
+  supabase: SupabaseClient,
+  sessionId: string,
+): Promise<string> {
+  const { data } = await supabase
+    .from('chat_messages')
+    .select('role, content')
+    .eq('session_id', sessionId)
+    .order('sent_at', { ascending: false })
+    .limit(20)
+
+  const candidates = (data || [])
+    .filter((message) => message.role === 'user')
+    .map((message) => clean(message.content))
+    .filter((text) => {
+      const normalized = normalizeSearchText(text)
+      return text.length >= 10
+        && /\d/.test(text)
+        && /\b(rua|r\.|avenida|av\.|travessa|alameda|rodovia|estrada|bairro|ap|apto|apartamento|casa|numero|nº|n )\b/.test(normalized)
+    })
+
+  return candidates[0] || ''
 }
 
 async function loadStoreContext(
@@ -1430,6 +1510,7 @@ function buildSystemPrompt(context: StoreContext): string {
     'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
     'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
     'Depois do cliente confirmar o resumo final, use a ferramenta create_confirmed_petshop_order antes de responder a avaliacao.',
+    'Ao chamar create_confirmed_petshop_order, envie product_id quando houver ID no estoque, nome do item, quantidade, preco unitario, fulfillment_type, pagamento e delivery_address completo quando for entrega.',
     'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmacao final quando o resumo final ja foi exibido.',
     'Depois de responder "Pedido confirmado", se o cliente enviar uma nota de 0 a 10, nao registre pedido de novo; apenas agradeca a avaliacao.',
     'Faca uma pergunta operacional por vez: primeiro pagamento, depois entrega/retirada, depois endereco se for entrega.',
