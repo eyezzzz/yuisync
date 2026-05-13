@@ -30,9 +30,29 @@ const PRODUCT_STOP_WORDS = new Set([
   'opa',
   'bom',
   'boa',
+  'cao',
+  'caes',
+  'cachorro',
+  'cachorros',
   'dia',
+  'ela',
+  'ele',
+  'ja',
+  'meu',
+  'minha',
+  'nao',
   'tarde',
   'noite',
+  'pra',
+  'pro',
+  'racao',
+  'racoes',
+  'sei',
+  'ser',
+  'seu',
+  'sua',
+  'um',
+  'uma',
 ])
 
 const DEFAULT_BOT_MODEL = serverEnv.openAiModel
@@ -40,6 +60,68 @@ const DEFAULT_BOT_TEMPERATURE = 0.2
 const DEFAULT_DELIVERY_FEE = 10
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
 const BUSY_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
+const KNOWN_BREED_TERMS = new Set([
+  'akita',
+  'beagle',
+  'border',
+  'boxer',
+  'buldogue',
+  'bulldog',
+  'chihuahua',
+  'collie',
+  'dachshund',
+  'doberman',
+  'golden',
+  'husky',
+  'labrador',
+  'lhasa',
+  'maltese',
+  'pastor',
+  'pinscher',
+  'pitbull',
+  'poodle',
+  'pug',
+  'rottweiler',
+  'schnauzer',
+  'shih',
+  'spitz',
+  'tzu',
+  'vira',
+  'york',
+  'yorkshire',
+])
+const AGE_CATEGORY_TERMS = new Set([
+  'adulto',
+  'adultos',
+  'adulta',
+  'adultas',
+  'filhote',
+  'filhotes',
+  'puppy',
+  'junior',
+  'senior',
+  'idoso',
+  'castrado',
+  'castrada',
+  'castrados',
+  'indoor',
+  'light',
+])
+const SIZE_CATEGORY_TERMS = new Set([
+  'mini',
+  'pequeno',
+  'pequenos',
+  'pequena',
+  'pequenas',
+  'medio',
+  'medios',
+  'media',
+  'medias',
+  'grande',
+  'grandes',
+  'gigante',
+  'gigantes',
+])
 
 const PETBOT_TOOLS = [
   {
@@ -141,6 +223,10 @@ function cleanText(value = '') {
   return String(value || '').trim()
 }
 
+function escapeIlike(value = '') {
+  return cleanText(value).replace(/[%_\\]/g, (char) => `\\${char}`)
+}
+
 function parseJsonObject(value) {
   if (!value) return {}
   if (typeof value === 'object' && !Array.isArray(value)) return value
@@ -180,12 +266,18 @@ function normalizeSpecies(value = '') {
 }
 
 function buildSearchTerms(message = '') {
-  return normalizeSearchText(message)
+  const terms = normalizeSearchText(message)
     .replace(/[^a-z0-9]+/g, ' ')
     .split(/\s+/)
     .map((term) => term.trim())
     .filter((term) => term.length >= 3 && !PRODUCT_STOP_WORDS.has(term))
-    .slice(0, 12)
+    .flatMap((term) => {
+      if (term === 'shihtzu') return ['shih', 'tzu', 'shihtzu']
+      if (term === 'york') return ['york', 'yorkshire']
+      return [term]
+    })
+
+  return [...new Set(terms)].slice(0, 12)
 }
 
 function buildCatalogSearchText(history = [], message = '') {
@@ -243,14 +335,40 @@ function productSearchText(product) {
 
 function rankProduct(product, terms) {
   const searchable = productSearchText(product)
+  const name = normalizeSearchText(product?.name)
   const category = normalizeSearchText(product?.category)
   let score = 0
+  const wantsAdult = terms.some((term) => ['adulto', 'adultos', 'adulta', 'adultas'].includes(term))
+  const wantsPuppy = terms.some((term) => ['filhote', 'filhotes', 'puppy', 'junior'].includes(term))
+  const breedTerms = terms.filter((term) => KNOWN_BREED_TERMS.has(term))
+  const categoryTerms = terms.filter((term) => AGE_CATEGORY_TERMS.has(term))
+  const sizeTerms = terms.filter((term) => SIZE_CATEGORY_TERMS.has(term))
 
   for (const term of terms) {
-    if (category.includes(term)) score += 6
-    if (searchable.includes(term)) score += 3
+    if (name.includes(term)) score += 8
+    if (category.includes(term)) score += 4
+    if (searchable.includes(term)) score += 2
   }
 
+  for (const term of breedTerms) {
+    if (name.includes(term)) score += 10
+    if (!name.includes(term) && !searchable.includes(term)) score -= 2
+  }
+
+  for (const term of categoryTerms) {
+    if (name.includes(term)) score += 8
+    if (!name.includes(term) && !searchable.includes(term)) score -= 2
+  }
+
+  for (const term of sizeTerms) {
+    if (name.includes(term)) score += 7
+    if (!name.includes(term) && !searchable.includes(term)) score -= 1
+  }
+
+  if (wantsAdult && /adult/.test(name)) score += 8
+  if (wantsAdult && /(filhote|puppy|junior)/.test(name)) score -= 12
+  if (wantsPuppy && /(filhote|puppy|junior)/.test(name)) score += 8
+  if (wantsPuppy && /adult/.test(name)) score -= 12
   if (category.includes('racao')) score += 2
   score += Math.min(Number(product?.stock_quantity || 0), 20) / 20
   return score
@@ -271,9 +389,11 @@ function selectRelevantProducts(products, message) {
       .map((item) => item.product)
     : []
 
-  const source = matched.length ? matched : (intent === 'produto' ? available : matched)
+  if (matched.length) return matched.slice(0, PRODUCT_CONTEXT_LIMIT)
 
-  return source
+  if (intent !== 'produto') return []
+
+  return available
     .sort((a, b) => {
       const aCategory = normalizeSearchText(a?.category)
       const bCategory = normalizeSearchText(b?.category)
@@ -380,12 +500,13 @@ function buildSystemPrompt({
     'Fluxo obrigatorio:',
     '1. Saudacao + nome; 2. Intencao; 3. dados minimos do pet; 4. opcoes/horarios reais; 5. valor antes de confirmar; 6. um upsell; 7. resumo parcial; 8. pagamento; 9. troco se dinheiro; 10. entrega/retirada; 11. endereco se entrega; 12. resumo final; 13. confirmar separacao/agendamento; 14. avaliacao 0-10.',
     'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
-    'Dados minimos produto: cliente, especie, porte/peso ou categoria, marca se mencionada. Para produto, nome do pet e opcional; nao pergunte nome do pet antes de especie/porte.',
+    'Dados minimos produto: cliente, especie e idade/categoria quando relevante (adulto, filhote, castrado, senior). Se o cliente informar uma raca ou tamanho do dia a dia (ex.: Shih Tzu, Yorkshire, Poodle, Lhasa, Spitz, Bulldog, Golden, Labrador, Pinscher, porte pequeno/medio/grande), trate isso como categoria/porte suficiente e nao peca peso. Pergunte peso apenas para produtos que dependem tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento.',
     'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca e horario real disponivel.',
     'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
     'Nunca assuma especie. Se o cliente nao disse cachorro/gato, pergunte. Nao diga "e cachorro, certo?".',
     'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
     'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
+    'Ao vender racao por marca/raca/tamanho, priorize produtos cujo nome contenha a marca, a raca/tamanho e adulto/filhote/castrado informado. So diga que nao tem estoque se nenhum item do contexto operacional corresponder.',
     'Depois do cliente confirmar o resumo final, use a ferramenta create_confirmed_petshop_order antes de responder a avaliacao.',
     'Ao chamar create_confirmed_petshop_order, envie product_id quando houver ID no estoque, nome do item, quantidade, preco unitario, fulfillment_type, pagamento e delivery_address completo quando for entrega.',
     'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmacao final quando o resumo final ja foi exibido.',
@@ -458,19 +579,54 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
-  let query = supabase
-    .from('products')
-    .select('id, name, category, description, species_target, price, stock_quantity, active')
-    .eq('module_id', moduleId)
-    .eq('active', true)
+  const searchTerms = buildSearchTerms(message)
+  const selectColumns = 'id, name, category, description, species_target, price, stock_quantity, active'
 
-  if (tenantId) {
-    query = query.eq('tenant_id', tenantId)
+  const createBaseQuery = () => {
+    let query = supabase
+      .from('products')
+      .select(selectColumns)
+      .eq('module_id', moduleId)
+      .eq('active', true)
+
+    if (tenantId) {
+      query = query.eq('tenant_id', tenantId)
+    }
+
+    return query
   }
 
-  const { data, error } = await query
+  if (searchTerms.length > 0) {
+    const orQuery = searchTerms
+      .flatMap((term) => {
+        const escaped = escapeIlike(term)
+        return [
+          `name.ilike.%${escaped}%`,
+          `category.ilike.%${escaped}%`,
+          `description.ilike.%${escaped}%`,
+          `species_target.ilike.%${escaped}%`,
+        ]
+      })
+      .join(',')
+
+    const targeted = await createBaseQuery()
+      .or(orQuery)
+      .limit(300)
+
+    if (targeted.error) {
+      if (tenantId && isMissingTenantColumnError(targeted.error)) {
+        throw new HttpError(500, 'Tenant isolation is not enabled in products table.')
+      }
+      throw new HttpError(500, 'Unable to load product context.')
+    }
+
+    const selected = selectRelevantProducts(targeted.data || [], message)
+    if (selected.length > 0) return selected
+  }
+
+  const { data, error } = await createBaseQuery()
     .order('stock_quantity', { ascending: false })
-    .limit(120)
+    .limit(300)
 
   if (error) {
     if (tenantId && isMissingTenantColumnError(error)) {
@@ -479,7 +635,6 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
     throw new HttpError(500, 'Unable to load product context.')
   }
 
-  const searchTerms = buildSearchTerms(message)
   const selected = selectRelevantProducts(data || [], message)
   if (selected.length > 0 || searchTerms.length === 0) return selected
 
