@@ -525,6 +525,22 @@ function chunkArray<T>(items: T[], size = 100) {
   return chunks
 }
 
+const SUPABASE_PAGE_SIZE = 1000
+
+async function fetchAllRows<T>(buildQuery: () => any): Promise<T[]> {
+  const rows: T[] = []
+
+  for (let from = 0; ; from += SUPABASE_PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(from, from + SUPABASE_PAGE_SIZE - 1)
+    if (error) throw error
+
+    rows.push(...((data || []) as T[]))
+    if (!data || data.length < SUPABASE_PAGE_SIZE) break
+  }
+
+  return rows
+}
+
 async function handleResetChatHistory(req: IncomingMessage, res: ServerResponse) {
   await requireGlobalAdmin(req)
   const body = await readJsonBody(req) as JsonBody
@@ -573,14 +589,22 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
   }
 
   const { moduleId, tenantId } = getMaintenanceScope(body)
-  let productQuery = adminSupabase
-    .from('products')
-    .select('id')
-    .eq('module_id', moduleId)
+  let products: Array<{ id: string }> = []
+  try {
+    products = await fetchAllRows(() => {
+      let query = adminSupabase
+        .from('products')
+        .select('id')
+        .eq('module_id', moduleId)
+        .order('id')
 
-  if (tenantId) productQuery = productQuery.eq('tenant_id', tenantId)
-  const { data: products, error: loadError } = await productQuery
-  if (loadError) throw new HttpError(500, `Falha ao localizar estoque: ${loadError.message}`)
+      if (tenantId) query = query.eq('tenant_id', tenantId)
+      return query
+    })
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Erro desconhecido.'
+    throw new HttpError(500, `Falha ao localizar estoque: ${message}`)
+  }
 
   const productIds = (products || []).map((product) => product.id).filter(Boolean)
   if (!productIds.length) {

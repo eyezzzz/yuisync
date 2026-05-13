@@ -9,6 +9,21 @@ const BASE_SELECT = `
   min_stock, species_target, image_url, active, created_at, updated_at, 
   barcode, upsell_link_id
 `
+const PRODUCT_PAGE_SIZE = 1000
+
+async function fetchAllProductPages(buildQuery) {
+  const rows = []
+
+  for (let from = 0; ; from += PRODUCT_PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(from, from + PRODUCT_PAGE_SIZE - 1)
+    if (error) return { data: null, error }
+
+    rows.push(...(data || []))
+    if (!data || data.length < PRODUCT_PAGE_SIZE) break
+  }
+
+  return { data: rows, error: null }
+}
 
 export function useProducts() {
   const [products, setProducts]   = useState([])
@@ -22,13 +37,15 @@ export function useProducts() {
     setLoading(true); setError(null)
     try {
       const { data, error: err } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-        let q = supabase.from('products').select(BASE_SELECT).eq('module_id', activeModuleId).order('name')
-        q = applyTenantFilter(q, activeTenantId, includeTenant)
-        if (filters.category) q = q.eq('category', filters.category)
-        if (filters.species) q = q.eq('species_target', filters.species)
-        if (filters.activeOnly !== false) q = q.eq('active', true)
-        if (filters.search) q = q.ilike('name', `%${filters.search}%`)
-        return q
+        return fetchAllProductPages(() => {
+          let q = supabase.from('products').select(BASE_SELECT).eq('module_id', activeModuleId).order('name')
+          q = applyTenantFilter(q, activeTenantId, includeTenant)
+          if (filters.category) q = q.eq('category', filters.category)
+          if (filters.species) q = q.eq('species_target', filters.species)
+          if (filters.activeOnly !== false) q = q.eq('active', true)
+          if (filters.search) q = q.ilike('name', `%${filters.search}%`)
+          return q
+        })
       })
 
       if (err) throw err
@@ -195,13 +212,16 @@ export function useProducts() {
     if (!activeModuleId) return []
     try {
       const { data, error } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-        let q = supabase
-          .from('products')
-          .select(BASE_SELECT)
-          .eq('module_id', activeModuleId)
-          .eq('active', true)
-        q = applyTenantFilter(q, activeTenantId, includeTenant)
-        return q
+        return fetchAllProductPages(() => {
+          let q = supabase
+            .from('products')
+            .select(BASE_SELECT)
+            .eq('module_id', activeModuleId)
+            .eq('active', true)
+            .order('name')
+          q = applyTenantFilter(q, activeTenantId, includeTenant)
+          return q
+        })
       })
 
       if (error) throw error
