@@ -238,6 +238,25 @@ function ensureChatSessionAccess(requester, session) {
 
 // ── Route handlers ───────────────────────────────────────────────────────────
 
+function normalizeChatUserMessages(raw) {
+  if (!Array.isArray(raw)) return []
+
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const content = typeof entry.content === 'string' ? entry.content.trim() : ''
+      if (!content) return null
+
+      return {
+        client_message_id: typeof entry.client_message_id === 'string' ? entry.client_message_id : '',
+        content,
+        sent_at: typeof entry.sent_at === 'string' ? entry.sent_at : '',
+      }
+    })
+    .filter(Boolean)
+    .slice(0, 10)
+}
+
 async function handleChatRespond(req, res) {
   const origin = req.headers.origin
   const accessToken = getBearerToken(req)
@@ -286,7 +305,8 @@ async function handleChatRespond(req, res) {
     throw new HttpError(403, 'Requested tenant does not match this chat session.')
   }
 
-  const result = await respondToChatMessage(adminSupabase, body.sessionId, body.message)
+  const userMessages = normalizeChatUserMessages(body.userMessages)
+  const result = await respondToChatMessage(adminSupabase, body.sessionId, body.message, userMessages.length ? { userMessages } : {})
   sendJson(res, 200, result, getCorsHeaders(origin))
 }
 

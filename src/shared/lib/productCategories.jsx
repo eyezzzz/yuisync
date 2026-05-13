@@ -107,16 +107,44 @@ const CATEGORY_ALIASES = {
   servicos: 'servico',
 }
 
+const CATEGORY_LABEL_OVERRIDES = {
+  'higiene limpeza': 'Higiene Limpeza',
+  'higiene e limpeza': 'Higiene Limpeza',
+}
+
+function formatCategoryLabel(category) {
+  const raw = String(category || '').replace(/\s+/g, ' ').trim()
+  if (!raw) return 'Outro'
+
+  const override = CATEGORY_LABEL_OVERRIDES[normalizeCategory(raw)]
+  if (override) return override
+
+  return raw
+    .toLocaleLowerCase('pt-BR')
+    .replace(/\b[\p{L}\d/.-]+\b/gu, (word) => {
+      const upper = word.toLocaleUpperCase('pt-BR')
+      if (['KG', 'G', 'ML', 'UN'].includes(upper) || /\d/.test(word)) return upper
+      return word.charAt(0).toLocaleUpperCase('pt-BR') + word.slice(1)
+    })
+}
+
 export function resolveCategoryMeta(category) {
   const normalized = normalizeCategory(category)
   const key = CATEGORY_ALIASES[normalized] || normalized
+
+  if (CATEGORY_LABEL_OVERRIDES[normalized]) {
+    return {
+      ...CATEGORY_META.higiene,
+      label: CATEGORY_LABEL_OVERRIDES[normalized],
+    }
+  }
 
   if (key === 'importacao xml') {
     return CATEGORY_META.generico
   }
 
   return CATEGORY_META[key] || {
-    label: category || 'Outro',
+    label: formatCategoryLabel(category),
     icon: Package,
     iconClassName: 'text-slate-700',
     chipClassName: 'bg-slate-500/10 text-slate-700 border-slate-500/20',

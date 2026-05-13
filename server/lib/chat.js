@@ -1092,6 +1092,65 @@ async function callOpenAIWithTimeout(params, timeoutMs) {
   }
 }
 
+function normalizeDashboardUserMessages(message, options = {}) {
+  const batch = Array.isArray(options.userMessages) ? options.userMessages : []
+  const source = options.source || 'dashboard_simulation'
+  const sharedMetadata = options.userMetadata || {}
+  const now = new Date().toISOString()
+
+  const normalized = batch
+    .map((entry) => {
+      const content = cleanText(entry?.content)
+      if (!content) return null
+
+      const parsedSentAt = cleanText(entry?.sent_at)
+      const sentAtDate = parsedSentAt ? new Date(parsedSentAt) : null
+      const sentAt = sentAtDate && !Number.isNaN(sentAtDate.getTime())
+        ? sentAtDate.toISOString()
+        : now
+      const clientMessageId = cleanText(entry?.client_message_id || entry?.id)
+
+      return {
+        content,
+        sent_at: sentAt,
+        metadata: {
+          source,
+          ...(clientMessageId ? { client_message_id: clientMessageId } : {}),
+          ...sharedMetadata,
+        },
+      }
+    })
+    .filter(Boolean)
+    .slice(0, 10)
+
+  if (normalized.length) return normalized
+
+  return [{
+    content: message,
+    sent_at: now,
+    metadata: {
+      source,
+      ...sharedMetadata,
+    },
+  }]
+}
+
+async function insertUserMessages(supabase, sessionId, userMessages) {
+  const { error } = await supabase.from('chat_messages').insert(
+    userMessages.map((userMessage) => ({
+      session_id: sessionId,
+      role: 'user',
+      content: userMessage.content,
+      metadata: userMessage.metadata,
+      sent_at: userMessage.sent_at,
+    }))
+  )
+
+  if (error) {
+    throw new HttpError(500, 'Unable to save user message.')
+  }
+}
+
 export async function respondToChatMessage(supabase, sessionId, message, options = {}) {
   const trimmedMessage = typeof message === 'string' ? message.trim() : ''
 
@@ -1119,6 +1178,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const rating = parseRating(trimmedMessage)
   if (rating !== null && hasConfirmedOrderContext(session)) {
+    await insertUserMessages(supabase, sessionId, normalizeDashboardUserMessages(trimmedMessage, options))
     await saveSatisfactionRating(supabase, sessionId, rating)
     const reply = `Obrigado pela nota ${rating}! Atendimento encerrado.`
     const botSentAt = new Date().toISOString()
@@ -1175,21 +1235,8 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     examplesContext,
   })
 
-  const userSentAt = new Date().toISOString()
-  const { error: userInsertError } = await supabase.from('chat_messages').insert({
-    session_id: sessionId,
-    role: 'user',
-    content: trimmedMessage,
-    metadata: {
-      source: options.source || 'dashboard_simulation',
-      ...(options.userMetadata || {}),
-    },
-    sent_at: userSentAt,
-  })
-
-  if (userInsertError) {
-    throw new HttpError(500, 'Unable to save user message.')
-  }
+  const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
+  await insertUserMessages(supabase, sessionId, userMessages)
 
   const messages = [
     { role: 'system', content: systemPrompt },

@@ -66,6 +66,26 @@ function omitStaffType(payload: Record<string, unknown>) {
   return next
 }
 
+function normalizeChatUserMessages(raw: unknown) {
+  if (!Array.isArray(raw)) return []
+
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') return null
+      const item = entry as Record<string, unknown>
+      const content = typeof item.content === 'string' ? item.content.trim() : ''
+      if (!content) return null
+
+      return {
+        client_message_id: typeof item.client_message_id === 'string' ? item.client_message_id : '',
+        content,
+        sent_at: typeof item.sent_at === 'string' ? item.sent_at : '',
+      }
+    })
+    .filter(Boolean)
+    .slice(0, 10)
+}
+
 async function loadActiveTenantIds() {
   const { data, error } = await adminSupabase
     .from('tenants')
@@ -426,7 +446,8 @@ async function handleChatRespond(req: IncomingMessage, res: ServerResponse) {
 
   ensureChatSessionAccess(requester, session)
 
-  const result = await respondToChatMessage(adminSupabase, sessionId, body.message)
+  const userMessages = normalizeChatUserMessages(body.userMessages)
+  const result = await respondToChatMessage(adminSupabase, sessionId, body.message, userMessages.length ? { userMessages } : {})
   sendJson(res, 200, result)
 }
 

@@ -32,10 +32,10 @@ async function apiRequest(path, options = {}) {
   return payload
 }
 
-export function requestChatReply(sessionId, message) {
+export function requestChatReply(sessionId, message, options = {}) {
   return apiRequest('/chat/respond', {
     method: 'POST',
-    body: JSON.stringify({ sessionId, message }),
+    body: JSON.stringify({ sessionId, message, ...options }),
   })
 }
 

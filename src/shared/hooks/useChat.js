@@ -5,6 +5,60 @@ import { useModuleCtx } from '../../context/ModuleContext'
 import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
+const DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS = 8000
+const DASHBOARD_REPLY_DEBOUNCE_MS = (() => {
+  const parsed = Number(import.meta.env.VITE_CHAT_REPLY_DEBOUNCE_MS)
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS
+})()
+
+function createPendingClientMessage(content) {
+  const id = `temp-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  return {
+    id,
+    role: 'user',
+    content,
+    metadata: { pending: true, local_only: true, client_message_id: id },
+    sent_at: new Date().toISOString(),
+  }
+}
+
+function normalizeIncomingMessage(message) {
+  return {
+    ...message,
+    sent_at: message.sent_at,
+  }
+}
+
+function isMatchingPendingMessage(localMessage, incomingMessage) {
+  if (!localMessage?.metadata?.local_only) return false
+  if (localMessage.metadata.failed) return false
+  if (localMessage.role !== incomingMessage.role) return false
+  if (incomingMessage?.metadata?.client_message_id && localMessage.metadata.client_message_id === incomingMessage.metadata.client_message_id) {
+    return true
+  }
+  if (String(localMessage.content || '') !== String(incomingMessage.content || '')) return false
+
+  const localTime = new Date(localMessage.sent_at || 0).getTime()
+  const incomingTime = new Date(incomingMessage.sent_at || 0).getTime()
+  if (!Number.isFinite(localTime) || !Number.isFinite(incomingTime)) return true
+
+  return Math.abs(incomingTime - localTime) < 120000
+}
+
+function mergeIncomingMessage(previousMessages, message) {
+  const incomingMessage = normalizeIncomingMessage(message)
+  if (previousMessages.find((item) => item.id === incomingMessage.id)) return previousMessages
+
+  const pendingIndex = previousMessages.findIndex((item) => isMatchingPendingMessage(item, incomingMessage))
+  if (pendingIndex >= 0) {
+    const next = [...previousMessages]
+    next[pendingIndex] = incomingMessage
+    return next
+  }
+
+  return [...previousMessages, incomingMessage]
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState([])
   const [messages, setMessages] = useState([])
@@ -14,8 +68,15 @@ export function useChat() {
   const [quickReplies, setQuickReplies] = useState([])
   const channelRef = useRef(null)
   const msgChannelRef = useRef(null)
+  const activeSessionIdRef = useRef(null)
+  const pendingClientMessagesRef = useRef(new Map())
+  const replyTimerRef = useRef(new Map())
   const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
+
+  useEffect(() => {
+    activeSessionIdRef.current = activeSession?.id || null
+  }, [activeSession?.id])
 
   const loadSessions = useCallback(async (statusFilter = '') => {
     if (!activeModuleId) return
@@ -61,10 +122,7 @@ export function useChat() {
       .eq('session_id', sessionId)
       .order('sent_at', { ascending: true })
 
-    const normalized = (data || []).map((message) => ({
-      ...message,
-      sent_at: message.sent_at,
-    }))
+    const normalized = (data || []).map(normalizeIncomingMessage)
 
     setMessages(normalized)
     return normalized
@@ -72,6 +130,7 @@ export function useChat() {
 
   const openSession = useCallback(async (session) => {
     setActiveSession(session)
+    activeSessionIdRef.current = session.id
     const loadedMessages = await loadMessages(session.id)
 
     msgChannelRef.current?.unsubscribe()
@@ -83,10 +142,7 @@ export function useChat() {
         table: 'chat_messages',
         filter: `session_id=eq.${session.id}`,
       }, (payload) => {
-        setMessages((prev) => {
-          if (prev.find((msg) => msg.id === payload.new.id)) return prev
-          return [...prev, { ...payload.new, sent_at: payload.new.sent_at }]
-        })
+        setMessages((prev) => mergeIncomingMessage(prev, payload.new))
       })
       .subscribe()
 
@@ -118,34 +174,63 @@ export function useChat() {
     return response.data
   }, [activeModuleId, activeTenantId])
 
+  const flushClientMessages = useCallback(async (sessionId) => {
+    const queuedMessages = pendingClientMessagesRef.current.get(sessionId) || []
+    pendingClientMessagesRef.current.delete(sessionId)
+    replyTimerRef.current.delete(sessionId)
+
+    if (!queuedMessages.length) {
+      if (pendingClientMessagesRef.current.size === 0 && replyTimerRef.current.size === 0) setBotTyping(false)
+      return
+    }
+
+    const combinedMessage = queuedMessages.map((message) => message.content).filter(Boolean).join('\n')
+
+    try {
+      await requestChatReply(sessionId, combinedMessage, {
+        userMessages: queuedMessages.map((message) => ({
+          client_message_id: message.id,
+          content: message.content,
+          sent_at: message.sent_at,
+        })),
+      })
+      if (activeSessionIdRef.current === sessionId) {
+        await loadMessages(sessionId)
+      }
+    } catch (error) {
+      const failedIds = new Set(queuedMessages.map((message) => message.id))
+      setMessages((prev) => prev.map((message) => (
+        failedIds.has(message.id)
+          ? { ...message, metadata: { ...(message.metadata || {}), pending: false, failed: true } }
+          : message
+      )))
+      console.error('Falha ao responder chat com debounce:', error)
+    } finally {
+      if (pendingClientMessagesRef.current.size === 0 && replyTimerRef.current.size === 0) {
+        setBotTyping(false)
+      }
+    }
+  }, [loadMessages])
+
   const sendClientMessage = useCallback(async (sessionId, text) => {
     const trimmed = String(text || '').trim()
     if (!trimmed) return
 
-    const optimisticMessage = {
-      id: `temp-user-${Date.now()}`,
-      role: 'user',
-      content: trimmed,
-      metadata: { pending: true, local_only: true },
-      sent_at: new Date().toISOString(),
-    }
+    const optimisticMessage = createPendingClientMessage(trimmed)
+    const queuedMessages = pendingClientMessagesRef.current.get(sessionId) || []
+    pendingClientMessagesRef.current.set(sessionId, [...queuedMessages, optimisticMessage])
 
     setMessages((prev) => [...prev, optimisticMessage])
     setBotTyping(true)
-    try {
-      await requestChatReply(sessionId, trimmed)
-      await loadMessages(sessionId)
-    } catch (error) {
-      setMessages((prev) => prev.map((message) => (
-        message.id === optimisticMessage.id
-          ? { ...message, metadata: { ...(message.metadata || {}), pending: false, failed: true } }
-          : message
-      )))
-      throw error
-    } finally {
-      setBotTyping(false)
-    }
-  }, [loadMessages])
+
+    const existingTimer = replyTimerRef.current.get(sessionId)
+    if (existingTimer) clearTimeout(existingTimer)
+
+    const timer = setTimeout(() => {
+      void flushClientMessages(sessionId)
+    }, DASHBOARD_REPLY_DEBOUNCE_MS)
+    replyTimerRef.current.set(sessionId, timer)
+  }, [flushClientMessages])
 
   const sendHumanMessage = useCallback(async (sessionId, text) => {
     const trimmed = String(text || '').trim()
@@ -245,6 +330,9 @@ export function useChat() {
   useEffect(() => () => {
     channelRef.current?.unsubscribe()
     msgChannelRef.current?.unsubscribe()
+    replyTimerRef.current.forEach((timer) => clearTimeout(timer))
+    replyTimerRef.current.clear()
+    pendingClientMessagesRef.current.clear()
   }, [])
 
   const statusConfig = (status) => ({
