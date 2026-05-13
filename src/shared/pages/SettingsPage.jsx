@@ -8,6 +8,7 @@ import { useAuthCtx } from '../../context/AuthContext'
 import { useModuleCtx } from '../../context/ModuleContext'
 import { MODULES } from '../../config/modules'
 import { buildTenantPayload, isTenantSchemaError, runWithTenantFallback } from '../../lib/tenant'
+import { DEFAULT_PETBOT_PROMPT } from '../../../shared/petbotPrompt'
 
 const INITIAL_FORM = {
   store_name: '',
@@ -29,7 +30,7 @@ const INITIAL_FORM = {
   fiscal_provider: 'mock_local',
   provider_base_url: '',
   fiscal_notes: '',
-  bot_prompt: '',
+  bot_prompt: DEFAULT_PETBOT_PROMPT,
   delivery_fee: '10.00',
   issuer_legal_name: '',
   issuer_trade_name: '',
@@ -162,7 +163,7 @@ export default function SettingsPage() {
           store_phone: data.store_phone || '',
           printer_width: data.printer_width || '80',
           fiscal_id: data.fiscal_id || '',
-          bot_prompt: data.bot_prompt || '',
+          bot_prompt: data.bot_prompt || DEFAULT_PETBOT_PROMPT,
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
         }
       }
@@ -664,16 +665,16 @@ export default function SettingsPage() {
                 <Bot size={14} /> Prompt do bot
               </h3>
               <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm">
-                <label className="inp-label">Instrucao customizada deste tenant</label>
+                <label className="inp-label">Prompt ativo deste tenant</label>
                 <textarea
                   className="inp min-h-[180px] resize-y"
-                  placeholder="Ex: Priorize banho e tosa, informe horarios de atendimento, tom de voz da marca, politicas comerciais confirmadas..."
+                  placeholder="Prompt ativo do PetBot para este tenant..."
                   disabled={!canEdit}
                   value={form.bot_prompt}
                   onChange={(event) => setForm((prev) => ({ ...prev, bot_prompt: event.target.value }))}
                 />
                 <p className="text-xs text-muted mt-3">
-                  O bot sempre usa dados reais do banco para loja, estoque, agenda e historico. Este campo adiciona apenas regras especificas deste cliente.
+                  Este e o prompt ativo do PetBot para este tenant. Edite apenas ajustes pontuais; o bot continua usando dados reais do banco para loja, estoque, agenda e historico.
                 </p>
               </div>
             </div>
