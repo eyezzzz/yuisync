@@ -94,6 +94,24 @@ const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
   'handoff_humano',
 ])
 
+const CHOICE_STOP_WORDS = new Set([
+  'pode',
+  'ser',
+  'quero',
+  'queria',
+  'vou',
+  'pegar',
+  'levar',
+  'essa',
+  'esse',
+  'dessa',
+  'desse',
+  'opcao',
+  'opção',
+  'racao',
+  'ração',
+])
+
 function clean(value = '') {
   return String(value ?? '').trim()
 }
@@ -378,6 +396,7 @@ function isPlausibleName(value = '') {
   if (/(bom dia|boa tarde|boa noite)/.test(lower) && text.split(/\s+/).length <= 4) return false
   if (['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'quero racao', 'quero ração'].includes(lower)) return false
   if (hasAny(lower, [...PRODUCT_HINTS, ...SERVICE_HINTS, ...VET_HINTS])) return false
+  if (/(manc|vomit|diarre|coce|espirr|tosse|dor|sangr|veneno|apatic|passando mal|nao come|não come)/.test(lower)) return false
   return true
 }
 
@@ -394,6 +413,10 @@ function extractPetName(message = '', state) {
   const explicit = text.match(/(?:pet chama|nome dele e|nome dele é|nome dela e|nome dela é|chama)\s+([A-Za-zÀ-ÿ'\s]{2,30})/i)
   if (explicit) return titleName(explicit[1].split(/[,.]/)[0])
   if (state.awaiting === 'pet_name' || state.awaiting === 'pet_details' || state.awaiting === 'service_pet_details') {
+    if (inferBreedAndSize(text).breed) {
+      const firstWord = text.split(/\s+/)[0]
+      if (isPlausibleName(firstWord)) return titleName(firstWord)
+    }
     const first = text.split(/[,.]/)[0].trim()
     if (isPlausibleName(first)) return titleName(first)
   }
@@ -542,8 +565,8 @@ function chooseProductFromOptions(state, message) {
   }
   return options.find((option) => {
     const name = norm(option.name)
-    const terms = tokenizeForScore(message)
-    return terms.length > 0 && terms.every((term) => name.includes(term) || norm(option.category).includes(term))
+    const terms = tokenizeForScore(message).filter((term) => !CHOICE_STOP_WORDS.has(term))
+    return terms.length > 0 && terms.some((term) => name.includes(term) || norm(option.category).includes(term))
   }) || null
 }
 
@@ -1132,12 +1155,17 @@ function maybeHandleDiscount(state, products) {
   if (state.intent !== 'produto') {
     return 'Infelizmente não conseguimos aplicar desconto nesse pedido.'
   }
-  const cheap = availableProducts(products)
-    .filter((product) => clean(product.id) !== state.selectedProduct?.product_id)
-    .sort((a, b) => Number(a.price || 0) - Number(b.price || 0))[0]
+  const optionPool = state.productOptions?.length
+    ? state.productOptions
+    : availableProducts(products).map((product) => productSnapshot(product)).filter(Boolean)
+  const desiredCategory = norm(state.selectedProduct?.category || optionPool[0]?.category || '')
+  const cheap = optionPool
+    .filter((product) => clean(product.product_id || product.id) !== state.selectedProduct?.product_id)
+    .filter((product) => !desiredCategory || norm(product.category).includes(desiredCategory) || desiredCategory.includes(norm(product.category)))
+    .sort((a, b) => Number(a.unit_price ?? a.price ?? 0) - Number(b.unit_price ?? b.price ?? 0))[0]
 
   if (!cheap) return 'Infelizmente não conseguimos aplicar desconto nesse pedido.'
-  const option = productSnapshot(cheap)
+  const option = cheap.product_id ? cheap : productSnapshot(cheap)
   state.productOptions = [option].filter(Boolean)
   state.awaiting = 'product_choice'
   return `Infelizmente não conseguimos aplicar desconto nesse pedido.\n\nPosso te mostrar uma opção mais econômica: ${option.name} por ${money(option.unit_price)}. Quer seguir com ela?`
