@@ -1516,7 +1516,10 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         petbot_guard: {
           version: state?.version || 1,
           intent: guard.intent,
+          action: guard.action,
           blocked_reasons: state?.blockedReasons || [],
+          needs_human: Boolean(guard.needsHuman),
+          allow_llm_redraft: Boolean(guard.guardDirective?.allowLlmRedraft),
           order_saved: Boolean(orderResult),
         },
       },
@@ -1543,6 +1546,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         } : {}),
       }, state),
       ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: botSentAt } : {}),
+      ...(guard.needsHuman ? { status: 'human' } : {}),
       last_message_at: botSentAt,
     })
     .eq('id', sessionId)

@@ -4,6 +4,7 @@ import {
   getPetbotState,
   markPetbotOrderSaved,
   mergePetbotContext,
+  renderGuardedPetbotReply,
   runPetbotGuard,
 } from '../server/lib/petbotGuard.js'
 
@@ -151,4 +152,56 @@ test('avaliação fecha o atendimento depois de pedido salvo', () => {
   assert.equal(result.shouldSaveRating, true)
   assert.equal(result.rating, 10)
   assert.match(result.reply, /Obrigado/i)
+})
+
+test('guardiao bloqueia rascunho da LLM que pula a acao autorizada', () => {
+  const result = turn({}, 'Oi, bom dia')
+  assert.equal(result.action, 'pedir_nome')
+  assert.equal(result.guardDirective.allowLlmRedraft, true)
+
+  const rendered = renderGuardedPetbotReply('Tenho Premier por R$ 120,00. Quer fechar?', result.guardDirective)
+  assert.equal(rendered.validation.ok, false)
+  assert.deepEqual(rendered.validation.problems.sort(), ['preco_nao_autorizado', 'pulou_nome'].sort())
+  assert.equal(rendered.reply, result.reply)
+})
+
+test('pedido por humano para o bot e marca atendimento humano', () => {
+  const result = turn({}, 'quero falar com um atendente')
+  assert.equal(result.needsHuman, true)
+  assert.equal(result.action, 'handoff_humano')
+  assert.equal(result.state.status, 'human_requested')
+  assert.match(result.reply, /equipe/i)
+})
+
+test('sintoma veterinario sensivel nao segue venda automatica', () => {
+  const result = turn({}, 'meu cachorro comeu veneno agora')
+  assert.equal(result.needsHuman, true)
+  assert.equal(result.action, 'handoff_humano')
+  assert.equal(result.state.intent, 'veterinaria')
+  assert.match(result.state.blockedReasons.join(','), /veterinaria_sensivel/)
+})
+
+test('nao salva pedido quando cliente recusa resumo final', () => {
+  const state = getPetbotState({})
+  state.intent = 'produto'
+  state.customerName = 'Carlos'
+  state.nameConfirmed = true
+  state.species = 'dog'
+  state.size = 'pequeno'
+  state.selectedProduct = {
+    product_id: 'premier-shih-adulto',
+    name: 'Premier Raças Especificas Shih Tzu Salmão Adulto 2,5kg',
+    category: 'Ração',
+    quantity: 1,
+    unit_price: 120,
+    stock_quantity: 4,
+  }
+  state.payment.method = 'pix'
+  state.fulfillment.type = 'retirada'
+  state.finalSummaryShown = true
+
+  const result = turn({ petbot: state }, 'nao')
+  assert.notEqual(result.shouldSaveOrder, true)
+  assert.equal(result.action, 'cancelar')
+  assert.equal(result.state.status, 'cancelado')
 })
