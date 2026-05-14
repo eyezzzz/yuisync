@@ -118,6 +118,32 @@ test('produto usa raça como porte, não pede peso e soma taxa de entrega', () =
   assert.equal(result.orderArgs.items[0].product_id, 'premier-shih-adulto')
 })
 
+test('cliente conhecido pelo telefone nao precisa informar nome de novo', () => {
+  const result = runPetbotGuard({
+    message: 'quero ração pra shih tzu adulto',
+    session: {
+      id: 'session-known',
+      module_id: 'petshop',
+      tenant_id: 'tenant-1',
+      customer_phone: '123',
+      customer_name: null,
+      context: {},
+    },
+    customer: {
+      isKnown: true,
+      phone: '123',
+      client: { name: 'Marina', details: {} },
+    },
+    products,
+    appointments,
+    settings,
+  })
+
+  assert.equal(result.state.customerName, 'Marina')
+  assert.notEqual(result.action, 'pedir_nome')
+  assert.match(result.reply, /Premier/i)
+})
+
 test('produto aceita escolha por marca em frase natural', () => {
   let context = {}
   let result = turn(context, 'Oi, quero ração pra shih tzu adulto')
@@ -127,6 +153,29 @@ test('produto aceita escolha por marca em frase natural', () => {
 
   result = turn(context, 'pode ser premier')
   assert.equal(result.action, 'oferecer_upsell')
+  assert.match(result.reply, /Premier/i)
+})
+
+test('produto preserva quantidade quando cliente escolhe em frase natural', () => {
+  let context = {}
+  let result = turn(context, 'Oi, quero ração pra shih tzu adulto')
+  context = result.context
+  result = turn(context, 'Rodrigo')
+  context = result.context
+
+  result = turn(context, 'vou querer 2 sacos da premier')
+  assert.equal(result.action, 'oferecer_upsell')
+  assert.equal(result.state.selectedProduct.quantity, 2)
+})
+
+test('marca indisponivel mostra alternativas e registra bloqueio', () => {
+  let context = {}
+  let result = turn(context, 'Tem Royal Canin pra shih tzu adulto?')
+  context = result.context
+  result = turn(context, 'Lara')
+
+  assert.match(result.reply, /alternativas/i)
+  assert.match(result.state.blockedReasons.join(','), /marca_sem_estoque/)
   assert.match(result.reply, /Premier/i)
 })
 
@@ -162,6 +211,29 @@ test('desconto é recusado sem alterar preço', () => {
   assert.doesNotMatch(result.reply, /Petisco Dental/i)
 })
 
+test('guardiao bloqueia desconto concedido em rascunho da LLM', () => {
+  const state = getPetbotState({})
+  state.intent = 'produto'
+  state.customerName = 'Rafael'
+  state.nameConfirmed = true
+  state.species = 'dog'
+  state.ageCategory = 'adulto'
+  state.productOptions = [{
+    product_id: 'premier-shih-adulto',
+    name: 'Premier Raças Especificas Shih Tzu Salmão Adulto 2,5kg',
+    category: 'Ração',
+    quantity: 1,
+    unit_price: 120,
+    stock_quantity: 4,
+  }]
+  const result = turn({ petbot: state }, 'faz desconto?')
+  const rendered = renderGuardedPetbotReply('Consigo fazer por R$ 100,00 pra você.', result.guardDirective)
+
+  assert.equal(rendered.validation.ok, false)
+  assert.match(rendered.validation.problems.join(','), /desconto_concedido/)
+  assert.equal(rendered.reply, result.reply)
+})
+
 test('banho mostra múltiplos horários reais com preço', () => {
   let context = {}
   let result = turn(context, 'Quero banho pro meu cachorro')
@@ -191,6 +263,38 @@ test('banho entende nome e raça sem vírgula', () => {
   assert.equal(result.state.breed, 'Golden Retriever')
 })
 
+test('agenda cheia nao inventa horario e pode acionar humano', () => {
+  let context = {}
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Ana', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Thor golden', { appointments: [] })
+  context = result.context
+
+  assert.equal(result.action, 'sem_horario')
+  assert.match(result.reply, /não achei horário disponível/i)
+
+  result = turn(context, 'sim', { appointments: [] })
+  assert.equal(result.needsHuman, true)
+  assert.equal(result.action, 'handoff_humano')
+})
+
+test('estoque vazio nao inventa produto e pode acionar humano', () => {
+  let context = {}
+  let result = turn(context, 'quero ração pra cachorro adulto', { products: [] })
+  context = result.context
+  result = turn(context, 'Bruno', { products: [] })
+  context = result.context
+
+  assert.equal(result.action, 'sem_estoque')
+  assert.match(result.reply, /não encontrei produto disponível/i)
+
+  result = turn(context, 'sim', { products: [] })
+  assert.equal(result.needsHuman, true)
+  assert.equal(result.action, 'handoff_humano')
+})
+
 test('avaliação fecha o atendimento depois de pedido salvo', () => {
   const saved = markPetbotOrderSaved(getPetbotState({}), { sale_id: 'sale-1' })
   const result = turn({ petbot: saved }, '10')
@@ -208,6 +312,37 @@ test('guardiao bloqueia rascunho da LLM que pula a acao autorizada', () => {
   assert.equal(rendered.validation.ok, false)
   assert.deepEqual(rendered.validation.problems.sort(), ['preco_nao_autorizado', 'pulou_nome'].sort())
   assert.equal(rendered.reply, result.reply)
+})
+
+test('guardiao nao permite redigir resumo parcial com LLM', () => {
+  let context = {}
+  let result = turn(context, 'Oi, tem ração pra shih tzu adulto?')
+  context = result.context
+  result = turn(context, 'Rodrigo')
+  context = result.context
+  result = turn(context, '1')
+  context = result.context
+  result = turn(context, 'não')
+
+  assert.equal(result.action, 'pedir_pagamento')
+  assert.equal(result.guardDirective.allowLlmRedraft, false)
+})
+
+test('mudanca de produto para veterinaria limpa selecao anterior', () => {
+  let context = {}
+  let result = turn(context, 'quero ração pra shih tzu adulto')
+  context = result.context
+  result = turn(context, 'Igor')
+  context = result.context
+  result = turn(context, '1')
+  context = result.context
+
+  assert.ok(result.state.selectedProduct)
+
+  result = turn(context, 'na verdade quero veterinario')
+  assert.equal(result.state.intent, 'veterinaria')
+  assert.equal(result.state.selectedProduct, null)
+  assert.equal(result.state.upsell.offered, false)
 })
 
 test('pedido por humano para o bot e marca atendimento humano', () => {

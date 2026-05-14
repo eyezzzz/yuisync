@@ -877,12 +877,13 @@ function buildAllowedData(state) {
 }
 
 function buildGuardDirective(action, fallbackReply, state, extra = {}) {
-  const allowLlm = LLM_REDRAFT_ALLOWED_ACTIONS.has(action) && !extra.shouldSaveOrder && !extra.shouldSaveRating
+  const hasStructuredSummary = /\*\*(Pedido em andamento|Resumo do pedido):\*\*/i.test(clean(fallbackReply))
+  const allowLlm = LLM_REDRAFT_ALLOWED_ACTIONS.has(action) && !hasStructuredSummary && !extra.shouldSaveOrder && !extra.shouldSaveRating
   return {
     version: PETBOT_VERSION,
     action,
     allowLlmRedraft: allowLlm,
-    critical: Boolean(extra.needsHuman || extra.shouldSaveOrder || extra.shouldSaveRating || ['oferecer_produtos', 'oferecer_horarios', 'resumo_final', 'aguardar_confirmacao'].includes(action)),
+    critical: Boolean(hasStructuredSummary || extra.needsHuman || extra.shouldSaveOrder || extra.shouldSaveRating || ['oferecer_produtos', 'oferecer_horarios', 'resumo_final', 'aguardar_confirmacao'].includes(action)),
     fallbackReply,
     blockedReasons: state.blockedReasons || [],
     allowedData: buildAllowedData(state),
@@ -935,8 +936,18 @@ export function validatePetbotDraft(draft = '', directive = {}) {
   if (/(desconto|consigo fazer por|faco por|faço por)/.test(lower) && action !== 'recusar_desconto') {
     problems.push('desconto_nao_autorizado')
   }
+  if (action === 'recusar_desconto') {
+    if (!/infelizmente nao conseguimos aplicar desconto/.test(lower)) problems.push('recusa_desconto_ausente')
+    if (/(consigo fazer por|faco por|faço por|baixo para|abaixo para)/.test(lower)) problems.push('desconto_concedido')
+  }
   if (action === 'pedir_nome' && (/R\$\s*\d/.test(text) || /(tenho|opcoes|opções|produto)/i.test(text))) {
     problems.push('pulou_nome')
+  }
+  if (action !== 'oferecer_upsell' && /(quer adicionar|posso incluir|incluo|adicionar mais)/.test(lower)) {
+    problems.push('upsell_nao_autorizado')
+  }
+  if (!['pedir_endereco', 'resumo_final', 'aguardar_confirmacao'].includes(action) && /(rua|avenida|bairro|ponto de referencia|ponto de referência)/.test(lower)) {
+    problems.push('endereco_nao_autorizado')
   }
   if (directive.allowLlmRedraft && text.split('\n').length > 7) {
     problems.push('resposta_longa')
@@ -998,7 +1009,12 @@ function presentProducts(state, products, message) {
     return guardResult('Consultei aqui e não encontrei produto disponível com esses dados. Quer que eu chame alguém da equipe para te ajudar?', state, { action: 'sem_estoque' })
   }
 
-  const intro = strong.length ? 'Consultei o estoque e tenho essas opções:' : 'Não encontrei exatamente o que você pediu, mas tenho essas alternativas com estoque:'
+  const hasRequestedBrand = Boolean(state.brand)
+  const hasBrandMatch = !hasRequestedBrand || state.productOptions.some((product) => norm(product.name).includes(norm(state.brand)))
+  if (hasRequestedBrand && !hasBrandMatch) {
+    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'marca_sem_estoque'])]
+  }
+  const intro = strong.length && hasBrandMatch ? 'Consultei o estoque e tenho essas opções:' : 'Não encontrei exatamente o que você pediu, mas tenho essas alternativas com estoque:'
   const lines = state.productOptions.map((product, index) => `${index + 1}. ${product.name} - ${money(product.unit_price)}`)
   return guardResult(`${intro}\n${lines.join('\n')}\n\nQual prefere?`, state, { action: 'oferecer_produtos' })
 }
@@ -1104,7 +1120,11 @@ function productFlow(state, message, products, settings) {
   }
 
   const chosen = chooseProductFromOptions(state, message)
-  if (chosen) state.selectedProduct = chosen
+  if (chosen) {
+    state.selectedProduct = chosen
+    const quantity = parseProductQuantity(message)
+    if (quantity) state.selectedProduct.quantity = quantity
+  }
 
   if (!state.selectedProduct) return presentProducts(state, products, message)
 
