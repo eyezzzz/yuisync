@@ -2096,6 +2096,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       intent: guard.intent || detectConversationIntent(event.text),
       context: mergedContext,
       ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: new Date().toISOString() } : {}),
+      ...(guard.needsHuman ? { status: 'human' } : {}),
       last_message_at: new Date().toISOString(),
     })
     .eq('id', session.id)
@@ -2104,7 +2105,10 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     petbot_guard: {
       version: state?.version || 1,
       intent: guard.intent,
+      action: guard.action,
       blocked_reasons: state?.blockedReasons || [],
+      needs_human: Boolean(guard.needsHuman),
+      allow_llm_redraft: Boolean(guard.guardDirective?.allowLlmRedraft),
       order_saved: Boolean(orderResult),
     },
   })

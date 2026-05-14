@@ -55,6 +55,44 @@ const SERVICE_HINTS = ['banho', 'tosa', 'higienica', 'higiênica', 'agendar', 'a
 const VET_HINTS = ['vet', 'veterinario', 'veterinária', 'veterinaria', 'consulta', 'vacina']
 const URGENCY_HINTS = ['vomit', 'sangr', 'veneno', 'intoxic', 'convuls', 'falta de ar', 'apatico', 'apático', 'nao come', 'não come']
 const DISCOUNT_HINTS = ['desconto', 'abaixa', 'barato', 'mais em conta', 'melhor preco', 'melhor preço']
+const HUMAN_HINTS = ['atendente', 'humano', 'pessoa', 'equipe', 'gerente', 'falar com alguem', 'falar com alguém', 'me liga', 'ligacao', 'ligação']
+const CRITICAL_URGENCY_HINTS = ['veneno', 'intoxic', 'falta de ar', 'nao respira', 'não respira', 'convuls', 'sangr', 'sangue', 'desmai', 'atropel', 'engasg']
+
+const AWAITING_ACTIONS = {
+  customer_name: 'pedir_nome',
+  intent: 'identificar_intencao',
+  species: 'pedir_especie',
+  pet_category: 'pedir_categoria_pet',
+  service_pet_details: 'pedir_categoria_pet',
+  pet_name: 'pedir_nome_pet',
+  symptom: 'pedir_sintoma',
+  product_choice: 'oferecer_produtos',
+  slot_choice: 'oferecer_horarios',
+  upsell: 'oferecer_upsell',
+  payment: 'pedir_pagamento',
+  change_for: 'pedir_troco',
+  fulfillment: 'pedir_entrega_retirada',
+  delivery_address: 'pedir_endereco',
+  rating: 'pedir_avaliacao',
+  human: 'handoff_humano',
+}
+
+const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
+  'pedir_nome',
+  'identificar_intencao',
+  'pedir_especie',
+  'pedir_categoria_pet',
+  'pedir_nome_pet',
+  'pedir_sintoma',
+  'pedir_pagamento',
+  'pedir_troco',
+  'pedir_entrega_retirada',
+  'pedir_endereco',
+  'oferecer_upsell',
+  'recusar_desconto',
+  'cancelar',
+  'handoff_humano',
+])
 
 function clean(value = '') {
   return String(value ?? '').trim()
@@ -93,6 +131,42 @@ function availableAppointments(appointments = []) {
     .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
 }
 
+function defaultUpsell() {
+  return {
+    offered: false,
+    resolved: false,
+    accepted: false,
+    declined: false,
+    item: null,
+  }
+}
+
+function defaultPayment() {
+  return {
+    method: '',
+    changeFor: null,
+    changeAsked: false,
+  }
+}
+
+function defaultFulfillment() {
+  return {
+    type: '',
+    address: '',
+    neighborhood: '',
+    city: '',
+    reference: '',
+  }
+}
+
+function defaultTotals() {
+  return {
+    subtotal: 0,
+    deliveryFee: 0,
+    total: 0,
+  }
+}
+
 function defaultState() {
   return {
     version: PETBOT_VERSION,
@@ -112,30 +186,10 @@ function defaultState() {
     selectedSlot: null,
     slotOptions: [],
     serviceType: '',
-    upsell: {
-      offered: false,
-      resolved: false,
-      accepted: false,
-      declined: false,
-      item: null,
-    },
-    payment: {
-      method: '',
-      changeFor: null,
-      changeAsked: false,
-    },
-    fulfillment: {
-      type: '',
-      address: '',
-      neighborhood: '',
-      city: '',
-      reference: '',
-    },
-    totals: {
-      subtotal: 0,
-      deliveryFee: 0,
-      total: 0,
-    },
+    upsell: defaultUpsell(),
+    payment: defaultPayment(),
+    fulfillment: defaultFulfillment(),
+    totals: defaultTotals(),
     partialSummaryShown: false,
     finalSummaryShown: false,
     saved: false,
@@ -320,6 +374,8 @@ function isPlausibleName(value = '') {
   if (text.length < 2 || text.length > 40) return false
   if (/\d/.test(text)) return false
   const lower = norm(text)
+  if (/^(oi|ola|bom dia|boa tarde|boa noite)\b/.test(lower)) return false
+  if (/(bom dia|boa tarde|boa noite)/.test(lower) && text.split(/\s+/).length <= 4) return false
   if (['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'quero racao', 'quero ração'].includes(lower)) return false
   if (hasAny(lower, [...PRODUCT_HINTS, ...SERVICE_HINTS, ...VET_HINTS])) return false
   return true
@@ -357,6 +413,41 @@ function parseChangeFor(message = '') {
   if (lower.includes('sem troco') || lower.includes('nao precisa') || lower.includes('não precisa')) return 0
   const match = clean(message).match(/(?:para|pra)?\s*r?\$?\s*(\d+(?:[,.]\d{1,2})?)/i)
   return match ? Number(match[1].replace(',', '.')) : null
+}
+
+function parseProductQuantity(message = '') {
+  const lower = norm(message)
+  const withUnit = lower.match(/\b(\d{1,2})\s*(sacos?|pacotes?|unidades?|unid|desse|dessa|desses|dessas)\b/)
+  if (withUnit) return Math.max(1, Math.min(99, Number(withUnit[1])))
+  return null
+}
+
+function isCriticalVeterinaryMessage(message = '') {
+  const lower = norm(message)
+  if (hasAny(lower, CRITICAL_URGENCY_HINTS)) return true
+  if (/vomit.*(muito|sangue|sem parar|forte)/.test(lower)) return true
+  if (/(nao|não)\s+(levanta|anda|responde)/.test(lower)) return true
+  if (/(muito|bem)\s+apatic/.test(lower)) return true
+  return false
+}
+
+function resetOrderProgressForIntentChange(state, nextIntent) {
+  state.selectedProduct = null
+  state.productOptions = []
+  state.selectedSlot = null
+  state.slotOptions = []
+  state.serviceType = ''
+  state.upsell = defaultUpsell()
+  state.payment = defaultPayment()
+  state.fulfillment = defaultFulfillment()
+  state.totals = defaultTotals()
+  state.partialSummaryShown = false
+  state.finalSummaryShown = false
+  state.saved = false
+  state.awaiting = ''
+  state.confirmationKey = ''
+  if (nextIntent === 'produto') state.symptom = ''
+  if (nextIntent !== 'produto') state.brand = ''
 }
 
 function updateAddressFromMessage(state, message = '') {
@@ -649,7 +740,11 @@ function applyMessageFacts(state, message) {
     state.nameConfirmed = true
   }
 
+  const previousIntent = state.intent
   const intent = detectIntent(message, state.intent)
+  if (intent && previousIntent && intent !== previousIntent) {
+    resetOrderProgressForIntentChange(state, intent)
+  }
   if (intent) state.intent = intent
 
   const species = inferSpecies(message)
@@ -683,6 +778,11 @@ function applyMessageFacts(state, message) {
   const fulfillment = detectFulfillment(message)
   if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
 
+  const quantity = parseProductQuantity(message)
+  if (quantity && state.intent === 'produto' && state.selectedProduct && state.awaiting !== 'product_choice') {
+    state.selectedProduct.quantity = quantity
+  }
+
   if (state.payment.method === 'dinheiro' && state.payment.changeAsked) {
     const changeFor = parseChangeFor(message)
     if (changeFor !== null) state.payment.changeFor = changeFor
@@ -692,12 +792,165 @@ function applyMessageFacts(state, message) {
   return state
 }
 
+function actionFromState(state, fallback = 'responder_controlado') {
+  if (state.status === 'awaiting_rating') return 'pedir_avaliacao'
+  if (state.status === 'human_requested') return 'handoff_humano'
+  if (state.status === 'cancelado') return 'cancelar'
+  if (state.awaiting && AWAITING_ACTIONS[state.awaiting]) return AWAITING_ACTIONS[state.awaiting]
+  if (state.finalSummaryShown && !state.saved) return 'aguardar_confirmacao'
+  return fallback
+}
+
+function compactProduct(item) {
+  if (!item) return null
+  return {
+    product_id: clean(item.product_id || item.id),
+    name: clean(item.name),
+    category: clean(item.category),
+    quantity: Number(item.quantity || 1),
+    unit_price: Number(item.unit_price ?? item.price ?? 0),
+    stock_quantity: Number(item.stock_quantity || 0),
+    upsell: Boolean(item.upsell),
+  }
+}
+
+function compactSlot(slot) {
+  if (!slot) return null
+  return {
+    id: clean(slot.id),
+    service_type: clean(slot.service_type),
+    scheduled_at: slot.scheduled_at,
+    price: Number(slot.price || 0),
+    label: formatSlot(slot),
+  }
+}
+
+function buildAllowedData(state) {
+  return {
+    customer_name: state.customerName,
+    pet: {
+      name: state.petName,
+      species: state.species,
+      size: state.size,
+      breed: state.breed,
+      age_category: state.ageCategory,
+      symptom: state.symptom,
+    },
+    intent: state.intent,
+    selected_product: compactProduct(state.selectedProduct),
+    product_options: (state.productOptions || []).map(compactProduct).filter(Boolean),
+    selected_slot: compactSlot(state.selectedSlot),
+    slot_options: (state.slotOptions || []).map(compactSlot).filter(Boolean),
+    upsell: {
+      offered: Boolean(state.upsell.offered),
+      resolved: Boolean(state.upsell.resolved),
+      accepted: Boolean(state.upsell.accepted),
+      item: compactProduct(state.upsell.item),
+    },
+    payment: { ...state.payment },
+    fulfillment: { ...state.fulfillment },
+    totals: { ...state.totals },
+  }
+}
+
+function buildGuardDirective(action, fallbackReply, state, extra = {}) {
+  const allowLlm = LLM_REDRAFT_ALLOWED_ACTIONS.has(action) && !extra.shouldSaveOrder && !extra.shouldSaveRating
+  return {
+    version: PETBOT_VERSION,
+    action,
+    allowLlmRedraft: allowLlm,
+    critical: Boolean(extra.needsHuman || extra.shouldSaveOrder || extra.shouldSaveRating || ['oferecer_produtos', 'oferecer_horarios', 'resumo_final', 'aguardar_confirmacao'].includes(action)),
+    fallbackReply,
+    blockedReasons: state.blockedReasons || [],
+    allowedData: buildAllowedData(state),
+    forbidden: [
+      'inventar_produto_preco_estoque_horario',
+      'confirmar_pedido_sem_resumo_final',
+      'alterar_total_sem_recalculo',
+      'aplicar_desconto',
+      'pedir_dado_ja_confirmado',
+      'oferecer_mais_de_um_upsell',
+    ],
+  }
+}
+
+function normalizePriceToken(value = '') {
+  return norm(value).replace(/\s+/g, ' ')
+}
+
+function allowedPriceTokens(directive = {}) {
+  const tokens = new Set()
+  const fallbackPrices = clean(directive.fallbackReply).match(/R\$\s*\d+(?:[,.]\d{1,2})?/g) || []
+  fallbackPrices.forEach((price) => tokens.add(normalizePriceToken(price)))
+
+  const data = directive.allowedData || {}
+  ;[data.totals?.subtotal, data.totals?.deliveryFee, data.totals?.total].forEach((value) => {
+    if (Number(value || 0) > 0) tokens.add(normalizePriceToken(money(value)))
+  })
+  ;[data.selected_product, data.upsell?.item, ...(data.product_options || [])].filter(Boolean).forEach((item) => {
+    if (Number(item.unit_price || 0) > 0) tokens.add(normalizePriceToken(money(item.unit_price)))
+  })
+  ;[data.selected_slot, ...(data.slot_options || [])].filter(Boolean).forEach((slot) => {
+    if (Number(slot.price || 0) > 0) tokens.add(normalizePriceToken(money(slot.price)))
+  })
+  return tokens
+}
+
+export function validatePetbotDraft(draft = '', directive = {}) {
+  const text = clean(draft)
+  const action = clean(directive.action)
+  const lower = norm(text)
+  const problems = []
+
+  if (!text) problems.push('resposta_vazia')
+  if (/(pedido|agendamento)\s+confirmado/.test(lower) && !['pedido_salvo', 'pedir_avaliacao'].includes(action)) {
+    problems.push('confirmacao_nao_autorizada')
+  }
+  if (/(fechado|separad|finalizad)/.test(lower) && !['aguardar_confirmacao', 'pedido_salvo', 'pedir_avaliacao'].includes(action)) {
+    problems.push('fechamento_nao_autorizado')
+  }
+  if (/(desconto|consigo fazer por|faco por|faço por)/.test(lower) && action !== 'recusar_desconto') {
+    problems.push('desconto_nao_autorizado')
+  }
+  if (action === 'pedir_nome' && (/R\$\s*\d/.test(text) || /(tenho|opcoes|opções|produto)/i.test(text))) {
+    problems.push('pulou_nome')
+  }
+  if (directive.allowLlmRedraft && text.split('\n').length > 7) {
+    problems.push('resposta_longa')
+  }
+
+  const allowedPrices = allowedPriceTokens(directive)
+  const mentionedPrices = text.match(/R\$\s*\d+(?:[,.]\d{1,2})?/g) || []
+  for (const price of mentionedPrices) {
+    if (!allowedPrices.has(normalizePriceToken(price))) problems.push('preco_nao_autorizado')
+  }
+
+  return {
+    ok: problems.length === 0,
+    problems: [...new Set(problems)],
+  }
+}
+
+export function renderGuardedPetbotReply(draft = '', directive = {}) {
+  const validation = validatePetbotDraft(draft, directive)
+  return {
+    reply: validation.ok ? clean(draft) : clean(directive.fallbackReply),
+    validation,
+  }
+}
+
 function guardResult(reply, state, extra = {}) {
+  const action = extra.action || actionFromState(state)
+  const guardDirective = extra.guardDirective || buildGuardDirective(action, reply, state, extra)
+  state.lastAction = action
   return {
     handled: true,
     reply,
     state,
     intent: state.intent || 'geral',
+    action,
+    guardDirective,
+    directive: guardDirective,
     blockedReasons: state.blockedReasons || [],
     ...extra,
   }
@@ -719,12 +972,12 @@ function presentProducts(state, products, message) {
 
   if (!state.productOptions.length) {
     state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'estoque_ausente'])]
-    return guardResult('Consultei aqui e não encontrei produto disponível com esses dados. Quer que eu chame alguém da equipe para te ajudar?', state)
+    return guardResult('Consultei aqui e não encontrei produto disponível com esses dados. Quer que eu chame alguém da equipe para te ajudar?', state, { action: 'sem_estoque' })
   }
 
   const intro = strong.length ? 'Consultei o estoque e tenho essas opções:' : 'Não encontrei exatamente o que você pediu, mas tenho essas alternativas com estoque:'
   const lines = state.productOptions.map((product, index) => `${index + 1}. ${product.name} - ${money(product.unit_price)}`)
-  return guardResult(`${intro}\n${lines.join('\n')}\n\nQual prefere?`, state)
+  return guardResult(`${intro}\n${lines.join('\n')}\n\nQual prefere?`, state, { action: 'oferecer_produtos' })
 }
 
 function presentSlots(state, appointments) {
@@ -739,11 +992,11 @@ function presentSlots(state, appointments) {
 
   if (!state.slotOptions.length) {
     state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'sem_horario_real'])]
-    return guardResult('Consultei a agenda e não achei horário disponível agora. Quer que eu chame a equipe para ver outros horários?', state)
+    return guardResult('Consultei a agenda e não achei horário disponível agora. Quer que eu chame a equipe para ver outros horários?', state, { action: 'sem_horario' })
   }
 
   const lines = state.slotOptions.map((slot, index) => `${index + 1}. ${formatSlot(slot)}`)
-  return guardResult(`Consultei a agenda e tenho:\n${lines.join('\n')}\n\nQual horário prefere?`, state)
+  return guardResult(`Consultei a agenda e tenho:\n${lines.join('\n')}\n\nQual horário prefere?`, state, { action: 'oferecer_horarios' })
 }
 
 function serviceFlow(state, message, appointments, settings) {
@@ -766,7 +1019,7 @@ function serviceFlow(state, message, appointments, settings) {
   if (!state.selectedSlot) return presentSlots(state, appointments)
   if (Number(state.selectedSlot.price || 0) <= 0) {
     state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'preco_servico_ausente'])]
-    return guardResult('Tenho esse horário, mas o valor não está confirmado no sistema. Vou chamar a equipe para fechar certinho.', state, { needsHuman: true })
+    return guardResult('Tenho esse horário, mas o valor não está confirmado no sistema. Vou chamar a equipe para fechar certinho.', state, { needsHuman: true, action: 'handoff_humano' })
   }
 
   state.serviceType = state.selectedSlot.service_type || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')
@@ -810,10 +1063,10 @@ function checkoutFlow(state, settings) {
   if (!state.finalSummaryShown) {
     state.finalSummaryShown = true
     state.status = 'resumo_final'
-    return guardResult(buildFinalSummary(state), state)
+    return guardResult(buildFinalSummary(state), state, { action: 'resumo_final' })
   }
 
-  return guardResult('Só preciso da sua confirmação para finalizar.', state)
+  return guardResult('Só preciso da sua confirmação para finalizar.', state, { action: 'aguardar_confirmacao' })
 }
 
 function productFlow(state, message, products, settings) {
@@ -838,7 +1091,7 @@ function productFlow(state, message, products, settings) {
     state.upsell.item = upsell
     if (upsell) {
       state.awaiting = 'upsell'
-      return guardResult(`A ${state.selectedProduct.name} fica ${money(state.selectedProduct.unit_price)}.\n\nPosso incluir ${upsell.name} por ${money(upsell.unit_price)}? Quer adicionar?`, state)
+      return guardResult(`A ${state.selectedProduct.name} fica ${money(state.selectedProduct.unit_price)}.\n\nPosso incluir ${upsell.name} por ${money(upsell.unit_price)}? Quer adicionar?`, state, { action: 'oferecer_upsell' })
     }
     state.upsell.resolved = true
   }
@@ -860,7 +1113,7 @@ function productFlow(state, message, products, settings) {
   }
 
   if (!state.upsell.resolved) {
-    return guardResult(`A ${state.selectedProduct.name} fica ${money(state.selectedProduct.unit_price)}.\n\nQuer adicionar ${state.upsell.item?.name || 'um complemento'}?`, state)
+    return guardResult(`A ${state.selectedProduct.name} fica ${money(state.selectedProduct.unit_price)}.\n\nQuer adicionar ${state.upsell.item?.name || 'um complemento'}?`, state, { action: 'oferecer_upsell' })
   }
 
   recalcTotals(state, settings.deliveryFee)
@@ -886,7 +1139,15 @@ function maybeHandleDiscount(state, products) {
   if (!cheap) return 'Infelizmente não conseguimos aplicar desconto nesse pedido.'
   const option = productSnapshot(cheap)
   state.productOptions = [option].filter(Boolean)
+  state.awaiting = 'product_choice'
   return `Infelizmente não conseguimos aplicar desconto nesse pedido.\n\nPosso te mostrar uma opção mais econômica: ${option.name} por ${money(option.unit_price)}. Quer seguir com ela?`
+}
+
+function handoffToHuman(state, reply, reason) {
+  state.status = 'human_requested'
+  state.awaiting = 'human'
+  state.blockedReasons = [...new Set([...(state.blockedReasons || []), reason])]
+  return guardResult(reply, state, { needsHuman: true, action: 'handoff_humano' })
 }
 
 export function runPetbotGuard({
@@ -915,15 +1176,36 @@ export function runPetbotGuard({
 
   applyMessageFacts(state, trimmed)
 
+  if (hasAny(trimmed, HUMAN_HINTS)) {
+    return handoffToHuman(state, 'Claro. Vou chamar a equipe para continuar com você por aqui.', 'humano_solicitado')
+  }
+
+  if (isCriticalVeterinaryMessage(trimmed)) {
+    state.intent = 'veterinaria'
+    state.symptom ||= trimmed.slice(0, 120)
+    return handoffToHuman(state, 'Entendi. Esse caso precisa de atenção rápida da equipe. Vou chamar um atendente para te orientar com cuidado.', 'veterinaria_sensivel')
+  }
+
+  if (isAffirmative(trimmed) && ['sem_estoque', 'sem_horario'].includes(state.lastAction)) {
+    return handoffToHuman(state, 'Perfeito. Vou chamar a equipe para verificar isso certinho com você.', state.lastAction)
+  }
+
   if (state.finalSummaryShown && !state.saved && isAffirmative(trimmed)) {
     recalcTotals(state, settings.deliveryFee)
     state.status = 'confirmando'
     state.confirmationKey = `${state.intent}:${state.customerName}:${state.totals.total}:${state.selectedProduct?.product_id || state.selectedSlot?.id || ''}`
-    return guardResult('Perfeito, vou registrar agora.', state, { shouldSaveOrder: true, orderArgs: buildOrderArgs(state) })
+    return guardResult('Perfeito, vou registrar agora.', state, { shouldSaveOrder: true, orderArgs: buildOrderArgs(state), action: 'confirmar_salvar' })
+  }
+
+  if (state.finalSummaryShown && !state.saved && isNegative(trimmed)) {
+    state.status = 'cancelado'
+    state.awaiting = ''
+    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'confirmacao_recusada'])]
+    return guardResult('Tudo bem, não vou finalizar esse pedido. Se quiser alterar algo, me diga o que prefere.', state, { action: 'cancelar' })
   }
 
   if (hasAny(trimmed, DISCOUNT_HINTS)) {
-    return guardResult(maybeHandleDiscount(state, products), state)
+    return guardResult(maybeHandleDiscount(state, products), state, { action: 'recusar_desconto' })
   }
 
   if (state.intent === 'multi') {
