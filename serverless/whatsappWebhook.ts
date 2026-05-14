@@ -19,6 +19,11 @@ const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 const MAX_WHATSAPP_TEXT_CHARS = 4096
 const RECENT_HISTORY_LIMIT = 14
 const PRODUCT_CONTEXT_LIMIT = 18
+const PRODUCT_CATALOG_CACHE_MS = 5 * 60 * 1000
+const STORE_CONTEXT_CACHE_MS = 60 * 1000
+const APPOINTMENTS_CACHE_MS = 30 * 1000
+const MAX_CACHED_PRODUCTS = 1500
+const CLIENT_PROFILE_SELECT = 'id,name,phone,address,neighborhood,city,details'
 const PRODUCT_STOP_WORDS = new Set([
   'aqui',
   'algum',
@@ -204,6 +209,10 @@ const PETBOT_TOOLS = [
   },
 ]
 
+const productCatalogCache = new Map<string, { loadedAt: number; value: LooseRecord[] }>()
+const settingsCache = new Map<string, { loadedAt: number; value: LooseRecord }>()
+const appointmentsCache = new Map<string, { loadedAt: number; value: LooseRecord[] }>()
+
 type LooseRecord = Record<string, any>
 
 type WebhookEnv = {
@@ -287,6 +296,30 @@ function fail(status: number, message: string): never {
 
 function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function scopeCacheKey(moduleId: string, tenantId: string): string {
+  return `${tenantId || ''}:${String(moduleId || '').toLowerCase()}`
+}
+
+async function cachedLoad<T>(
+  cache: Map<string, { loadedAt: number; value: T }>,
+  key: string,
+  ttlMs: number,
+  loader: () => Promise<T>,
+): Promise<T> {
+  const now = Date.now()
+  const cached = cache.get(key)
+  if (cached && now - cached.loadedAt < ttlMs) return cached.value
+
+  try {
+    const value = await loader()
+    cache.set(key, { loadedAt: now, value })
+    return value
+  } catch (error) {
+    if (cached) return cached.value
+    throw error
+  }
 }
 
 function parseJsonObject(value: unknown): LooseRecord {
@@ -948,12 +981,14 @@ async function findClientByPhone(
   const digits = normalizePhone(phone)
   if (!digits) return null
 
+  const candidates = [...new Set([digits, clean(phone), `+${digits}`].filter(Boolean))]
   const { data, error } = await supabase
     .from('clients')
-    .select('*')
+    .select(CLIENT_PROFILE_SELECT)
     .eq('module_id', moduleId)
     .eq('tenant_id', tenantId)
-    .limit(200)
+    .in('phone', candidates)
+    .limit(5)
 
   if (error) return null
   return ((data || []) as LooseRecord[]).find((client) => normalizePhone(client.phone) === digits) || null
@@ -970,7 +1005,7 @@ async function ensureCustomerProfile(
   if (session.client_id) {
     const { data } = await supabase
       .from('clients')
-      .select('*')
+      .select(CLIENT_PROFILE_SELECT)
       .eq('id', session.client_id)
       .maybeSingle()
     client = (data as LooseRecord | null) || null
@@ -1004,7 +1039,7 @@ async function ensureCustomerProfile(
         active: true,
         details: nextDetails,
       })
-      .select('*')
+      .select(CLIENT_PROFILE_SELECT)
       .single()
 
     if (!error) client = data as LooseRecord
@@ -1537,108 +1572,66 @@ async function loadStoreContext(
   const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
   const catalogSearchText = buildCatalogSearchText(history, latestUserMessage)
   const terms = buildSearchTerms(catalogSearchText)
-  const intent = detectConversationIntent(latestUserMessage)
+  const cacheKey = scopeCacheKey(session.module_id, session.tenant_id)
 
-  let productsQuery = supabase
-    .from('products')
-    .select('id, name, category, description, species_target, price, stock_quantity, active')
-    .eq('tenant_id', session.tenant_id)
-    .eq('module_id', session.module_id)
-    .eq('active', true)
-
-  if (terms.length > 0) {
-    const orQuery = terms
-      .flatMap((term) => {
-        const escaped = escapeIlike(term)
-        return [
-          `name.ilike.%${escaped}%`,
-          `category.ilike.%${escaped}%`,
-          `description.ilike.%${escaped}%`,
-          `species_target.ilike.%${escaped}%`,
-        ]
-      })
-      .join(',')
-    productsQuery = productsQuery.or(orQuery).limit(300)
-  } else {
-    productsQuery = productsQuery.order('stock_quantity', { ascending: false }).limit(300)
-  }
-
-  const customer = await ensureCustomerProfile(supabase, session)
-
-  const [settingsResult, companyResult, productsResult, appointmentsResult, examplesContext] = await Promise.all([
-    supabase
-      .from('settings')
-      .select('*')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .maybeSingle(),
-    supabase
-      .from('companies')
-      .select('name, bot_name, model_name, temperature')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .eq('is_active', true)
-      .order('created_at', { ascending: true })
-      .limit(1)
-      .maybeSingle(),
-    productsQuery,
-    supabase
-      .from('appointments')
-      .select('id, service_type, scheduled_at, status, price')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .gte('scheduled_at', `${today}T00:00:00-03:00`)
-      .lte('scheduled_at', `${end}T23:59:59-03:00`)
-      .order('scheduled_at')
-      .limit(40),
-    loadConversationExamples(supabase, session.module_id, session.tenant_id, latestUserMessage, intent),
+  const [settings, productRows, appointments] = await Promise.all([
+    cachedLoad(settingsCache, cacheKey, STORE_CONTEXT_CACHE_MS, async () => {
+      const { data } = await supabase
+        .from('settings')
+        .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
+        .eq('tenant_id', session.tenant_id)
+        .eq('module_id', session.module_id)
+        .maybeSingle()
+      return (data || {}) as LooseRecord
+    }),
+    cachedLoad(productCatalogCache, cacheKey, PRODUCT_CATALOG_CACHE_MS, async () => {
+      const { data, error } = await supabase
+        .from('products')
+        .select('id, name, category, description, species_target, price, stock_quantity, active')
+        .eq('tenant_id', session.tenant_id)
+        .eq('module_id', session.module_id)
+        .eq('active', true)
+        .gt('stock_quantity', 0)
+        .limit(MAX_CACHED_PRODUCTS)
+      if (error) return []
+      return (data || []) as LooseRecord[]
+    }),
+    cachedLoad(appointmentsCache, cacheKey, APPOINTMENTS_CACHE_MS, async () => {
+      const { data, error } = await supabase
+        .from('appointments')
+        .select('id, service_type, scheduled_at, status, price')
+        .eq('tenant_id', session.tenant_id)
+        .eq('module_id', session.module_id)
+        .gte('scheduled_at', `${today}T00:00:00-03:00`)
+        .lte('scheduled_at', `${end}T23:59:59-03:00`)
+        .order('scheduled_at')
+        .limit(40)
+      if (error) return []
+      return (data || []) as LooseRecord[]
+    }),
   ])
 
-  let productRows: LooseRecord[] = ((productsResult.data || []) as LooseRecord[])
-  if (!productsResult.error && productRows.length === 0 && terms.length > 0) {
-    const fallback = await supabase
-      .from('products')
-      .select('id, name, category, description, species_target, price, stock_quantity, active')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .eq('active', true)
-      .gt('stock_quantity', 0)
-      .order('stock_quantity', { ascending: false })
-      .limit(8)
-    productRows = fallback.data || []
-  } else if (!productsResult.error && productRows.length > 0) {
-    const fallback = await supabase
-      .from('products')
-      .select('id, name, category, price, stock_quantity, active')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .eq('active', true)
-      .gt('stock_quantity', 0)
-      .order('stock_quantity', { ascending: false })
-      .limit(12)
-    const merged = new Map<string, LooseRecord>()
-    for (const product of [...productRows, ...(fallback.data || [])] as LooseRecord[]) {
-      if (product.id) merged.set(String(product.id), product)
-    }
-    productRows = [...merged.values()]
-  }
+  const selectedProducts = selectRelevantProducts(productRows, catalogSearchText)
+  const productsForGuard = selectedProducts.length > 0
+    ? selectedProducts
+    : (terms.length > 0 ? [] : productRows.slice(0, PRODUCT_CONTEXT_LIMIT))
 
   return {
-    storeName: clean(settingsResult.data?.store_name) || clean(companyResult.data?.name) || 'YuiSync',
-    storePhone: clean(settingsResult.data?.store_phone),
-    storeAddress: clean(settingsResult.data?.store_address),
-    storeNeighborhood: clean(settingsResult.data?.store_neighborhood),
-    storeCity: clean(settingsResult.data?.store_city),
-    botPrompt: clean(settingsResult.data?.bot_prompt),
-    deliveryFee: Number(settingsResult.data?.delivery_fee ?? DEFAULT_DELIVERY_FEE),
-    customerContext: buildCustomerContext(customer),
-    examplesContext,
-    modelName: clean(companyResult.data?.model_name) || env.openAiModel,
-    temperature: Number(companyResult.data?.temperature ?? 0.2),
-    productContext: productsResult.error ? 'Catalogo indisponivel no momento.' : buildProductsContext(selectRelevantProducts(productRows, catalogSearchText)),
-    appointmentsContext: appointmentsResult.error ? 'Agenda indisponivel no momento.' : buildAppointmentsContext(appointmentsResult.data),
-    products: (productsResult.error ? [] : productRows) as LooseRecord[],
-    appointments: (appointmentsResult.error ? [] : appointmentsResult.data || []) as LooseRecord[],
+    storeName: clean(settings.store_name) || 'YuiSync',
+    storePhone: clean(settings.store_phone),
+    storeAddress: clean(settings.store_address),
+    storeNeighborhood: clean(settings.store_neighborhood),
+    storeCity: clean(settings.store_city),
+    botPrompt: clean(settings.bot_prompt),
+    deliveryFee: Number(settings.delivery_fee ?? DEFAULT_DELIVERY_FEE),
+    customerContext: '',
+    examplesContext: '',
+    modelName: env.openAiModel,
+    temperature: 0.2,
+    productContext: buildProductsContext(productsForGuard),
+    appointmentsContext: buildAppointmentsContext(appointments),
+    products: productsForGuard,
+    appointments,
   }
 }
 
@@ -1648,7 +1641,7 @@ async function loadRecentHistory(supabase: SupabaseClient, sessionId: string) {
     .select('id, role, content, metadata, tokens_used, sent_at')
     .eq('session_id', sessionId)
     .order('sent_at', { ascending: false })
-    .limit(40)
+    .limit(RECENT_HISTORY_LIMIT)
 
   if (error) fail(500, 'Unable to load conversation history.')
 

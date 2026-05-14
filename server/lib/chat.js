@@ -11,6 +11,12 @@ import {
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
+const RECENT_HISTORY_LIMIT = 14
+const PRODUCT_CATALOG_CACHE_MS = 5 * 60 * 1000
+const SETTINGS_CACHE_MS = 60 * 1000
+const APPOINTMENTS_CACHE_MS = 30 * 1000
+const MAX_CACHED_PRODUCTS = 1500
+const CLIENT_PROFILE_SELECT = 'id,name,phone,address,neighborhood,city,details'
 const PRODUCT_STOP_WORDS = new Set([
   'aqui',
   'algum',
@@ -199,6 +205,29 @@ const PETBOT_TOOLS = [
     },
   },
 ]
+
+const productCatalogCache = new Map()
+const storeSettingsCache = new Map()
+const appointmentsCache = new Map()
+
+function scopeCacheKey(moduleId, tenantId) {
+  return `${String(tenantId || '')}:${String(moduleId || '').toLowerCase()}`
+}
+
+async function cachedLoad(cache, key, ttlMs, loader) {
+  const now = Date.now()
+  const cached = cache.get(key)
+  if (cached && now - cached.loadedAt < ttlMs) return cached.value
+
+  try {
+    const value = await loader()
+    cache.set(key, { loadedAt: now, value })
+    return value
+  } catch (error) {
+    if (cached?.value) return cached.value
+    throw error
+  }
+}
 
 function detectIntent(message = '') {
   const lower = normalizeSearchText(message)
@@ -557,138 +586,96 @@ function buildSystemPrompt({
 }
 
 async function loadStoreSettings(supabase, moduleId, tenantId) {
-  let query = supabase
-    .from('settings')
-    .select('*')
-    .eq('module_id', moduleId)
-
-  if (tenantId) {
-    query = query.eq('tenant_id', tenantId)
-  }
-
-  const { data, error } = await query.maybeSingle()
-  if (error) {
-    if (tenantId && isMissingTenantColumnError(error)) {
-      throw new HttpError(500, 'Tenant isolation is not enabled in settings table.')
-    }
-    throw new HttpError(500, 'Unable to load store configuration.')
-  }
-
-  return {
-    storeName: data?.store_name || 'YuiSync',
-    storePhone: data?.store_phone || '',
-    storeAddress: data?.store_address || '',
-    storeNeighborhood: data?.store_neighborhood || '',
-    storeCity: data?.store_city || '',
-    botPrompt: data?.bot_prompt || '',
-    deliveryFee: Number(data?.delivery_fee ?? DEFAULT_DELIVERY_FEE),
-  }
-}
-
-async function loadProducts(supabase, moduleId, tenantId, message) {
-  const searchTerms = buildSearchTerms(message)
-  const selectColumns = 'id, name, category, description, species_target, price, stock_quantity, active'
-
-  const createBaseQuery = () => {
+  return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
-      .from('products')
-      .select(selectColumns)
+      .from('settings')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
       .eq('module_id', moduleId)
-      .eq('active', true)
 
     if (tenantId) {
       query = query.eq('tenant_id', tenantId)
     }
 
-    return query
-  }
+    const { data, error } = await query.maybeSingle()
+    if (error) {
+      if (tenantId && isMissingTenantColumnError(error)) {
+        throw new HttpError(500, 'Tenant isolation is not enabled in settings table.')
+      }
+      throw new HttpError(500, 'Unable to load store configuration.')
+    }
 
-  if (searchTerms.length > 0) {
-    const orQuery = searchTerms
-      .flatMap((term) => {
-        const escaped = escapeIlike(term)
-        return [
-          `name.ilike.%${escaped}%`,
-          `category.ilike.%${escaped}%`,
-          `description.ilike.%${escaped}%`,
-          `species_target.ilike.%${escaped}%`,
-        ]
-      })
-      .join(',')
+    return {
+      storeName: data?.store_name || 'YuiSync',
+      storePhone: data?.store_phone || '',
+      storeAddress: data?.store_address || '',
+      storeNeighborhood: data?.store_neighborhood || '',
+      storeCity: data?.store_city || '',
+      botPrompt: data?.bot_prompt || '',
+      deliveryFee: Number(data?.delivery_fee ?? DEFAULT_DELIVERY_FEE),
+    }
+  })
+}
 
-    const targeted = await createBaseQuery()
-      .or(orQuery)
-      .limit(300)
+async function loadProducts(supabase, moduleId, tenantId, message) {
+  const selectColumns = 'id, name, category, description, species_target, price, stock_quantity, active'
+  const catalog = await cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
+    let query = supabase
+      .from('products')
+      .select(selectColumns)
+      .eq('module_id', moduleId)
+      .eq('active', true)
+      .gt('stock_quantity', 0)
+      .limit(MAX_CACHED_PRODUCTS)
 
-    if (targeted.error) {
-      if (tenantId && isMissingTenantColumnError(targeted.error)) {
+    if (tenantId) {
+      query = query.eq('tenant_id', tenantId)
+    }
+
+    const { data, error } = await query
+    if (error) {
+      if (tenantId && isMissingTenantColumnError(error)) {
         throw new HttpError(500, 'Tenant isolation is not enabled in products table.')
       }
       throw new HttpError(500, 'Unable to load product context.')
     }
 
-    const selected = selectRelevantProducts(targeted.data || [], message)
-    if (selected.length > 0) return selected
-  }
+    return data || []
+  })
 
-  const { data, error } = await createBaseQuery()
-    .order('stock_quantity', { ascending: false })
-    .limit(300)
-
-  if (error) {
-    if (tenantId && isMissingTenantColumnError(error)) {
-      throw new HttpError(500, 'Tenant isolation is not enabled in products table.')
-    }
-    throw new HttpError(500, 'Unable to load product context.')
-  }
-
-  const selected = selectRelevantProducts(data || [], message)
-  if (selected.length > 0 || searchTerms.length === 0) return selected
-
-  let fallbackQuery = supabase
-    .from('products')
-    .select('id, name, category, price, stock_quantity, active')
-    .eq('module_id', moduleId)
-    .eq('active', true)
-    .gt('stock_quantity', 0)
-    .order('stock_quantity', { ascending: false })
-    .limit(8)
-
-  if (tenantId) {
-    fallbackQuery = fallbackQuery.eq('tenant_id', tenantId)
-  }
-
-  const fallback = await fallbackQuery
-  if (fallback.error) return []
-  return fallback.data || []
+  const selected = selectRelevantProducts(catalog || [], message)
+  if (selected.length > 0) return selected.slice(0, PRODUCT_CONTEXT_LIMIT)
+  if (buildSearchTerms(message).length > 0) return []
+  return (catalog || []).slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
 async function loadAppointments(supabase, moduleId, tenantId) {
-  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-  const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-  let query = supabase
-    .from('appointments')
-    .select('id, service_type, scheduled_at, status, price')
-    .eq('module_id', moduleId)
-    .gte('scheduled_at', `${today}T00:00:00-03:00`)
-    .lte('scheduled_at', `${end}T23:59:59-03:00`)
-    .order('scheduled_at')
-    .limit(40)
+  return cachedLoad(appointmentsCache, scopeCacheKey(moduleId, tenantId), APPOINTMENTS_CACHE_MS, async () => {
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+    const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+    let query = supabase
+      .from('appointments')
+      .select('id, service_type, scheduled_at, status, price')
+      .eq('module_id', moduleId)
+      .gte('scheduled_at', `${today}T00:00:00-03:00`)
+      .lte('scheduled_at', `${end}T23:59:59-03:00`)
+      .order('scheduled_at')
+      .limit(40)
 
-  if (tenantId) {
-    query = query.eq('tenant_id', tenantId)
-  }
-
-  const { data, error } = await query
-
-  if (error) {
-    if (tenantId && isMissingTenantColumnError(error)) {
-      throw new HttpError(500, 'Tenant isolation is not enabled in appointments table.')
+    if (tenantId) {
+      query = query.eq('tenant_id', tenantId)
     }
-    throw new HttpError(500, 'Unable to load appointment context.')
-  }
 
-  return data || []
+    const { data, error } = await query
+
+    if (error) {
+      if (tenantId && isMissingTenantColumnError(error)) {
+        throw new HttpError(500, 'Tenant isolation is not enabled in appointments table.')
+      }
+      throw new HttpError(500, 'Unable to load appointment context.')
+    }
+
+    return data || []
+  })
 }
 
 function isBotExamplesSchemaError(error) {
@@ -775,7 +762,7 @@ async function loadRecentMessages(supabase, sessionId) {
     .select('id, role, content, metadata, tokens_used, sent_at')
     .eq('session_id', sessionId)
     .order('sent_at', { ascending: false })
-    .limit(40)
+    .limit(RECENT_HISTORY_LIMIT)
 
   if (error) {
     throw new HttpError(500, 'Unable to load conversation history.')
@@ -793,12 +780,14 @@ async function findClientByPhone(supabase, moduleId, tenantId, phone) {
   const digits = normalizePhone(phone)
   if (!digits) return null
 
+  const candidates = [...new Set([digits, cleanText(phone), `+${digits}`].filter(Boolean))]
   const { data, error } = await supabase
     .from('clients')
-    .select('*')
+    .select(CLIENT_PROFILE_SELECT)
     .eq('module_id', moduleId)
     .eq('tenant_id', tenantId)
-    .limit(200)
+    .in('phone', candidates)
+    .limit(5)
 
   if (error) {
     if (isMissingTenantColumnError(error)) {
@@ -819,7 +808,7 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
   if (session.client_id) {
     const { data, error } = await supabase
       .from('clients')
-      .select('*')
+      .select(CLIENT_PROFILE_SELECT)
       .eq('id', session.client_id)
       .maybeSingle()
     if (error) throw new HttpError(500, 'Unable to load linked customer profile.')
@@ -855,7 +844,7 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
     const { data, error } = await supabase
       .from('clients')
       .insert(payload)
-      .select('*')
+      .select(CLIENT_PROFILE_SELECT)
       .single()
 
     if (error) throw new HttpError(500, 'Unable to create customer profile.')
@@ -865,7 +854,7 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
       .from('clients')
       .update(payload)
       .eq('id', client.id)
-      .select('*')
+      .select(CLIENT_PROFILE_SELECT)
       .single()
 
     if (error) throw new HttpError(500, 'Unable to update customer profile.')
