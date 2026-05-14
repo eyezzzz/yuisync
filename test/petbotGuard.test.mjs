@@ -118,6 +118,18 @@ test('produto usa raça como porte, não pede peso e soma taxa de entrega', () =
   assert.equal(result.orderArgs.items[0].product_id, 'premier-shih-adulto')
 })
 
+test('produto aceita escolha por marca em frase natural', () => {
+  let context = {}
+  let result = turn(context, 'Oi, quero ração pra shih tzu adulto')
+  context = result.context
+  result = turn(context, 'Rodrigo')
+  context = result.context
+
+  result = turn(context, 'pode ser premier')
+  assert.equal(result.action, 'oferecer_upsell')
+  assert.match(result.reply, /Premier/i)
+})
+
 test('desconto é recusado sem alterar preço', () => {
   const state = getPetbotState({})
   state.intent = 'produto'
@@ -125,9 +137,29 @@ test('desconto é recusado sem alterar preço', () => {
   state.nameConfirmed = true
   state.species = 'dog'
   state.ageCategory = 'adulto'
+  state.productOptions = [
+    {
+      product_id: 'premier-shih-adulto',
+      name: 'Premier Raças Especificas Shih Tzu Salmão Adulto 2,5kg',
+      category: 'Ração',
+      quantity: 1,
+      unit_price: 120,
+      stock_quantity: 4,
+    },
+    {
+      product_id: 'economica',
+      name: 'Ração Econômica Cães Adultos 10kg',
+      category: 'Ração',
+      quantity: 1,
+      unit_price: 90,
+      stock_quantity: 5,
+    },
+  ]
   const result = turn({ petbot: state }, 'faz desconto?')
   assert.match(result.reply, /Infelizmente não conseguimos aplicar desconto/i)
   assert.doesNotMatch(result.reply, /consigo fazer/i)
+  assert.match(result.reply, /Ração Econômica/i)
+  assert.doesNotMatch(result.reply, /Petisco Dental/i)
 })
 
 test('banho mostra múltiplos horários reais com preço', () => {
@@ -144,6 +176,19 @@ test('banho mostra múltiplos horários reais com preço', () => {
   assert.match(result.reply, /14:00/)
   assert.match(result.reply, /16:30/)
   assert.match(result.reply, /R\$ 70,00/)
+})
+
+test('banho entende nome e raça sem vírgula', () => {
+  let context = {}
+  let result = turn(context, 'Quero banho pro meu cachorro')
+  context = result.context
+  result = turn(context, 'Ana')
+  context = result.context
+
+  result = turn(context, 'Thor golden')
+  assert.match(result.reply, /14:00/)
+  assert.equal(result.state.petName, 'Thor')
+  assert.equal(result.state.breed, 'Golden Retriever')
 })
 
 test('avaliação fecha o atendimento depois de pedido salvo', () => {
