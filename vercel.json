@@ -6,9 +6,6 @@
     "api/webhook.ts": {
       "maxDuration": 30
     },
-    "api/whatsapp/webhook.ts": {
-      "maxDuration": 30
-    },
     "api/admin/users.ts": {
       "maxDuration": 30
     },
@@ -38,6 +35,9 @@
     },
     "api/fiscal/webhooks/focus.ts": {
       "maxDuration": 30
+    },
+    "api/products/image-suggestions.ts": {
+      "maxDuration": 20
     }
   },
   "rewrites": [
