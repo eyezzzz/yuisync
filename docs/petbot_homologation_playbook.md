@@ -7,9 +7,14 @@ Use este roteiro quando Supabase, dashboard e WhatsApp estiverem disponiveis. A 
 - Conferir se existe pelo menos 1 produto com estoque e preco para cachorro adulto.
 - Conferir se existe pelo menos 1 produto com estoque e preco para gato/castrado.
 - Conferir se existe 1 item de upsell com estoque, como petisco ou sache.
+- Conferir se pelo menos 1 produto tem `image_url` aprovado para testar envio de foto.
 - Conferir se existem 2 horarios livres de banho/tosa e 1 horario livre de veterinaria.
 - Conferir se `settings.delivery_fee` esta como `10,00` ou outro valor desejado.
 - Abrir a dashboard de entregas/ordens para ver se item, endereco, taxa e total aparecem apos salvar.
+- Conferir se a migration `database/petbot_order_transaction_rpc.sql` foi aplicada antes do teste real.
+- Para WhatsApp com audio/imagem, confirmar `OPENAI_TRANSCRIPTION_MODEL`, `OPENAI_VISION_MODEL`, `WHATSAPP_ACCESS_TOKEN` e permissoes de midia.
+- Para busca de foto de produto, configurar `GOOGLE_IMAGE_SEARCH_API_KEY` e `GOOGLE_IMAGE_SEARCH_CX`, ou colar a URL manualmente no cadastro.
+- Fazer os primeiros testes reais em modo assistido: humano olhando o painel e pronto para assumir.
 
 ## Como Marcar O Resultado
 
@@ -131,9 +136,41 @@ Esperado:
 - Pode oferecer alternativa mais economica real da mesma categoria.
 - Pergunta troco.
 
+### 7. Cliente Pede Foto Do Produto
+
+Condicao:
+- Produto escolhido tem `image_url` aprovado no estoque.
+
+Cliente:
+```
+quero racao pra shih tzu adulto
+Rodrigo
+manda foto da premier
+```
+
+Esperado:
+- Envia a imagem cadastrada do produto, sem buscar/improvisar foto na conversa.
+- A legenda deve ser curta e comercial.
+- Mantem o pedido no mesmo estado para continuar a venda depois.
+
+### 8. Produto Sem Foto Aprovada
+
+Condicao:
+- Produto escolhido nao tem `image_url`.
+
+Cliente:
+```
+tem foto?
+```
+
+Esperado:
+- Nao inventa imagem.
+- Responde que ainda nao tem foto aprovada no cadastro.
+- Registra bloqueio `foto_produto_ausente`.
+
 ## Casos De Banho E Tosa
 
-### 7. Nome E Raca Sem Virgula
+### 9. Nome E Raca Sem Virgula
 
 Cliente:
 ```
@@ -153,7 +190,7 @@ Esperado:
 - Mostra preco antes de confirmar.
 - Salva agendamento somente depois do resumo final.
 
-### 8. Agenda Cheia
+### 10. Agenda Cheia
 
 Condicao:
 - Nao haver horario disponivel.
@@ -171,7 +208,7 @@ Esperado:
 - Diz que nao achou horario disponivel.
 - Se cliente quiser, chama equipe humana.
 
-### 9. Mudanca De Ideia
+### 11. Mudanca De Ideia
 
 Cliente:
 ```
@@ -189,7 +226,7 @@ Esperado:
 
 ## Casos De Veterinaria
 
-### 10. Veterinaria Normal
+### 12. Veterinaria Normal
 
 Cliente:
 ```
@@ -209,7 +246,7 @@ Esperado:
 - Mostra preco antes de confirmar.
 - Pede avaliacao depois de salvar.
 
-### 11. Urgencia Sensivel
+### 13. Urgencia Sensivel
 
 Cliente:
 ```
@@ -223,7 +260,7 @@ Esperado:
 
 ## Casos De Checkout
 
-### 12. Endereco Incompleto
+### 14. Endereco Incompleto
 
 Cliente:
 ```
@@ -236,7 +273,7 @@ Esperado:
 - Nao mostra resumo final antes do endereco completo.
 - Nao salva entrega sem rua/numero/bairro/referencia.
 
-### 13. Recusa No Resumo Final
+### 15. Recusa No Resumo Final
 
 Cliente:
 ```
@@ -251,7 +288,7 @@ Esperado:
 - Responde que nao vai finalizar.
 - Permite alterar o pedido.
 
-### 14. Confirmacoes Curtas
+### 16. Confirmacoes Curtas
 
 Cliente:
 ```
@@ -265,6 +302,44 @@ Esperado:
 - Interpreta como confirmacao.
 - Salva pedido/agendamento.
 - Pede nota 0-10.
+
+## Casos De Midia WhatsApp
+
+### 17. Audio Do Cliente
+
+Cliente:
+```
+[audio] "Oi, sou a Camila, quero racao para gato castrado"
+```
+
+Esperado:
+- Transcreve o audio e segue o mesmo motor do chat por texto.
+- Salva no metadata `media_processed: true` e `media_processing: audio_transcription`.
+- Se a transcricao falhar, pede para enviar em texto e nao inventa resposta.
+
+### 18. Foto De Embalagem
+
+Cliente:
+```
+[imagem de embalagem de racao com legenda: tem essa?]
+```
+
+Esperado:
+- Descreve a imagem como contexto, consulta o banco e mostra apenas produto real.
+- Se nao houver produto compativel, oferece alternativa real.
+- Nao usa a foto como estoque ou preco.
+
+### 19. Foto Veterinaria Sensivel
+
+Cliente:
+```
+[imagem de ferimento/sangue com legenda: o que eu faco?]
+```
+
+Esperado:
+- Nao diagnostica.
+- Chama humano ou atendimento veterinario cauteloso.
+- Registra `image_requires_human: true`.
 
 ## O Que Conferir Na Dashboard
 

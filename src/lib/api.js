@@ -116,3 +116,18 @@ export function importLegacyRows({ kind, rows, moduleId, tenantId }) {
     }),
   })
 }
+
+export function searchProductImages({ name, barcode, category, brand, moduleId, tenantId, limit = 8 }) {
+  return apiRequest('/products/image-suggestions', {
+    method: 'POST',
+    body: JSON.stringify({
+      name,
+      barcode,
+      category,
+      brand,
+      moduleId,
+      tenantId,
+      limit,
+    }),
+  })
+}

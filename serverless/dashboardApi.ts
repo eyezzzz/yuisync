@@ -16,6 +16,7 @@ import {
 } from '../server/lib/auth.js'
 import { respondToChatMessage } from '../server/lib/chat.js'
 import { handleFocusWebhook, issueFiscalForSale } from '../server/lib/fiscal.js'
+import { searchProductImageCandidates } from '../server/lib/productImages.js'
 import { sendHumanChatMessage } from '../server/lib/whatsapp.js'
 
 type JsonBody = Record<string, unknown>
@@ -883,6 +884,41 @@ async function handleLegacyImport(req: IncomingMessage, res: ServerResponse) {
   sendJson(res, 200, summary)
 }
 
+async function handleProductImageSuggestions(req: IncomingMessage, res: ServerResponse) {
+  const accessToken = getBearerToken(req)
+  const requester = await requireAuthenticatedProfile(accessToken)
+  const body = await readJsonBody(req) as JsonBody
+  const moduleId = typeof body.moduleId === 'string' && body.moduleId.trim()
+    ? body.moduleId.trim()
+    : 'petshop'
+  const tenantId = typeof body.tenantId === 'string' && body.tenantId.trim()
+    ? body.tenantId.trim()
+    : ''
+
+  if (!hasModuleAccess(requester, moduleId)) {
+    throw new HttpError(403, 'Voce nao tem permissao para buscar imagens deste modulo.')
+  }
+
+  if (tenantId) validateUUID(tenantId, 'tenantId')
+  if (requester.role !== 'admin') {
+    const requesterTenantId = typeof requester.active_tenant_id === 'string' ? requester.active_tenant_id : ''
+    if (!requesterTenantId) throw new HttpError(403, 'Selecione um negocio ativo antes de buscar imagens.')
+    if (tenantId && tenantId !== requesterTenantId) {
+      throw new HttpError(403, 'Voce so pode buscar imagens para o seu negocio ativo.')
+    }
+  }
+
+  const result = await searchProductImageCandidates({
+    name: body.name,
+    barcode: body.barcode,
+    category: body.category,
+    brand: body.brand,
+    limit: body.limit,
+  })
+
+  sendJson(res, 200, result)
+}
+
 export async function handleAdminUsers(req: IncomingMessage, res: ServerResponse) {
   if (req.method === 'OPTIONS') return sendEmpty(res)
 
@@ -1017,6 +1053,20 @@ export async function handleLegacyImportRoute(req: IncomingMessage, res: ServerR
       throw new HttpError(405, 'Metodo nao permitido.')
     }
     return await handleLegacyImport(req, res)
+  } catch (error) {
+    handleApiError(res, error)
+  }
+}
+
+export async function handleProductImageSuggestionsRoute(req: IncomingMessage, res: ServerResponse) {
+  if (req.method === 'OPTIONS') return sendEmpty(res)
+
+  try {
+    if (req.method !== 'POST') {
+      res.setHeader('Allow', 'POST, OPTIONS')
+      throw new HttpError(405, 'Metodo nao permitido.')
+    }
+    return await handleProductImageSuggestions(req, res)
   } catch (error) {
     handleApiError(res, error)
   }

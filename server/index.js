@@ -19,6 +19,7 @@ import {
 } from './lib/auth.js'
 import { respondToChatMessage } from './lib/chat.js'
 import { handleFocusWebhook, issueFiscalForSale } from './lib/fiscal.js'
+import { searchProductImageCandidates } from './lib/productImages.js'
 import {
   processWhatsappWebhook,
   readWhatsappWebhookBody,
@@ -344,6 +345,42 @@ async function handleChatHumanMessage(req, res) {
   sendJson(res, 200, result, getCorsHeaders(origin))
 }
 
+async function handleProductImageSuggestions(req, res) {
+  const origin = req.headers.origin
+  const accessToken = getBearerToken(req)
+  const requester = await requireAuthenticatedProfile(accessToken)
+  const body = await readJsonBody(req)
+  const moduleId = typeof body.moduleId === 'string' && body.moduleId.trim()
+    ? body.moduleId.trim()
+    : 'petshop'
+  const tenantId = typeof body.tenantId === 'string' && body.tenantId.trim()
+    ? body.tenantId.trim()
+    : ''
+
+  if (!hasModuleAccess(requester, moduleId)) {
+    throw new HttpError(403, 'You do not have permission to search images for this module.')
+  }
+
+  if (tenantId) validateUUID(tenantId, 'tenantId')
+  if (requester.role !== 'admin') {
+    const requesterTenantId = typeof requester.active_tenant_id === 'string' ? requester.active_tenant_id : ''
+    if (!requesterTenantId) throw new HttpError(403, 'Select an active business before searching product images.')
+    if (tenantId && tenantId !== requesterTenantId) {
+      throw new HttpError(403, 'You can only search images for your active business.')
+    }
+  }
+
+  const result = await searchProductImageCandidates({
+    name: body.name,
+    barcode: body.barcode,
+    category: body.category,
+    brand: body.brand,
+    limit: body.limit,
+  })
+
+  sendJson(res, 200, result, getCorsHeaders(origin))
+}
+
 async function handleWhatsappWebhookVerify(req, res, url) {
   const challenge = await verifyWhatsappWebhookChallenge(url)
   sendText(res, 200, challenge)
@@ -640,6 +677,12 @@ const server = createServer(async (req, res) => {
       apiLimiter.consume(`api:${clientIp}`)
       chatLimiter.consume(`chat:${clientIp}`)
       await handleChatHumanMessage(req, res)
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/products/image-suggestions') {
+      apiLimiter.consume(`api:${clientIp}`)
+      await handleProductImageSuggestions(req, res)
       return
     }
 

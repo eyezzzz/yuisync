@@ -284,7 +284,7 @@ export function useChat() {
         .update({
           status: 'closed',
           closed_at: new Date().toISOString(),
-          ...(csatScore ? { csat_score: csatScore } : {}),
+          ...(csatScore !== undefined && csatScore !== null ? { csat_score: csatScore } : {}),
         })
         .eq('id', sessionId)
 
@@ -308,11 +308,6 @@ export function useChat() {
         schema: 'public',
         table: 'chat_sessions',
         filter: `module_id=eq.${activeModuleId}`,
-      }, () => loadSessions())
-      .on('postgres_changes', {
-        event: 'INSERT',
-        schema: 'public',
-        table: 'chat_messages',
       }, () => loadSessions())
       .subscribe()
   }, [activeModuleId, loadSessions])

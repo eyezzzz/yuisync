@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import {
   Package, Plus, Search, Edit2, Trash2, X, AlertTriangle,
   TrendingUp, TrendingDown, RefreshCw, AlertCircle, Check,
-  Filter, DollarSign, Ban, ShieldAlert, ArrowUpRight, Upload
+  Filter, DollarSign, Ban, ShieldAlert, ArrowUpRight, Upload,
+  Image as ImageIcon, Sparkles, ExternalLink
 } from 'lucide-react'
 import { useProducts } from '../../../shared/hooks/useProducts'
 import { fmtCurrency } from '../../../lib/supabase'
@@ -11,7 +12,7 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, normalizeCategory, resolveCategoryMeta } from '../../../shared/lib/productCategories'
-import { importLegacyRows, resetStock } from '../../../lib/api'
+import { importLegacyRows, resetStock, searchProductImages } from '../../../lib/api'
 import { parseLegacyProducts } from '../../../shared/lib/legacyImport'
 
 const BASE_CATEGORIES = [
@@ -45,17 +46,18 @@ function formatProductName(value = '') {
 const emptyForm = {
   name: '', barcode: '', category: 'Ração', description: '', price: '',
   cost_price: '', stock_quantity: '', min_stock: 1,
-  species_target: 'all', active: true,
+  species_target: 'all', image_url: '', active: true,
 }
 
 // ── Product Modal ─────────────────────────────────────────────────────────────
-function ProductModal({ product, products, onClose, onCreate, onUpdate }) {
+function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate, onUpdate }) {
   const isEdit = !!product?.id
   const [form, setForm] = useState(isEdit ? {
     name:           product.name,
     barcode:        product.barcode || '',
     category:       product.category,
     description:    product.description || '',
+    image_url:      product.image_url || '',
     price:          product.price,
     cost_price:     product.cost_price || '',
     stock_quantity: product.stock_quantity,
@@ -66,6 +68,9 @@ function ProductModal({ product, products, onClose, onCreate, onUpdate }) {
   } : { ...emptyForm, upsell_link_id: '' })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
+  const [imageSearching, setImageSearching] = useState(false)
+  const [imageSuggestions, setImageSuggestions] = useState([])
+  const [imageMessage, setImageMessage] = useState('')
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
@@ -80,6 +85,7 @@ function ProductModal({ product, products, onClose, onCreate, onUpdate }) {
         barcode:        form.barcode || null,
         category:       form.category,
         description:    form.description,
+        image_url:      form.image_url || null,
         price:          Number(form.price),
         cost_price:     Number(form.cost_price) || null,
         stock_quantity: Number(form.stock_quantity) || 0,
@@ -98,13 +104,37 @@ function ProductModal({ product, products, onClose, onCreate, onUpdate }) {
     }
   }
 
+  async function handleImageSearch() {
+    if (imageSearching || (!form.barcode && !form.name)) return
+    setImageSearching(true)
+    setImageMessage('')
+    setImageSuggestions([])
+
+    try {
+      const result = await searchProductImages({
+        name: form.name,
+        barcode: form.barcode,
+        category: form.category,
+        moduleId,
+        tenantId,
+        limit: 8,
+      })
+      setImageSuggestions(result.suggestions || [])
+      setImageMessage(result.message || (!(result.suggestions || []).length ? 'Nenhuma imagem encontrada para esse produto.' : ''))
+    } catch (e) {
+      setImageMessage(e.message || 'Nao foi possivel buscar imagens agora.')
+    } finally {
+      setImageSearching(false)
+    }
+  }
+
   const margin = form.price && form.cost_price
     ? (((Number(form.price) - Number(form.cost_price)) / Number(form.price)) * 100).toFixed(1)
     : null
 
   return createPortal(
     <div className="modal-overlay theme-petshop-modal" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box max-w-xl">
+      <div className="modal-box max-w-2xl">
         <div className="modal-header">
           <h2 className="font-display font-bold text-xl text-text">
             {isEdit ? 'Editar Produto' : 'Novo Produto'}
@@ -124,6 +154,100 @@ function ProductModal({ product, products, onClose, onCreate, onUpdate }) {
               <label className="inp-label">Código de Barras (EAN / GTIN)</label>
               <input className="inp" placeholder="Ex: 7891234567890"
                 value={form.barcode} onChange={e => set('barcode', e.target.value)}/>
+            </div>
+
+            <div className="col-span-2 rounded-2xl border border-[var(--border)] bg-white/[0.03] p-4">
+              <div className="flex flex-col gap-3 md:flex-row md:items-start">
+                <div className="h-24 w-24 flex-shrink-0 overflow-hidden rounded-xl border border-white/10 bg-black/10 flex items-center justify-center">
+                  {form.image_url ? (
+                    <img src={form.image_url} alt="Imagem do produto" className="h-full w-full object-cover"/>
+                  ) : (
+                    <ImageIcon size={28} className="text-muted/60"/>
+                  )}
+                </div>
+                <div className="min-w-0 flex-1 space-y-3">
+                  <div>
+                    <label className="inp-label">Imagem do produto</label>
+                    <input
+                      className="inp"
+                      placeholder="Cole uma URL aprovada ou busque por EAN/nome"
+                      value={form.image_url}
+                      onChange={e => set('image_url', e.target.value)}
+                    />
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={handleImageSearch}
+                      disabled={imageSearching || (!form.barcode && !form.name)}
+                      className="btn btn-secondary btn-sm gap-2"
+                    >
+                      {imageSearching ? <RefreshCw size={14} className="animate-spin"/> : <Sparkles size={14}/>}
+                      {imageSearching ? 'Buscando...' : 'Buscar imagens'}
+                    </button>
+                    {form.image_url && (
+                      <button
+                        type="button"
+                        onClick={() => set('image_url', '')}
+                        className="btn btn-ghost btn-sm"
+                      >
+                        Remover imagem
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-[11px] leading-relaxed text-muted">
+                    A imagem salva aqui e a unica que o PetBot pode enviar ao cliente.
+                  </p>
+                </div>
+              </div>
+
+              {imageMessage && (
+                <p className="mt-3 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-muted">
+                  {imageMessage}
+                </p>
+              )}
+
+              {imageSuggestions.length > 0 && (
+                <div className="mt-4 grid grid-cols-2 gap-3 md:grid-cols-4">
+                  {imageSuggestions.map((item, index) => (
+                    <button
+                      type="button"
+                      key={`${item.imageUrl}-${index}`}
+                      onClick={() => set('image_url', item.imageUrl)}
+                      className={`group overflow-hidden rounded-xl border bg-black/10 text-left transition-all hover:border-primary/60 ${
+                        form.image_url === item.imageUrl ? 'border-primary' : 'border-white/10'
+                      }`}
+                      title={item.title || 'Selecionar imagem'}
+                    >
+                      <div className="aspect-square bg-black/20">
+                        <img
+                          src={item.thumbnailUrl || item.imageUrl}
+                          alt={item.title || 'Sugestao de imagem'}
+                          className="h-full w-full object-cover transition-transform group-hover:scale-105"
+                          loading="lazy"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between gap-2 px-2 py-2">
+                        <span className="truncate text-[10px] font-semibold text-muted">
+                          {item.title || 'Imagem sugerida'}
+                        </span>
+                        {item.sourceUrl && (
+                          <a
+                            href={item.sourceUrl}
+                            target="_blank"
+                            rel="noreferrer"
+                            onClick={(event) => event.stopPropagation()}
+                            className="text-muted hover:text-text"
+                            title="Abrir origem"
+                          >
+                            <ExternalLink size={12}/>
+                          </a>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>
@@ -786,13 +910,25 @@ export default function EstoquePage() {
                   return (
                     <tr key={p.id} className={!p.active ? 'opacity-50' : ''}>
                       <td>
-                        <p className="font-semibold text-text truncate" title={p.name}>{formatProductName(p.name)}</p>
-                        {p.upsell_product && (
-                          <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1 min-w-0">
-                            <ArrowUpRight size={10} className="flex-shrink-0"/> <span className="truncate">{formatProductName(p.upsell_product.name)}</span>
-                          </p>
-                        )}
-                        {!p.active && <span className="badge badge-gray text-[10px] mt-0.5">Inativo</span>}
+                        <div className="flex min-w-0 items-center gap-3">
+                          <div className="h-11 w-11 flex-shrink-0 overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] flex items-center justify-center">
+                            {p.image_url ? (
+                              <img src={p.image_url} alt={p.name} className="h-full w-full object-cover"/>
+                            ) : (
+                              <ImageIcon size={17} className="text-muted/50"/>
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-semibold text-text truncate" title={p.name}>{formatProductName(p.name)}</p>
+                            {p.upsell_product && (
+                              <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1 min-w-0">
+                                <ArrowUpRight size={10} className="flex-shrink-0"/> <span className="truncate">{formatProductName(p.upsell_product.name)}</span>
+                              </p>
+                            )}
+                            {!p.image_url && <span className="badge badge-gray text-[10px] mt-1">Sem foto</span>}
+                            {!p.active && <span className="badge badge-gray text-[10px] mt-1">Inativo</span>}
+                          </div>
+                        </div>
                       </td>
                       <td>
                         {(() => {
@@ -889,6 +1025,8 @@ export default function EstoquePage() {
         <ProductModal
           product={modal?.id ? modal : null}
           products={products}
+          moduleId={activeModuleId}
+          tenantId={auth?.activeTenantId}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}

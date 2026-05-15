@@ -348,6 +348,7 @@ function buildStockContext(products) {
       `CAT: ${product.category || 'Sem categoria'}`,
       `PRECO: R$ ${Number(product.price || 0).toFixed(2)}`,
       `QTD: ${product.stock_quantity}`,
+      `FOTO: ${product.image_url ? 'sim' : 'nao'}`,
     ].join(' | '))
     .join('\n')
 }
@@ -439,6 +440,86 @@ function selectRelevantProducts(products, message) {
       return String(a?.name || '').localeCompare(String(b?.name || ''), 'pt-BR')
     })
     .slice(0, PRODUCT_CONTEXT_LIMIT)
+}
+
+function expandDbSearchTerms(terms = []) {
+  const extras = {
+    racao: ['racao', 'ração'],
+    caes: ['caes', 'cães'],
+    cao: ['cao', 'cão'],
+    sache: ['sache', 'sachê'],
+    higienica: ['higienica', 'higiênica'],
+  }
+  return [...new Set((terms || []).flatMap((term) => extras[term] || [term]))].slice(0, 10)
+}
+
+function mergeProductsById(...lists) {
+  const map = new Map()
+  for (const list of lists) {
+    for (const product of list || []) {
+      if (product?.id && !map.has(String(product.id))) map.set(String(product.id), product)
+    }
+  }
+  return [...map.values()]
+}
+
+async function searchProductsByTerms(supabase, moduleId, tenantId, terms, selectColumns) {
+  const dbTerms = expandDbSearchTerms(terms)
+  if (!dbTerms.length) return []
+
+  const orFilter = dbTerms
+    .flatMap((term) => ['name', 'category', 'description', 'barcode'].map((column) => `${column}.ilike.%${term}%`))
+    .join(',')
+
+  let query = supabase
+    .from('products')
+    .select(selectColumns)
+    .eq('module_id', moduleId)
+    .eq('active', true)
+    .gt('stock_quantity', 0)
+    .or(orFilter)
+    .limit(120)
+
+  if (tenantId) query = query.eq('tenant_id', tenantId)
+
+  const { data, error } = await query
+  if (error) {
+    if (tenantId && isMissingTenantColumnError(error)) {
+      throw new HttpError(500, 'Tenant isolation is not enabled in products table.')
+    }
+    throw new HttpError(500, 'Unable to search product context.')
+  }
+  return data || []
+}
+
+async function loadUpsellProducts(supabase, moduleId, tenantId, selectColumns) {
+  let query = supabase
+    .from('products')
+    .select(selectColumns)
+    .eq('module_id', moduleId)
+    .eq('active', true)
+    .gt('stock_quantity', 0)
+    .or([
+      'name.ilike.%petisco%',
+      'name.ilike.%bifinho%',
+      'name.ilike.%dental%',
+      'name.ilike.%ossinho%',
+      'name.ilike.%sache%',
+      'name.ilike.%sachê%',
+      'name.ilike.%areia%',
+      'name.ilike.%shampoo%',
+      'category.ilike.%petisco%',
+      'category.ilike.%sache%',
+      'category.ilike.%sachê%',
+      'category.ilike.%higien%',
+    ].join(','))
+    .limit(40)
+
+  if (tenantId) query = query.eq('tenant_id', tenantId)
+
+  const { data, error } = await query
+  if (error) return []
+  return data || []
 }
 
 function buildAppointmentsContext(appointments) {
@@ -617,7 +698,18 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
-  const selectColumns = 'id, name, category, description, species_target, price, stock_quantity, active'
+  const selectColumns = 'id, name, category, description, species_target, image_url, price, stock_quantity, active'
+  const terms = buildSearchTerms(message)
+  if (terms.length > 0) {
+    const [searchedProducts, upsellProducts] = await Promise.all([
+      searchProductsByTerms(supabase, moduleId, tenantId, terms, selectColumns),
+      loadUpsellProducts(supabase, moduleId, tenantId, selectColumns),
+    ])
+    const selected = selectRelevantProducts(searchedProducts, message)
+    if (selected.length > 0) return mergeProductsById(selected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
+    return []
+  }
+
   const catalog = await cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
     let query = supabase
       .from('products')
@@ -644,7 +736,6 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
 
   const selected = selectRelevantProducts(catalog || [], message)
   if (selected.length > 0) return selected.slice(0, PRODUCT_CONTEXT_LIMIT)
-  if (buildSearchTerms(message).length > 0) return []
   return (catalog || []).slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
@@ -1169,6 +1260,66 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   }
 }
 
+function buildPetbotOrderTransactionPayload(session, customer, settings, args = {}) {
+  return {
+    session_id: session.id,
+    tenant_id: session.tenant_id,
+    module_id: session.module_id,
+    client_id: customer.client?.id || null,
+    customer_name: cleanText(args.customer_name) || cleanText(customer.client?.name) || session.customer_name || 'Cliente',
+    customer_phone: customer.phone || session.customer_phone || null,
+    order_type: cleanText(args.order_type) || 'produto',
+    payment_method: cleanText(args.payment_method),
+    fulfillment_type: cleanText(args.fulfillment_type),
+    delivery_address: cleanText(args.delivery_address),
+    delivery_neighborhood: cleanText(args.delivery_neighborhood),
+    delivery_city: cleanText(args.delivery_city),
+    delivery_reference: cleanText(args.delivery_reference),
+    delivery_fee: Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE),
+    expected_total: Number(args.total || 0),
+    appointment_id: cleanText(args.appointment_id),
+    scheduled_at: cleanText(args.scheduled_at),
+    service_type: cleanText(args.service_type),
+    change_for: Number(args.change_for || 0),
+    notes: cleanText(args.notes),
+    items: Array.isArray(args.items) ? args.items : [],
+  }
+}
+
+async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, args = {}) {
+  const sessionContext = parseJsonObject(session.context)
+  if (sessionContext.last_sale_id) {
+    return {
+      sale_id: sessionContext.last_sale_id,
+      order_id: sessionContext.last_order_id || null,
+      appointment_id: sessionContext.last_appointment_id || null,
+      total: Number(sessionContext.last_total || 0),
+      duplicated: true,
+    }
+  }
+
+  const customer = await ensureCustomerProfile(supabase, session, args)
+  const payload = buildPetbotOrderTransactionPayload(session, customer, settings, args)
+  if (!payload.items.length) throw new Error('Pedido sem itens para registrar.')
+  if (!['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)) {
+    throw new Error('Forma de pagamento ausente ou invalida.')
+  }
+
+  const { data, error } = await supabase.rpc('create_petbot_order_transaction', {
+    p_payload: payload,
+  })
+
+  if (error) throw new Error(`Falha ao registrar pedido transacional: ${error.message}`)
+
+  return {
+    sale_id: cleanText(data?.sale_id),
+    order_id: cleanText(data?.order_id) || null,
+    appointment_id: cleanText(data?.appointment_id) || null,
+    total: Number(data?.total || payload.expected_total || 0),
+    duplicated: Boolean(data?.duplicated),
+  }
+}
+
 async function executePetbotTool(supabase, session, settings, toolCall) {
   const name = toolCall?.function?.name
   let args = {}
@@ -1189,7 +1340,7 @@ async function executePetbotTool(supabase, session, settings, toolCall) {
   }
 
   if (name === 'create_confirmed_petshop_order') {
-    const result = await createConfirmedPetshopOrder(supabase, session, settings, args)
+    const result = await createConfirmedPetshopOrderViaRpc(supabase, session, settings, args)
     return {
       ok: true,
       action: name,
@@ -1482,10 +1633,12 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   let reply = guard.reply?.trim()
   let state = guard.state
   let orderResult = null
+  const mediaMessages = Array.isArray(guard.mediaMessages) ? guard.mediaMessages : []
+  const primaryImage = mediaMessages.find((item) => item?.type === 'image' && item.imageUrl)
 
   if (guard.shouldSaveOrder) {
     try {
-      orderResult = await createConfirmedPetshopOrder(supabase, session, storeSettings, guard.orderArgs)
+      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, session, storeSettings, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
       reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
     } catch (error) {
@@ -1513,6 +1666,10 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       metadata: {
         source: options.source || 'dashboard_simulation',
         ...(options.assistantMetadata || {}),
+        ...(primaryImage ? {
+          image_url: primaryImage.imageUrl,
+          media_attachments: mediaMessages,
+        } : {}),
         petbot_guard: {
           version: state?.version || 1,
           intent: guard.intent,

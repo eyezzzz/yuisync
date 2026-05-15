@@ -12,8 +12,10 @@ import {
 
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
+const DEFAULT_OPENAI_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe'
 const DEFAULT_OPENAI_TIMEOUT_MS = 12_000
-const DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 8_000
+const DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 0
+const MAX_BLOCKING_WHATSAPP_REPLY_DEBOUNCE_MS = 1_500
 const GRAPH_BASE_URL = 'https://graph.facebook.com'
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 const MAX_WHATSAPP_TEXT_CHARS = 4096
@@ -220,6 +222,8 @@ type WebhookEnv = {
   supabaseServiceRoleKey: string
   openAiApiKey: string
   openAiModel: string
+  openAiTranscriptionModel: string
+  openAiVisionModel: string
   openAiTimeoutMs: number
   whatsappAccessToken: string
   whatsappVerifyToken: string
@@ -240,6 +244,8 @@ type WhatsappEvent = {
   text: string
   isSupportedText: boolean
   profileName: string
+  media?: LooseRecord | null
+  mediaProcessing?: LooseRecord | null
 }
 
 type ChatSession = {
@@ -403,6 +409,8 @@ function getWebhookEnv(): WebhookEnv {
     supabaseServiceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
     openAiApiKey: requireEnv('OPENAI_API_KEY'),
     openAiModel: optionalEnv('OPENAI_MODEL', DEFAULT_OPENAI_MODEL),
+    openAiTranscriptionModel: optionalEnv('OPENAI_TRANSCRIPTION_MODEL', DEFAULT_OPENAI_TRANSCRIPTION_MODEL),
+    openAiVisionModel: optionalEnv('OPENAI_VISION_MODEL', optionalEnv('OPENAI_MODEL', DEFAULT_OPENAI_MODEL)),
     openAiTimeoutMs: parsePositiveInt(optionalEnv('OPENAI_TIMEOUT_MS'), DEFAULT_OPENAI_TIMEOUT_MS),
     whatsappAccessToken: requireEnv('WHATSAPP_ACCESS_TOKEN'),
     whatsappVerifyToken: requireEnv('WHATSAPP_VERIFY_TOKEN'),
@@ -411,9 +419,9 @@ function getWebhookEnv(): WebhookEnv {
     whatsappGraphVersion: optionalEnv('WHATSAPP_GRAPH_VERSION', 'v25.0').replace(/^\/+/, ''),
     whatsappTenantId: optionalEnv('WHATSAPP_TENANT_ID'),
     whatsappModuleId: optionalEnv('WHATSAPP_MODULE_ID', DEFAULT_MODULE_ID).toLowerCase(),
-    whatsappReplyDebounceMs: parseNonNegativeInt(
-      optionalEnv('WHATSAPP_REPLY_DEBOUNCE_MS'),
-      DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS,
+    whatsappReplyDebounceMs: Math.min(
+      parseNonNegativeInt(optionalEnv('WHATSAPP_REPLY_DEBOUNCE_MS'), DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS),
+      MAX_BLOCKING_WHATSAPP_REPLY_DEBOUNCE_MS,
     ),
   }
 }
@@ -471,6 +479,21 @@ function extractMessageText(message: LooseRecord): string {
   )
 }
 
+function extractMessageMedia(message: LooseRecord): LooseRecord | null {
+  const type = clean(message.type)
+  const media = record(message[type])
+  const id = clean(media.id)
+  if (!id) return null
+
+  return {
+    id,
+    type,
+    mime_type: clean(media.mime_type),
+    sha256: clean(media.sha256),
+    caption: clean(media.caption),
+  }
+}
+
 function extractWhatsappEvents(body: unknown): WhatsappEvent[] {
   const events: WhatsappEvent[] = []
 
@@ -507,6 +530,8 @@ function extractWhatsappEvents(body: unknown): WhatsappEvent[] {
           text,
           isSupportedText: Boolean(text),
           profileName: clean(profile.name) || 'Cliente WhatsApp',
+          media: extractMessageMedia(message),
+          mediaProcessing: null,
         })
       }
     }
@@ -713,6 +738,141 @@ async function hasAssistantReply(
   return Boolean(data?.length)
 }
 
+function mediaExtension(mimeType = '', fallback = 'bin') {
+  const lower = clean(mimeType).toLowerCase()
+  if (lower.includes('ogg')) return 'ogg'
+  if (lower.includes('mpeg') || lower.includes('mp3')) return 'mp3'
+  if (lower.includes('mp4')) return 'mp4'
+  if (lower.includes('jpeg') || lower.includes('jpg')) return 'jpg'
+  if (lower.includes('png')) return 'png'
+  if (lower.includes('webp')) return 'webp'
+  return fallback
+}
+
+async function downloadWhatsappMedia(env: WebhookEnv, mediaId: string) {
+  const infoUrl = `${GRAPH_BASE_URL}/${env.whatsappGraphVersion}/${encodeURIComponent(mediaId)}`
+  const infoResponse = await fetch(infoUrl, {
+    headers: { Authorization: `Bearer ${env.whatsappAccessToken}` },
+  })
+  const info = await infoResponse.json().catch(() => ({})) as LooseRecord
+  if (!infoResponse.ok || !clean(info.url)) {
+    const detail = clean(record(info.error).message) || `HTTP ${infoResponse.status}`
+    fail(502, `Unable to load WhatsApp media info: ${detail}`)
+  }
+
+  const mediaResponse = await fetch(clean(info.url), {
+    headers: { Authorization: `Bearer ${env.whatsappAccessToken}` },
+  })
+  if (!mediaResponse.ok) fail(502, `Unable to download WhatsApp media: HTTP ${mediaResponse.status}`)
+
+  const arrayBuffer = await mediaResponse.arrayBuffer()
+  const mimeType = clean(mediaResponse.headers.get('content-type')) || clean(info.mime_type)
+  return { bytes: Buffer.from(arrayBuffer), mimeType }
+}
+
+async function transcribeWhatsappAudio(env: WebhookEnv, media: LooseRecord) {
+  const downloaded = await downloadWhatsappMedia(env, clean(media.id))
+  const form = new FormData()
+  const file = new Blob([downloaded.bytes], { type: downloaded.mimeType || 'audio/ogg' })
+  form.append('model', env.openAiTranscriptionModel)
+  form.append('file', file, `whatsapp-audio.${mediaExtension(downloaded.mimeType, 'ogg')}`)
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${env.openAiApiKey}` },
+    body: form,
+  })
+  const payload = await response.json().catch(() => ({})) as LooseRecord
+  if (!response.ok) {
+    const detail = clean(record(payload.error).message) || `HTTP ${response.status}`
+    fail(502, `Unable to transcribe WhatsApp audio: ${detail}`)
+  }
+
+  return clean(payload.text)
+}
+
+async function describeWhatsappImage(env: WebhookEnv, media: LooseRecord, caption = '') {
+  const downloaded = await downloadWhatsappMedia(env, clean(media.id))
+  const mimeType = downloaded.mimeType || clean(media.mime_type) || 'image/jpeg'
+  const dataUrl = `data:${mimeType};base64,${downloaded.bytes.toString('base64')}`
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.openAiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: env.openAiVisionModel,
+      temperature: 0,
+      max_tokens: 180,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Voce descreve imagens recebidas por WhatsApp para um bot de petshop.',
+            'Se for embalagem/produto, extraia marca, linha, peso, sabor e especie quando visivel.',
+            'Se parecer ferimento, sangue, emergencia ou problema veterinario sensivel, responda exatamente com VETERINARY_IMAGE_REQUIRES_HUMAN e uma descricao curta.',
+            'Nao diagnostique animal e nao invente texto ilegivel.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Legenda do cliente: ${caption || 'sem legenda'}` },
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+          ],
+        },
+      ],
+    }),
+  })
+  const payload = await response.json().catch(() => ({})) as LooseRecord
+  if (!response.ok) {
+    const detail = clean(record(payload.error).message) || `HTTP ${response.status}`
+    fail(502, `Unable to describe WhatsApp image: ${detail}`)
+  }
+
+  return clean(payload.choices?.[0]?.message?.content)
+}
+
+function canProcessWhatsappMedia(event: WhatsappEvent) {
+  return Boolean(event.media?.id) && ['audio', 'voice', 'image'].includes(clean(event.type))
+}
+
+async function resolveWhatsappMediaText(env: WebhookEnv, event: WhatsappEvent) {
+  const media = event.media || {}
+  const type = clean(event.type)
+  const caption = clean(media.caption) || clean(event.text)
+
+  if (type === 'audio' || type === 'voice') {
+    const transcript = await transcribeWhatsappAudio(env, media)
+    if (!transcript) return null
+    return {
+      text: transcript,
+      metadata: { media_processed: true, media_processing: 'audio_transcription' },
+    }
+  }
+
+  if (type === 'image') {
+    const description = await describeWhatsappImage(env, media, caption)
+    if (!description) return null
+    const requiresHuman = description.includes('VETERINARY_IMAGE_REQUIRES_HUMAN')
+    const cleanDescription = description.replace('VETERINARY_IMAGE_REQUIRES_HUMAN', '').trim()
+    return {
+      text: requiresHuman
+        ? `quero falar com humano. Imagem veterinaria sensivel: ${cleanDescription || 'imagem recebida'}`
+        : [caption, `Imagem recebida: ${cleanDescription}`].filter(Boolean).join('\n'),
+      metadata: {
+        media_processed: true,
+        media_processing: 'image_description',
+        image_requires_human: requiresHuman,
+      },
+    }
+  }
+
+  return null
+}
+
 async function saveIncomingMessage(
   supabase: SupabaseClient,
   sessionId: string,
@@ -736,6 +896,8 @@ async function saveIncomingMessage(
         whatsapp_phone_number_id: event.phoneNumberId,
         whatsapp_type: event.type,
         whatsapp_timestamp: event.timestamp || null,
+        whatsapp_media: event.media || null,
+        ...(event.mediaProcessing || {}),
       },
     })
     .select('id, role, content, metadata, tokens_used, sent_at')
@@ -898,6 +1060,85 @@ function selectRelevantProducts(products: LooseRecord[] | null | undefined, late
     .slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
+function expandDbSearchTerms(terms: string[] = []): string[] {
+  const extras: Record<string, string[]> = {
+    racao: ['racao', 'ração'],
+    caes: ['caes', 'cães'],
+    cao: ['cao', 'cão'],
+    sache: ['sache', 'sachê'],
+    higienica: ['higienica', 'higiênica'],
+  }
+  return [...new Set((terms || []).flatMap((term) => extras[term] || [term]))].slice(0, 10)
+}
+
+function mergeProductsById(...lists: LooseRecord[][]): LooseRecord[] {
+  const map = new Map<string, LooseRecord>()
+  for (const list of lists) {
+    for (const product of list || []) {
+      const id = clean(product?.id)
+      if (id && !map.has(id)) map.set(id, product)
+    }
+  }
+  return [...map.values()]
+}
+
+async function searchProductsByTerms(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  terms: string[],
+): Promise<LooseRecord[]> {
+  const dbTerms = expandDbSearchTerms(terms)
+  if (!dbTerms.length) return []
+
+  const orFilter = dbTerms
+    .flatMap((term) => ['name', 'category', 'description', 'barcode'].map((column) => `${column}.ilike.%${term}%`))
+    .join(',')
+
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
+    .eq('tenant_id', session.tenant_id)
+    .eq('module_id', session.module_id)
+    .eq('active', true)
+    .gt('stock_quantity', 0)
+    .or(orFilter)
+    .limit(120)
+
+  if (error) return []
+  return (data || []) as LooseRecord[]
+}
+
+async function loadUpsellProducts(
+  supabase: SupabaseClient,
+  session: ChatSession,
+): Promise<LooseRecord[]> {
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
+    .eq('tenant_id', session.tenant_id)
+    .eq('module_id', session.module_id)
+    .eq('active', true)
+    .gt('stock_quantity', 0)
+    .or([
+      'name.ilike.%petisco%',
+      'name.ilike.%bifinho%',
+      'name.ilike.%dental%',
+      'name.ilike.%ossinho%',
+      'name.ilike.%sache%',
+      'name.ilike.%sachê%',
+      'name.ilike.%areia%',
+      'name.ilike.%shampoo%',
+      'category.ilike.%petisco%',
+      'category.ilike.%sache%',
+      'category.ilike.%sachê%',
+      'category.ilike.%higien%',
+    ].join(','))
+    .limit(40)
+
+  if (error) return []
+  return (data || []) as LooseRecord[]
+}
+
 function buildProductsContext(products: LooseRecord[] | null | undefined): string {
   const available = (products || []).filter(isSellableProduct)
   if (!available.length) return 'Nenhum produto disponivel confirmado no cadastro para esta busca.'
@@ -908,6 +1149,7 @@ function buildProductsContext(products: LooseRecord[] | null | undefined): strin
       `Categoria: ${clean(product.category) || 'sem categoria'}`,
       `Preco: R$ ${Number(product.price || 0).toFixed(2)}`,
       `Estoque: ${Number(product.stock_quantity || 0)}`,
+      `Foto: ${clean(product.image_url) ? 'sim' : 'nao'}`,
     ].join(' | '))
     .join('\n')
     .slice(0, 6000)
@@ -1442,6 +1684,77 @@ async function createConfirmedPetshopOrder(
   }
 }
 
+function buildPetbotOrderTransactionPayload(
+  session: ChatSession,
+  customer: { client?: LooseRecord | null; phone?: string | null },
+  context: StoreContext,
+  args: LooseRecord = {},
+) {
+  return {
+    session_id: session.id,
+    tenant_id: session.tenant_id,
+    module_id: session.module_id,
+    client_id: customer.client?.id || null,
+    customer_name: clean(args.customer_name) || clean(customer.client?.name) || session.customer_name || 'Cliente',
+    customer_phone: customer.phone || session.customer_phone || null,
+    order_type: clean(args.order_type) || 'produto',
+    payment_method: clean(args.payment_method),
+    fulfillment_type: clean(args.fulfillment_type),
+    delivery_address: clean(args.delivery_address),
+    delivery_neighborhood: clean(args.delivery_neighborhood),
+    delivery_city: clean(args.delivery_city),
+    delivery_reference: clean(args.delivery_reference),
+    delivery_fee: Number(context.deliveryFee ?? DEFAULT_DELIVERY_FEE),
+    expected_total: Number(args.total || 0),
+    appointment_id: clean(args.appointment_id),
+    scheduled_at: clean(args.scheduled_at),
+    service_type: clean(args.service_type),
+    change_for: Number(args.change_for || 0),
+    notes: clean(args.notes),
+    items: Array.isArray(args.items) ? args.items : [],
+  }
+}
+
+async function createConfirmedPetshopOrderViaRpc(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  context: StoreContext,
+  args: LooseRecord = {},
+) {
+  const sessionContext = parseJsonObject(session.context)
+  if (sessionContext.last_sale_id) {
+    return {
+      sale_id: sessionContext.last_sale_id,
+      order_id: sessionContext.last_order_id || null,
+      appointment_id: sessionContext.last_appointment_id || null,
+      total: Number(sessionContext.last_total || 0),
+      duplicated: true,
+    }
+  }
+
+  const customer = await ensureCustomerProfile(supabase, session, args)
+  const payload = buildPetbotOrderTransactionPayload(session, customer, context, args)
+  if (!payload.items.length) throw new Error('Pedido sem itens para registrar.')
+  if (!['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)) {
+    throw new Error('Forma de pagamento ausente ou invalida.')
+  }
+
+  const { data, error } = await supabase.rpc('create_petbot_order_transaction', {
+    p_payload: payload,
+  })
+
+  if (error) throw new Error(`Falha ao registrar pedido transacional: ${error.message}`)
+
+  const result = record(data)
+  return {
+    sale_id: clean(result.sale_id),
+    order_id: clean(result.order_id) || null,
+    appointment_id: clean(result.appointment_id) || null,
+    total: Number(result.total || payload.expected_total || 0),
+    duplicated: Boolean(result.duplicated),
+  }
+}
+
 async function executePetbotTool(
   supabase: SupabaseClient,
   session: ChatSession,
@@ -1470,7 +1783,7 @@ async function executePetbotTool(
     return {
       ok: true,
       action: name,
-      ...await createConfirmedPetshopOrder(supabase, session, context, args),
+      ...await createConfirmedPetshopOrderViaRpc(supabase, session, context, args),
     }
   }
 
@@ -1574,7 +1887,7 @@ async function loadStoreContext(
   const terms = buildSearchTerms(catalogSearchText)
   const cacheKey = scopeCacheKey(session.module_id, session.tenant_id)
 
-  const [settings, productRows, appointments] = await Promise.all([
+  const [settings, productRows, appointments, searchedProducts, upsellProducts] = await Promise.all([
     cachedLoad(settingsCache, cacheKey, STORE_CONTEXT_CACHE_MS, async () => {
       const { data } = await supabase
         .from('settings')
@@ -1584,10 +1897,10 @@ async function loadStoreContext(
         .maybeSingle()
       return (data || {}) as LooseRecord
     }),
-    cachedLoad(productCatalogCache, cacheKey, PRODUCT_CATALOG_CACHE_MS, async () => {
+    terms.length > 0 ? Promise.resolve([]) : cachedLoad(productCatalogCache, cacheKey, PRODUCT_CATALOG_CACHE_MS, async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('id, name, category, description, species_target, price, stock_quantity, active')
+          .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
         .eq('tenant_id', session.tenant_id)
         .eq('module_id', session.module_id)
         .eq('active', true)
@@ -1609,11 +1922,13 @@ async function loadStoreContext(
       if (error) return []
       return (data || []) as LooseRecord[]
     }),
+    terms.length > 0 ? searchProductsByTerms(supabase, session, terms) : Promise.resolve([]),
+    terms.length > 0 ? loadUpsellProducts(supabase, session) : Promise.resolve([]),
   ])
 
-  const selectedProducts = selectRelevantProducts(productRows, catalogSearchText)
+  const selectedProducts = selectRelevantProducts(terms.length > 0 ? searchedProducts : productRows, catalogSearchText)
   const productsForGuard = selectedProducts.length > 0
-    ? selectedProducts
+    ? mergeProductsById(selectedProducts, upsellProducts)
     : (terms.length > 0 ? [] : productRows.slice(0, PRODUCT_CONTEXT_LIMIT))
 
   return {
@@ -1932,16 +2247,23 @@ async function updateMessageMetadata(supabase: SupabaseClient, message: SavedMes
 
 async function sendWhatsappText(env: WebhookEnv, event: WhatsappEvent, message: SavedMessage) {
   const text = clean(message.content).slice(0, MAX_WHATSAPP_TEXT_CHARS)
-  if (!event.from || !text) fail(400, 'WhatsApp recipient and text are required.')
+  const imageUrl = clean(record(message.metadata).image_url)
+  if (!event.from || (!text && !imageUrl)) fail(400, 'WhatsApp recipient and message are required.')
 
   const url = `${GRAPH_BASE_URL}/${env.whatsappGraphVersion}/${encodeURIComponent(env.whatsappPhoneNumberId)}/messages`
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${env.whatsappAccessToken}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
+  const body = imageUrl
+    ? {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: event.from,
+      type: 'image',
+      context: event.messageId ? { message_id: event.messageId } : undefined,
+      image: {
+        link: imageUrl,
+        caption: text.slice(0, 1024),
+      },
+    }
+    : {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to: event.from,
@@ -1951,7 +2273,15 @@ async function sendWhatsappText(env: WebhookEnv, event: WhatsappEvent, message: 
         preview_url: false,
         body: text,
       },
-    }),
+    }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${env.whatsappAccessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(body),
   })
 
   const payload = await response.json().catch(() => ({})) as LooseRecord
@@ -1971,13 +2301,14 @@ async function sendAndMarkDelivered(
 ) {
   try {
     const delivery = await sendWhatsappText(env, event, message)
-    await updateMessageMetadata(supabase, message, {
-      ...(message.metadata || {}),
-      channel: 'whatsapp',
-      delivery_status: 'sent',
-      whatsapp_outbound_message_id: delivery.messages?.[0]?.id || null,
-      whatsapp_delivery_payload: delivery,
-    })
+      await updateMessageMetadata(supabase, message, {
+        ...(message.metadata || {}),
+        channel: 'whatsapp',
+        delivery_status: 'sent',
+        whatsapp_outbound_type: message.metadata?.image_url ? 'image' : 'text',
+        whatsapp_outbound_message_id: delivery.messages?.[0]?.id || null,
+        whatsapp_delivery_payload: delivery,
+      })
   } catch (error) {
     await updateMessageMetadata(supabase, message, {
       ...(message.metadata || {}),
@@ -2002,6 +2333,22 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   const existingIncoming = await findIncomingMessage(supabase, session.id, event.messageId)
   if (existingIncoming) {
     return { sessionId: session.id, duplicate: true }
+  }
+
+  if (!event.isSupportedText && canProcessWhatsappMedia(event)) {
+    try {
+      const resolved = await resolveWhatsappMediaText(env, event)
+      if (resolved?.text) {
+        event.text = resolved.text
+        event.isSupportedText = true
+        event.mediaProcessing = resolved.metadata
+      }
+    } catch (error) {
+      event.mediaProcessing = {
+        media_processed: false,
+        media_processing_error: error instanceof Error ? error.message : 'Unknown media processing error.',
+      }
+    }
   }
 
   const incomingContent = event.isSupportedText
@@ -2066,10 +2413,12 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   let reply = clean(guard.reply)
   let state = guard.state
   let orderResult: LooseRecord | null = null
+  const mediaMessages = Array.isArray(guard.mediaMessages) ? guard.mediaMessages : []
+  const primaryImage = mediaMessages.find((item: LooseRecord) => item?.type === 'image' && item.imageUrl)
 
   if (guard.shouldSaveOrder) {
     try {
-      orderResult = await createConfirmedPetshopOrder(supabase, session, context, guard.orderArgs)
+      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, session, context, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
       reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
     } catch (error) {
@@ -2102,6 +2451,10 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     .eq('id', session.id)
 
   const savedReply = await saveAssistantMessage(supabase, session.id, event, reply, 0, {
+    ...(primaryImage ? {
+      image_url: primaryImage.imageUrl,
+      media_attachments: mediaMessages,
+    } : {}),
     petbot_guard: {
       version: state?.version || 1,
       intent: guard.intent,

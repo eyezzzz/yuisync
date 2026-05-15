@@ -46,6 +46,8 @@ export const serverEnv = {
   supabaseServiceRoleKey: requireEnv('SUPABASE_SERVICE_ROLE_KEY'),
   openAiApiKey: requireEnv('OPENAI_API_KEY'),
   openAiModel: optionalEnv('OPENAI_MODEL', 'gpt-4o-mini'),
+  openAiTranscriptionModel: optionalEnv('OPENAI_TRANSCRIPTION_MODEL', 'gpt-4o-mini-transcribe'),
+  openAiVisionModel: optionalEnv('OPENAI_VISION_MODEL', optionalEnv('OPENAI_MODEL', 'gpt-4o-mini')),
   openAiTimeoutMs: parseNumber('OPENAI_TIMEOUT_MS', 30000),
   focusNfeToken: optionalEnv('FOCUS_NFE_TOKEN'),
   focusNfeProdBaseUrl: optionalEnv('FOCUS_NFE_PROD_URL', 'https://api.focusnfe.com.br'),

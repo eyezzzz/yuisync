@@ -24,13 +24,19 @@ SUPABASE_SERVICE_ROLE_KEY=
 
 OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4o-mini
+OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
+OPENAI_VISION_MODEL=gpt-4o-mini
 OPENAI_TIMEOUT_MS=12000
+
+GOOGLE_IMAGE_SEARCH_API_KEY=
+GOOGLE_IMAGE_SEARCH_CX=
 
 WHATSAPP_ACCESS_TOKEN=
 WHATSAPP_VERIFY_TOKEN=
 WHATSAPP_PHONE_NUMBER_ID=
 WHATSAPP_APP_SECRET=
 WHATSAPP_GRAPH_VERSION=v25.0
+WHATSAPP_REPLY_DEBOUNCE_MS=0
 WHATSAPP_TENANT_ID=
 WHATSAPP_MODULE_ID=petshop
 ```
@@ -39,6 +45,7 @@ Notas:
 - Nunca coloque `SUPABASE_SERVICE_ROLE_KEY`, `OPENAI_API_KEY` ou token do WhatsApp em variaveis `VITE_*`.
 - Se existir mais de um tenant no Supabase, preencha `WHATSAPP_TENANT_ID`.
 - `WHATSAPP_APP_SECRET` e recomendado para validar a assinatura `x-hub-signature-256` da Meta.
+- Mantenha `WHATSAPP_REPLY_DEBOUNCE_MS=0` na Vercel. Valores maiores sao limitados pelo backend para evitar timeout do webhook.
 
 ## 3. URL do Webhook na Meta
 
@@ -60,6 +67,13 @@ No painel da Meta:
 - Assine o campo `messages` do WhatsApp Business Account.
 
 ## 4. Supabase
+
+Antes de liberar o WhatsApp real, aplique tambem:
+
+```sql
+-- SQL Editor
+-- database/petbot_order_transaction_rpc.sql
+```
 
 Confirme no SQL Editor:
 

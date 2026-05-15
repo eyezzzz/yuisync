@@ -57,6 +57,7 @@ const URGENCY_HINTS = ['vomit', 'sangr', 'veneno', 'intoxic', 'convuls', 'falta 
 const DISCOUNT_HINTS = ['desconto', 'abaixa', 'barato', 'mais em conta', 'melhor preco', 'melhor preço']
 const HUMAN_HINTS = ['atendente', 'humano', 'pessoa', 'equipe', 'gerente', 'falar com alguem', 'falar com alguém', 'me liga', 'ligacao', 'ligação']
 const CRITICAL_URGENCY_HINTS = ['veneno', 'intoxic', 'falta de ar', 'nao respira', 'não respira', 'convuls', 'sangr', 'sangue', 'desmai', 'atropel', 'engasg']
+const IMAGE_HINTS = ['foto', 'imagem', 'img', 'manda foto', 'tem foto', 'ver foto', 'embalagem', 'mostra foto', 'mostrar foto']
 
 const AWAITING_ACTIONS = {
   customer_name: 'pedir_nome',
@@ -131,6 +132,10 @@ function money(value = 0) {
 function hasAny(text, terms) {
   const lower = norm(text)
   return terms.some((term) => lower.includes(norm(term)))
+}
+
+function wantsProductImage(message = '') {
+  return hasAny(message, IMAGE_HINTS)
 }
 
 function isKnownName(name = '') {
@@ -512,6 +517,7 @@ function productSnapshot(product, upsell = false) {
     product_id: clean(product.id),
     name: clean(product.name),
     category: clean(product.category),
+    image_url: clean(product.image_url),
     quantity: 1,
     unit_price: Number(product.price || 0),
     stock_quantity: Number(product.stock_quantity || 0),
@@ -830,6 +836,7 @@ function compactProduct(item) {
     product_id: clean(item.product_id || item.id),
     name: clean(item.name),
     category: clean(item.category),
+    image_url: clean(item.image_url),
     quantity: Number(item.quantity || 1),
     unit_price: Number(item.unit_price ?? item.price ?? 0),
     stock_quantity: Number(item.stock_quantity || 0),
@@ -1015,8 +1022,30 @@ function presentProducts(state, products, message) {
     state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'marca_sem_estoque'])]
   }
   const intro = strong.length && hasBrandMatch ? 'Consultei o estoque e tenho essas opções:' : 'Não encontrei exatamente o que você pediu, mas tenho essas alternativas com estoque:'
-  const lines = state.productOptions.map((product, index) => `${index + 1}. ${product.name} - ${money(product.unit_price)}`)
+  const lines = state.productOptions.map((product, index) => `${index + 1}. ${product.name} - ${money(product.unit_price)}${product.image_url ? ' (tem foto)' : ''}`)
   return guardResult(`${intro}\n${lines.join('\n')}\n\nQual prefere?`, state, { action: 'oferecer_produtos' })
+}
+
+function sendProductImage(state) {
+  const product = state.selectedProduct
+  const imageUrl = clean(product?.image_url)
+  if (!product) {
+    return guardResult('Me fala qual produto você quer ver a foto primeiro?', state, { action: 'pedir_produto_para_foto' })
+  }
+
+  if (!imageUrl) {
+    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'foto_produto_ausente'])]
+    return guardResult(`Ainda não tenho foto aprovada da ${product.name} no cadastro. Posso seguir com as informações do produto?`, state, { action: 'foto_produto_ausente' })
+  }
+
+  return guardResult(`Claro, essa é a foto aprovada da ${product.name}.`, state, {
+    action: 'enviar_foto_produto',
+    mediaMessages: [{
+      type: 'image',
+      imageUrl,
+      caption: `${product.name} - ${money(product.unit_price)}`,
+    }],
+  })
 }
 
 function presentSlots(state, appointments) {
@@ -1124,6 +1153,16 @@ function productFlow(state, message, products, settings) {
     state.selectedProduct = chosen
     const quantity = parseProductQuantity(message)
     if (quantity) state.selectedProduct.quantity = quantity
+  }
+
+  if (wantsProductImage(message)) {
+    if (!state.selectedProduct && (state.productOptions || []).length === 1) {
+      state.selectedProduct = state.productOptions[0]
+    }
+    if (!state.selectedProduct && (state.productOptions || []).length > 1) {
+      return guardResult('Claro. Qual opção você quer ver a foto?', state, { action: 'pedir_produto_para_foto' })
+    }
+    if (state.selectedProduct) return sendProductImage(state)
   }
 
   if (!state.selectedProduct) return presentProducts(state, products, message)

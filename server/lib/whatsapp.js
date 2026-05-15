@@ -59,6 +59,20 @@ function extractMessageText(message) {
   )
 }
 
+function extractMessageMedia(message) {
+  const type = clean(message?.type)
+  const media = message?.[type] && typeof message[type] === 'object' ? message[type] : null
+  const id = clean(media?.id)
+  if (!id) return null
+  return {
+    id,
+    type,
+    mime_type: clean(media?.mime_type),
+    sha256: clean(media?.sha256),
+    caption: clean(media?.caption),
+  }
+}
+
 function extractWhatsappEvents(body) {
   const events = []
   for (const entry of body?.entry || []) {
@@ -83,6 +97,8 @@ function extractWhatsappEvents(body) {
           text,
           isSupportedText: Boolean(text),
           profileName: clean(contact?.profile?.name) || 'Cliente WhatsApp',
+          media: extractMessageMedia(message),
+          mediaProcessing: null,
           raw: message,
         })
       }
@@ -391,6 +407,49 @@ export async function sendWhatsappText(config, { to, text, replyToMessageId = ''
   return result
 }
 
+export async function sendWhatsappImage(config, { to, imageUrl, caption = '', replyToMessageId = '' }) {
+  const recipient = normalizePhoneIdentifier(to)
+  const link = clean(imageUrl)
+  const body = clean(caption).slice(0, 1024)
+
+  if (!recipient || !/^https?:\/\/\S+$/i.test(link)) {
+    throw new HttpError(400, 'WhatsApp recipient and public image URL are required.')
+  }
+
+  const url = `${GRAPH_BASE_URL}/${normalizeGraphVersion(config.graphVersion)}/${encodeURIComponent(config.phoneNumberId)}/messages`
+  const payload = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: recipient,
+    type: 'image',
+    image: {
+      link,
+      caption: body,
+    },
+  }
+
+  if (replyToMessageId) {
+    payload.context = { message_id: replyToMessageId }
+  }
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${config.accessToken}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify(payload),
+  })
+
+  const result = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = result?.error?.message || `HTTP ${response.status}`
+    throw new HttpError(502, `Unable to send WhatsApp image: ${detail}`)
+  }
+
+  return result
+}
+
 async function getOrCreateWhatsappSession(config, event) {
   const tenantId = config.tenantId || await resolveDefaultTenantId()
   const moduleId = config.moduleId || DEFAULT_MODULE_ID
@@ -476,6 +535,143 @@ async function hasProcessedWhatsappMessage(sessionId, whatsappMessageId) {
   return (data || []).length > 0
 }
 
+function mediaExtension(mimeType = '', fallback = 'bin') {
+  const lower = clean(mimeType).toLowerCase()
+  if (lower.includes('ogg')) return 'ogg'
+  if (lower.includes('mpeg') || lower.includes('mp3')) return 'mp3'
+  if (lower.includes('mp4')) return 'mp4'
+  if (lower.includes('jpeg') || lower.includes('jpg')) return 'jpg'
+  if (lower.includes('png')) return 'png'
+  if (lower.includes('webp')) return 'webp'
+  return fallback
+}
+
+async function downloadWhatsappMedia(config, mediaId) {
+  const infoUrl = `${GRAPH_BASE_URL}/${normalizeGraphVersion(config.graphVersion)}/${encodeURIComponent(mediaId)}`
+  const infoResponse = await fetch(infoUrl, {
+    headers: { Authorization: `Bearer ${config.accessToken}` },
+  })
+  const info = await infoResponse.json().catch(() => ({}))
+  if (!infoResponse.ok || !clean(info.url)) {
+    const detail = info?.error?.message || `HTTP ${infoResponse.status}`
+    throw new HttpError(502, `Unable to load WhatsApp media info: ${detail}`)
+  }
+
+  const mediaResponse = await fetch(clean(info.url), {
+    headers: { Authorization: `Bearer ${config.accessToken}` },
+  })
+  if (!mediaResponse.ok) {
+    throw new HttpError(502, `Unable to download WhatsApp media: HTTP ${mediaResponse.status}`)
+  }
+
+  const arrayBuffer = await mediaResponse.arrayBuffer()
+  const mimeType = clean(mediaResponse.headers.get('content-type')) || clean(info.mime_type)
+  return { bytes: Buffer.from(arrayBuffer), mimeType }
+}
+
+async function transcribeWhatsappAudio(config, media) {
+  const downloaded = await downloadWhatsappMedia(config, clean(media.id))
+  const form = new FormData()
+  const file = new Blob([downloaded.bytes], { type: downloaded.mimeType || 'audio/ogg' })
+  form.append('model', serverEnv.openAiTranscriptionModel)
+  form.append('file', file, `whatsapp-audio.${mediaExtension(downloaded.mimeType, 'ogg')}`)
+
+  const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${serverEnv.openAiApiKey}` },
+    body: form,
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = payload?.error?.message || `HTTP ${response.status}`
+    throw new HttpError(502, `Unable to transcribe WhatsApp audio: ${detail}`)
+  }
+
+  return clean(payload.text)
+}
+
+async function describeWhatsappImage(config, media, caption = '') {
+  const downloaded = await downloadWhatsappMedia(config, clean(media.id))
+  const mimeType = downloaded.mimeType || clean(media.mime_type) || 'image/jpeg'
+  const dataUrl = `data:${mimeType};base64,${downloaded.bytes.toString('base64')}`
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${serverEnv.openAiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: serverEnv.openAiVisionModel,
+      temperature: 0,
+      max_tokens: 180,
+      messages: [
+        {
+          role: 'system',
+          content: [
+            'Voce descreve imagens recebidas por WhatsApp para um bot de petshop.',
+            'Se for embalagem/produto, extraia marca, linha, peso, sabor e especie quando visivel.',
+            'Se parecer ferimento, sangue, emergencia ou problema veterinario sensivel, responda exatamente com VETERINARY_IMAGE_REQUIRES_HUMAN e uma descricao curta.',
+            'Nao diagnostique animal e nao invente texto ilegivel.',
+          ].join(' '),
+        },
+        {
+          role: 'user',
+          content: [
+            { type: 'text', text: `Legenda do cliente: ${caption || 'sem legenda'}` },
+            { type: 'image_url', image_url: { url: dataUrl, detail: 'low' } },
+          ],
+        },
+      ],
+    }),
+  })
+  const payload = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    const detail = payload?.error?.message || `HTTP ${response.status}`
+    throw new HttpError(502, `Unable to describe WhatsApp image: ${detail}`)
+  }
+
+  return clean(payload.choices?.[0]?.message?.content)
+}
+
+function canProcessWhatsappMedia(event) {
+  return Boolean(event.media?.id) && ['audio', 'voice', 'image'].includes(clean(event.type))
+}
+
+async function resolveWhatsappMediaText(config, event) {
+  const media = event.media || {}
+  const type = clean(event.type)
+  const caption = clean(media.caption) || clean(event.text)
+
+  if (type === 'audio' || type === 'voice') {
+    const transcript = await transcribeWhatsappAudio(config, media)
+    if (!transcript) return null
+    return {
+      text: transcript,
+      metadata: { media_processed: true, media_processing: 'audio_transcription' },
+    }
+  }
+
+  if (type === 'image') {
+    const description = await describeWhatsappImage(config, media, caption)
+    if (!description) return null
+    const requiresHuman = description.includes('VETERINARY_IMAGE_REQUIRES_HUMAN')
+    const cleanDescription = description.replace('VETERINARY_IMAGE_REQUIRES_HUMAN', '').trim()
+    return {
+      text: requiresHuman
+        ? `quero falar com humano. Imagem veterinaria sensivel: ${cleanDescription || 'imagem recebida'}`
+        : [caption, `Imagem recebida: ${cleanDescription}`].filter(Boolean).join('\n'),
+      metadata: {
+        media_processed: true,
+        media_processing: 'image_description',
+        image_requires_human: requiresHuman,
+      },
+    }
+  }
+
+  return null
+}
+
 async function updateMessageMetadata(messageId, metadata) {
   const { error } = await adminSupabase
     .from('chat_messages')
@@ -506,6 +702,8 @@ function buildInboundMetadata(event) {
     whatsapp_phone_number_id: event.phoneNumberId,
     whatsapp_type: event.type,
     whatsapp_timestamp: event.timestamp || null,
+    whatsapp_media: event.media || null,
+    ...(event.mediaProcessing || {}),
   }
 }
 
@@ -521,8 +719,12 @@ function buildDeliveryMetadata(metadata, delivery, status = 'sent') {
 
 async function sendAndMarkDelivered(config, message, { to, replyToMessageId = '' }) {
   try {
-    const delivery = await sendWhatsappText(config, { to, text: message.content, replyToMessageId })
+    const imageUrl = clean(message.metadata?.image_url)
+    const delivery = imageUrl
+      ? await sendWhatsappImage(config, { to, imageUrl, caption: message.content, replyToMessageId })
+      : await sendWhatsappText(config, { to, text: message.content, replyToMessageId })
     const metadata = buildDeliveryMetadata(message.metadata, delivery, 'sent')
+    metadata.whatsapp_outbound_type = imageUrl ? 'image' : 'text'
     await updateMessageMetadata(message.id, metadata)
     return { ...message, metadata }
   } catch (error) {
@@ -582,6 +784,22 @@ async function processIncomingWhatsappMessage(event) {
 
   if (await hasProcessedWhatsappMessage(session.id, event.messageId)) {
     return { sessionId: session.id, duplicate: true }
+  }
+
+  if (!event.isSupportedText && canProcessWhatsappMedia(event)) {
+    try {
+      const resolved = await resolveWhatsappMediaText(config, event)
+      if (resolved?.text) {
+        event.text = resolved.text
+        event.isSupportedText = true
+        event.mediaProcessing = resolved.metadata
+      }
+    } catch (error) {
+      event.mediaProcessing = {
+        media_processed: false,
+        media_processing_error: error instanceof Error ? error.message : 'Unknown media processing error',
+      }
+    }
   }
 
   if (!event.isSupportedText) {

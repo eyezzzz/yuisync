@@ -17,6 +17,7 @@ const products = [
     category: 'Ração',
     price: 120,
     stock_quantity: 4,
+    image_url: 'https://cdn.example.com/premier-shih-tzu.jpg',
     active: true,
   },
   {
@@ -166,6 +167,46 @@ test('produto preserva quantidade quando cliente escolhe em frase natural', () =
   result = turn(context, 'vou querer 2 sacos da premier')
   assert.equal(result.action, 'oferecer_upsell')
   assert.equal(result.state.selectedProduct.quantity, 2)
+})
+
+test('produto envia foto aprovada quando cliente pede imagem', () => {
+  let context = {}
+  let result = turn(context, 'Oi, quero racao pra shih tzu adulto')
+  context = result.context
+  result = turn(context, 'Rodrigo')
+  context = result.context
+
+  result = turn(context, 'manda foto da premier')
+
+  assert.equal(result.action, 'enviar_foto_produto')
+  assert.equal(result.mediaMessages?.[0]?.type, 'image')
+  assert.equal(result.mediaMessages?.[0]?.imageUrl, 'https://cdn.example.com/premier-shih-tzu.jpg')
+  assert.match(result.reply, /foto/i)
+  assert.match(result.reply, /Premier/i)
+})
+
+test('produto sem foto aprovada nao inventa imagem', () => {
+  const state = getPetbotState({})
+  state.intent = 'produto'
+  state.customerName = 'Carlos'
+  state.nameConfirmed = true
+  state.species = 'dog'
+  state.size = 'medio'
+  state.productOptions = [{
+    product_id: 'canister-kibe',
+    name: 'CANISTER CAO KIBE',
+    category: 'Petisco',
+    quantity: 1,
+    unit_price: 10,
+    stock_quantity: 10,
+  }]
+  state.selectedProduct = state.productOptions[0]
+
+  const result = turn({ petbot: state }, 'manda foto')
+
+  assert.equal(result.action, 'foto_produto_ausente')
+  assert.match(result.state.blockedReasons.join(','), /foto_produto_ausente/)
+  assert.equal(result.mediaMessages, undefined)
 })
 
 test('marca indisponivel mostra alternativas e registra bloqueio', () => {
