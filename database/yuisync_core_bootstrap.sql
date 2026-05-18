@@ -25,7 +25,7 @@ create table if not exists public.companies (
   name text not null,
   system_prompt text not null,
   bot_name text not null default 'Yui',
-  temperature numeric(3,2) not null default 0.70,
+  temperature numeric(3,2) not null default 0.50,
   model_name text not null default 'gpt-4o-mini',
   welcome_message text,
   kb_namespace text,
@@ -129,7 +129,7 @@ Sempre priorize clareza, cordialidade e seguranca.
 Nunca invente horarios. Use apenas os horarios disponiveis no contexto.
 $company_prompt$,
     'Luma',
-    0.70,
+    0.50,
     'gpt-4o-mini',
     'Ola. Eu sou a Luma da QuatroPatas PetVet. Posso te ajudar com horarios e servicos.',
     'quatropatas-petvet',
