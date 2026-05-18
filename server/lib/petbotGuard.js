@@ -207,6 +207,7 @@ function defaultFulfillment() {
     neighborhood: '',
     city: '',
     reference: '',
+    deliveryFeeInformed: false,
   }
 }
 
@@ -232,6 +233,7 @@ function defaultState() {
     ageCategory: '',
     symptom: '',
     brand: '',
+    productKind: '',
     selectedProduct: null,
     productOptions: [],
     selectedSlot: null,
@@ -298,6 +300,7 @@ export function snapshotPetbotState(state = {}) {
     ageCategory: next.ageCategory,
     symptom: next.symptom,
     brand: next.brand,
+    productKind: next.productKind,
     serviceType: next.serviceType,
     selectedProduct: next.selectedProduct,
     productOptions: Array.isArray(next.productOptions) ? next.productOptions.slice(0, 5) : [],
@@ -421,9 +424,9 @@ function inferBreedAndSize(message = '') {
 
 function inferSize(message = '') {
   const lower = norm(message)
-  if (/(pequen|mini|porte p|5 ?kg|6 ?kg|7 ?kg|8 ?kg|9 ?kg)/.test(lower)) return 'pequeno'
-  if (/(medio|médio|porte m|10 ?kg|12 ?kg|15 ?kg|18 ?kg)/.test(lower)) return 'medio'
-  if (/(grande|porte g|20 ?kg|25 ?kg|30 ?kg|40 ?kg)/.test(lower)) return 'grande'
+  if (/(pequen|mini|porte p|\b(?:5|6|7|8|9)\s?kg\b)/.test(lower)) return 'pequeno'
+  if (/(medio|médio|porte m|\b(?:10|12|15|18)\s?kg\b)/.test(lower)) return 'medio'
+  if (/(grande|porte g|\b(?:20|25|30|40)\s?kg\b)/.test(lower)) return 'grande'
   return inferBreedAndSize(message).size || ''
 }
 
@@ -513,17 +516,25 @@ function extractCustomerName(message = '', state) {
   const text = clean(message)
   if (!text) return ''
   const lower = norm(text)
+  const normalizeCandidate = (value = '') => clean(value)
+    .replace(/^(ue|ué|oxe|uai|opa|oi|ola|olá)\s+/i, '')
+    .trim()
   if (state.awaiting === 'customer_name') {
-    const first = text.split(/[,.]/)[0].replace(/^(meu nome e|meu nome é|sou|eu sou|aqui e|aqui é)\s+/i, '').trim()
+    const first = normalizeCandidate(text.split(/[,.]/)[0].replace(/^(meu nome e|meu nome é|sou|eu sou|aqui e|aqui é)\s+/i, ''))
     if (isPlausibleName(first)) return titleName(first)
   }
   const explicit = text.match(/(?:meu nome e|meu nome é|sou|eu sou|aqui e|aqui é)\s+([A-Za-zÀ-ÿ'\s]{2,40})/i)
-  if (explicit && isPlausibleName(explicit[1])) return titleName(explicit[1])
+  if (explicit && isPlausibleName(normalizeCandidate(explicit[1]))) return titleName(normalizeCandidate(explicit[1]))
+  const leadingNameWithIntent = text.match(/^([A-Za-zÀ-ÿ']{2,30})(?:,)?\s+(?:quero|queria|preciso|gostaria|comprar|vou)\b/i)
+  if (leadingNameWithIntent && isPlausibleName(normalizeCandidate(leadingNameWithIntent[1]))) {
+    return titleName(normalizeCandidate(leadingNameWithIntent[1]))
+  }
   if (text.includes(',') && !lower.startsWith('oi,')) {
-    const first = text.split(',')[0].trim()
+    const first = normalizeCandidate(text.split(',')[0])
     if (isPlausibleName(first)) return titleName(first)
   }
-  if (!detectIntent(text) && isPlausibleName(text) && text.split(/\s+/).length <= 3) return titleName(text)
+  const candidate = normalizeCandidate(text)
+  if (!detectIntent(text) && isPlausibleName(candidate) && candidate.split(/\s+/).length <= 3) return titleName(candidate)
   return ''
 }
 
@@ -534,7 +545,7 @@ function isPlausibleName(value = '') {
   const lower = norm(text)
   if (/^(oi|ola|bom dia|boa tarde|boa noite)\b/.test(lower)) return false
   if (/(bom dia|boa tarde|boa noite)/.test(lower) && text.split(/\s+/).length <= 4) return false
-  if (['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'quero racao', 'quero ração'].includes(lower)) return false
+  if (['oi', 'ola', 'olá', 'ue', 'ué', 'uai', 'oxe', 'bom dia', 'boa tarde', 'boa noite', 'quero racao', 'quero ração'].includes(lower)) return false
   if (hasAny(lower, [...PRODUCT_HINTS, ...SERVICE_HINTS, ...VET_HINTS])) return false
   if (/(manc|vomit|diarre|coce|espirr|tosse|dor|sangr|veneno|apatic|passando mal|nao come|não come)/.test(lower)) return false
   return true
@@ -643,7 +654,10 @@ function resetOrderProgressForIntentChange(state, nextIntent) {
   state.awaiting = ''
   state.confirmationKey = ''
   if (nextIntent === 'produto') state.symptom = ''
-  if (nextIntent !== 'produto') state.brand = ''
+  if (nextIntent !== 'produto') {
+    state.brand = ''
+    state.productKind = ''
+  }
 }
 
 function updateAddressFromMessage(state, message = '') {
@@ -707,6 +721,13 @@ function requestedWeightKgFromMessage(message = '') {
   return match ? Number(match[1]) : null
 }
 
+function requestedPackageKgFromMessage(message = '') {
+  const lower = norm(message)
+  if (!/(saco|pacote|kg|quilo|quilos)/.test(lower)) return null
+  const match = lower.match(/\b(\d{1,2})\s?kg\b/)
+  return match ? Number(match[1]) : null
+}
+
 function productWeightRangeScore(product, weightKg) {
   if (!weightKg) return 0
   const raw = String(product?.name || '').toLowerCase().replace(/,/g, '.')
@@ -720,13 +741,23 @@ function productWeightRangeScore(product, weightKg) {
   return matches ? 18 : -10
 }
 
+function productPackageKgScore(product, packageKg) {
+  if (!packageKg) return 0
+  const raw = norm(product?.name || '').replace(/,/g, '.')
+  const compact = raw.replace(/\s+/g, '')
+  const spaced = new RegExp(`\\b${packageKg}\\s*kg\\b`)
+  if (spaced.test(raw) || compact.includes(`${packageKg}kg`)) return 24
+  return -14
+}
+
 function scoreProduct(product, state, message) {
   const haystack = norm([product.name, product.category].join(' '))
   let score = 0
-  const wantsFood = isFoodRequest(message, state)
   const wantsFlea = isFleaRequest(message)
   const wantsLitter = isLitterRequest(message)
   const weightKg = requestedWeightKgFromMessage(message)
+  const packageKg = requestedPackageKgFromMessage(message)
+  const wantsFood = isFoodRequest(message, state) || state.productKind === 'food' || Boolean(packageKg && state.intent === 'produto')
   if (state.species === 'dog' && isCatProductText(haystack)) score -= 45
   if (state.species === 'cat' && isDogProductText(haystack)) score -= 45
   const queryTerms = tokenizeForScore(message, state.brand, state.breed, state.size, state.ageCategory, state.species === 'dog' ? 'cao cachorro' : '', state.species === 'cat' ? 'gato' : '')
@@ -736,13 +767,16 @@ function scoreProduct(product, state, message) {
   if (state.intent === 'produto' && /(racao|ração)/.test(norm(message)) && /racao|ração/.test(haystack)) score += 5
   if (wantsFood && /(racao|ração|alimento|premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree)/.test(haystack)) score += 8
   if (wantsFood && /(canister|shampoo|areia|antipulga|pulga|bravecto|nexgard|simparic|sabonete|molho|sorvete|sache|sachê|petisco|bifinho)/.test(haystack)) score -= 25
-  if (wantsFlea && /(antipulga|anti pulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|coleira contra|matacura)/.test(haystack)) score += 16
-  if (wantsFlea && !/(antipulga|anti pulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|coleira contra|matacura)/.test(haystack)) score -= 18
-  if (wantsFlea && /(bravecto|nexgard|simparic|credeli)/.test(haystack)) score += 20
-  if (wantsFlea && /(shampoo|sabonete|spray|talco|coleira|matacura)/.test(haystack) && (weightKg || state.size)) score -= 12
-  if (wantsFlea && weightKg) score += productWeightRangeScore(product, weightKg)
-  if (wantsLitter && /(areia|higienica|higiênica|pa higienica)/.test(haystack)) score += 14
-  if (wantsLitter && !/(areia|higienica|higiênica|pa higienica)/.test(haystack)) score -= 25
+  const fleaRequest = wantsFlea || state.productKind === 'flea'
+  const litterRequest = wantsLitter || state.productKind === 'litter'
+  if (fleaRequest && /(antipulga|anti pulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|coleira contra|matacura)/.test(haystack)) score += 16
+  if (fleaRequest && !/(antipulga|anti pulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|coleira contra|matacura)/.test(haystack)) score -= 18
+  if (fleaRequest && /(bravecto|nexgard|simparic|credeli)/.test(haystack)) score += 20
+  if (fleaRequest && /(shampoo|sabonete|spray|talco|coleira|matacura)/.test(haystack) && (weightKg || state.size)) score -= 12
+  if (fleaRequest && weightKg) score += productWeightRangeScore(product, weightKg)
+  if (litterRequest && /(areia|higienica|higiênica|pa higienica)/.test(haystack)) score += 14
+  if (litterRequest && !/(areia|higienica|higiênica|pa higienica)/.test(haystack)) score -= 25
+  if (wantsFood && packageKg) score += productPackageKgScore(product, packageKg)
   if (state.species === 'dog' && /\b(cao|cachorro|canino|caes)\b/.test(haystack)) score += 4
   if (state.species === 'cat' && /(gato|gatos|felino)/.test(haystack)) score += 4
   if (state.ageCategory && haystack.includes(norm(state.ageCategory))) score += 4
@@ -980,6 +1014,13 @@ function applyMessageFacts(state, message) {
   }
   if (intent) state.intent = intent
 
+  if (state.intent === 'produto') {
+    if (isFleaRequest(message)) state.productKind = 'flea'
+    else if (isLitterRequest(message)) state.productKind = 'litter'
+    else if (isFoodRequest(message, state)) state.productKind = 'food'
+    else if (isSpecificNonFoodProductRequest(message) && !state.productKind) state.productKind = 'specific'
+  }
+
   const species = inferSpecies(message)
   if (species) state.species = species
 
@@ -991,7 +1032,7 @@ function applyMessageFacts(state, message) {
   }
 
   const size = inferSize(message)
-  if (size) state.size = size
+  if (size && !(state.species === 'cat' && requestedPackageKgFromMessage(message))) state.size = size
 
   const age = inferAge(message)
   if (age) state.ageCategory = age
@@ -1071,6 +1112,7 @@ function buildAllowedData(state) {
       symptom: state.symptom,
     },
     intent: state.intent,
+    product_kind: state.productKind,
     selected_product: compactProduct(state.selectedProduct),
     product_options: (state.productOptions || []).map(compactProduct).filter(Boolean),
     selected_slot: compactSlot(state.selectedSlot),
@@ -1327,7 +1369,11 @@ function checkoutFlow(state, settings) {
     if (state.fulfillment.type === 'entrega') {
       const missing = missingAddressFields(state)
       if (missing.length) {
-        return ask(`Para entrega, me passa ${missing.join(', ')}.`, state, 'delivery_address', 'endereco_incompleto')
+        const feeText = state.fulfillment.deliveryFeeInformed
+          ? 'Para entrega'
+          : `Cobramos ${money(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE)} para entregar. Tudo bem?`
+        state.fulfillment.deliveryFeeInformed = true
+        return ask(`${feeText}\n\nMe passa ${missing.join(', ')}.`, state, 'delivery_address', 'endereco_incompleto')
       }
     }
   }

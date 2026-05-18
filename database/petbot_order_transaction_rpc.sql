@@ -107,7 +107,7 @@ begin
     raise exception 'Payload sem sessao, tenant ou modulo.';
   end if;
 
-  select context
+  select coalesce(nullif(context::text, ''), '{}')::jsonb
     into v_session_context
   from public.chat_sessions
   where id = v_session_id
@@ -357,16 +357,38 @@ begin
     returning id into v_order_id;
   end if;
 
-  update public.chat_sessions
-  set intent = 'pedido_confirmado',
-      context = coalesce(context, '{}'::jsonb) || jsonb_build_object(
-        'last_sale_id', v_sale_id,
-        'last_order_id', v_order_id,
-        'last_appointment_id', v_appointment_id,
-        'last_total', v_total
-      ),
-      last_message_at = now()
-  where id = v_session_id;
+  if exists (
+    select 1
+    from information_schema.columns
+    where table_schema = 'public'
+      and table_name = 'chat_sessions'
+      and column_name = 'context'
+      and udt_name = 'jsonb'
+  ) then
+    update public.chat_sessions
+    set intent = 'pedido_confirmado',
+        context = coalesce(context::jsonb, '{}'::jsonb) || jsonb_build_object(
+          'last_sale_id', v_sale_id,
+          'last_order_id', v_order_id,
+          'last_appointment_id', v_appointment_id,
+          'last_total', v_total
+        ),
+        last_message_at = now()
+    where id = v_session_id;
+  else
+    update public.chat_sessions
+    set intent = 'pedido_confirmado',
+        context = (
+          coalesce(nullif(context::text, ''), '{}')::jsonb || jsonb_build_object(
+            'last_sale_id', v_sale_id,
+            'last_order_id', v_order_id,
+            'last_appointment_id', v_appointment_id,
+            'last_total', v_total
+          )
+        )::text,
+        last_message_at = now()
+    where id = v_session_id;
+  end if;
 
   return jsonb_build_object(
     'sale_id', v_sale_id,

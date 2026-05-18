@@ -55,6 +55,22 @@ const products = [
     active: true,
   },
   {
+    id: 'quatree-gato-castrado-granel',
+    name: 'GRANEL QUATREE LIFE GATOS CASTRADOS',
+    category: 'Ração gato',
+    price: 18.5,
+    stock_quantity: 4,
+    active: true,
+  },
+  {
+    id: 'quatree-gato-castrado-15kg',
+    name: 'QUATREE LIFE GATOS CASTRADOS 15 KG',
+    category: 'Ração gato',
+    price: 185,
+    stock_quantity: 2,
+    active: true,
+  },
+  {
     id: 'bravecto-8kg',
     name: 'BRAVECTO 4.5 A 10KG',
     category: 'Medicamentos',
@@ -134,6 +150,7 @@ test('produto usa raça como porte, não pede peso e soma taxa de entrega', () =
 
   result = turn(context, 'pix, entrega')
   context = result.context
+  assert.match(result.reply, /Cobramos R\$ 10,00 para entregar/i)
   assert.match(result.reply, /rua e número/i)
 
   result = turn(context, 'Av. Bernardo Mascarenhas, 1327 ap 303b')
@@ -431,6 +448,22 @@ test('cumprimento comum pede nome com saudacao natural', () => {
   assert.doesNotMatch(result.reply, /Claro/)
 })
 
+test('nome com intencao na mesma frase e interjeicao nao suja cadastro', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+
+  result = turn(context, 'guilerme quero comprar racao')
+  context = result.context
+  assert.equal(result.state.customerName, 'Guilerme')
+  assert.equal(result.action, 'pedir_especie')
+  assert.doesNotMatch(result.reply, /nome/i)
+
+  result = turn(context, 'ue guilerme')
+  assert.equal(result.state.customerName, 'Guilerme')
+  assert.notEqual(result.state.customerName, 'Ue Guilerme')
+})
+
 test('racao por raca sem idade pede adulto ou filhote antes de buscar estoque', () => {
   let context = {}
   let result = turn(context, 'ola bom dia')
@@ -481,7 +514,24 @@ test('racao de gato adulto nao oferece produto de cachorro', () => {
   result = turn(context, 'quero ração para gato adulto')
   assert.equal(result.state.species, 'cat')
   assert.match(result.reply, /WHISKAS/i)
+  assert.doesNotMatch(result.reply, /KITEKAT|SACH/i)
   assert.doesNotMatch(result.reply, /CÃES|CÃO|CACHORRO|PREMIER/i)
+})
+
+test('pedido de saco 15kg refaz ranking por embalagem e nao muda porte do gato', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+  result = turn(context, 'Guilerme')
+  context = result.context
+  result = turn(context, 'quero racao para gato castrado')
+  context = result.context
+
+  result = turn(context, 'tem saco de 15kg?')
+  assert.equal(result.state.species, 'cat')
+  assert.equal(result.state.size, '')
+  assert.match(result.reply, /15 KG/i)
+  assert.ok(result.state.productOptions[0].name.includes('15 KG'))
 })
 
 test('desconto antes de escolher produto nao sugere item aleatorio', () => {

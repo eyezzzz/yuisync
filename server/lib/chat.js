@@ -394,6 +394,15 @@ function productWeightRangeScore(product, weightKg) {
   return matches ? 18 : -10
 }
 
+function productPackageKgScore(product, packageKg) {
+  if (!packageKg) return 0
+  const raw = normalizeSearchText(product?.name).replace(/,/g, '.')
+  const compact = raw.replace(/\s+/g, '')
+  const spaced = new RegExp(`\\b${packageKg}\\s*kg\\b`)
+  if (spaced.test(raw) || compact.includes(`${packageKg}kg`)) return 24
+  return -14
+}
+
 function hasDogBreedProductText(searchable = '') {
   return /shih tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês/.test(searchable)
 }
@@ -404,6 +413,7 @@ function rankProduct(product, terms) {
   const category = normalizeSearchText(product?.category)
   let score = 0
   const weightKg = requestedWeightKg(terms)
+  const packageKg = terms.some((term) => /kg$/.test(term)) ? weightKg : null
   const wantsAdult = terms.some((term) => ['adulto', 'adultos', 'adulta', 'adultas'].includes(term))
   const wantsPuppy = terms.some((term) => ['filhote', 'filhotes', 'puppy', 'junior'].includes(term))
   const wantsFlea = terms.some((term) => ['antipulga', 'antipulgas', 'pulga', 'pulgas', 'carrapato', 'carrapatos', 'bravecto', 'nexgard', 'simparic', 'credeli'].includes(term))
@@ -457,6 +467,7 @@ function rankProduct(product, terms) {
   if (wantsCat && dogProduct) score -= 35
   if (wantsDog && dogProduct) score += 12
   if (wantsDog && catProduct) score -= 35
+  if (category.includes('racao') && packageKg) score += productPackageKgScore(product, packageKg)
   if (!breedTerms.length && hasDogBreedProductText(searchable)) score -= 10
   if (category.includes('racao')) score += 2
   score += Math.min(Number(product?.stock_quantity || 0), 20) / 20
@@ -507,7 +518,11 @@ function expandDbSearchTerms(terms = []) {
     pulgas: ['pulga', 'pulgas', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli'],
     carrapato: ['carrapato', 'carrapatos', 'bravecto', 'nexgard', 'simparic', 'credeli'],
   }
-  return [...new Set((terms || []).flatMap((term) => extras[term] || [term]))].slice(0, 10)
+  return [...new Set((terms || []).flatMap((term) => {
+    const kg = String(term).match(/^(\d{1,2})kg$/)
+    if (kg) return [term, `${kg[1]} kg`]
+    return extras[term] || [term]
+  }))].slice(0, 12)
 }
 
 function mergeProductsById(...lists) {
