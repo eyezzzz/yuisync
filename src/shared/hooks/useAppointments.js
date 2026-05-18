@@ -358,15 +358,25 @@ export function useAppointments() {
     }
   }
 
-  const serviceLabel = (type) => ({
-    banho: 'Banho',
-    tosa: 'Tosa',
-    banho_e_tosa: 'Banho & Tosa',
-    veterinario: 'Veterinario',
-    consulta: 'Consulta',
-    vacina: 'Vacina',
-    outro: 'Outro',
-  }[type] || type)
+  const serviceLabel = (type) => {
+    const labels = {
+      banho: 'Banho',
+      tosa: 'Tosa',
+      banho_e_tosa: 'Banho & Tosa',
+      veterinario: 'Veterinario',
+      consulta: 'Consulta',
+      vacina: 'Vacina',
+      outro: 'Outro',
+    }
+    if (labels[type]) return labels[type]
+    const normalized = String(type || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+    if (/banho.*tosa|tosa.*banho/.test(normalized)) return 'Banho & Tosa'
+    if (/banho/.test(normalized)) return 'Banho'
+    if (/tosa|higien/.test(normalized)) return 'Tosa'
+    if (/vacina/.test(normalized)) return 'Vacina'
+    if (/vet|consulta|clinica|medico/.test(normalized)) return 'Veterinario'
+    return type
+  }
 
   const statusBadge = (status) => ({
     agendado: { cls: 'badge-amber', label: 'Agendado' },

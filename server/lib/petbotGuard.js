@@ -748,6 +748,16 @@ function updateAddressFromMessage(state, message = '') {
     state.fulfillment.address = text
   }
 
+  if (state.awaiting === 'delivery_address' && state.fulfillment.address && !looksLikeStreet) {
+    const parts = text.split(',').map(clean).filter(Boolean)
+    if (!state.fulfillment.neighborhood && parts[0]) {
+      state.fulfillment.neighborhood = parts[0].replace(/^bairro\s+/i, '')
+    }
+    if (!state.fulfillment.reference && parts.length >= 2) {
+      state.fulfillment.reference = parts.slice(1).join(', ')
+    }
+  }
+
   const bairroMatch = text.match(/bairro\s+([^,.-]+)/i)
   if (bairroMatch) state.fulfillment.neighborhood = clean(bairroMatch[1])
   if (!state.fulfillment.neighborhood && text.split(',').length >= 3) {
@@ -1187,7 +1197,13 @@ function applyMessageFacts(state, message) {
   if (petName && !state.petName) state.petName = petName
 
   const symptom = extractSymptom(message)
-  if (symptom && state.intent === 'veterinaria') state.symptom = symptom
+  if (state.intent === 'veterinaria') {
+    if (symptom) state.symptom = symptom
+    else if (state.serviceType === 'Vacina' && /vacina/.test(norm(message))) state.symptom = 'Vacina'
+    else if (state.awaiting === 'symptom' && clean(message) && !detectPayment(message) && !detectFulfillment(message)) {
+      state.symptom = clean(message).slice(0, 120)
+    }
+  }
 
   if (state.intent === 'banho_tosa') {
     if (hasNoServiceNotes(message) && state.awaiting === 'service_notes') {
@@ -1594,13 +1610,20 @@ function productFlow(state, message, products, settings) {
   if (!state.species) {
     return ask('É para cachorro ou gato?', state, 'species', 'especie_pendente')
   }
+  const earlyChosen = chooseProductFromOptions(state, message)
+  if (earlyChosen) {
+    state.selectedProduct = earlyChosen
+    const quantity = parseProductQuantity(message) || state.pendingQuantity
+    if (quantity) state.selectedProduct.quantity = quantity
+    state.pendingQuantity = null
+  }
   if (!state.selectedProduct && !(state.productOptions || []).length && !state.ageCategory && isFoodRequest(message, state)) {
     if (state.species === 'cat') {
       return ask('Seu gato é filhote, adulto ou castrado?', state, 'pet_category', 'categoria_pendente')
     }
     return ask('Ele é adulto ou filhote?', state, 'pet_category', 'categoria_pendente')
   }
-  if (!state.size && !state.ageCategory) {
+  if (!state.selectedProduct && !state.size && !state.ageCategory) {
     if (isFleaRequest(message)) {
       return ask('Qual o peso ou porte dele?', state, 'pet_category', 'categoria_pendente')
     }
@@ -1616,7 +1639,7 @@ function productFlow(state, message, products, settings) {
   if (!availableProducts(products).length) return presentProducts(state, products, message)
   if (needsFoodPreferences(state)) return askFoodPreferences(state)
 
-  const chosen = chooseProductFromOptions(state, message)
+  const chosen = !state.selectedProduct ? chooseProductFromOptions(state, message) : null
   if (chosen) {
     state.selectedProduct = chosen
     const quantity = parseProductQuantity(message) || state.pendingQuantity

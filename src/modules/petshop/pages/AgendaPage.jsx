@@ -22,6 +22,40 @@ const SERVICES = [
   { value: 'vacina',       label: 'Vacina',         price: 90,  icon: Syringe      },
   { value: 'outro',        label: 'Outro',          price: 0,   icon: PawPrint     },
 ]
+
+const AGENDA_TABS = [
+  { id: 'banho_tosa', label: 'Banho/Tosa', icon: Scissors },
+  { id: 'veterinaria', label: 'Veterinária', icon: Stethoscope },
+]
+
+const normalizeServiceType = (type = '') =>
+  String(type || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+
+const getAppointmentServiceGroup = (type = '') => {
+  const service = normalizeServiceType(type)
+  if (/vet|consulta|vacina|clinica|medico/.test(service)) return 'veterinaria'
+  return 'banho_tosa'
+}
+
+const serviceOptionsForGroup = (group) =>
+  SERVICES.filter((service) => service.value === 'outro' || getAppointmentServiceGroup(service.value) === group)
+
+const serviceLabelFallback = (type = '') =>
+  SERVICES.find((service) => service.value === type)?.label || String(type || 'Serviço')
+
+const buildStatsForDate = (items, selectedDate) => {
+  const day = isoDate(selectedDate)
+  const list = items.filter((appt) => appt.scheduled_at?.startsWith(day))
+  return {
+    total: list.length,
+    agendado: list.filter((appt) => appt.status === 'agendado').length,
+    confirmado: list.filter((appt) => appt.status === 'confirmado').length,
+    em_andamento: list.filter((appt) => appt.status === 'em_andamento').length,
+    concluido: list.filter((appt) => appt.status === 'concluido').length,
+    cancelado: list.filter((appt) => appt.status === 'cancelado').length,
+  }
+}
+
 const STATUSES = [
   { value: 'agendado',      label: 'Agendado'      },
   { value: 'confirmado',    label: 'Confirmado'    },
@@ -177,6 +211,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
   const now = new Date()
   const defaultDate = isoDate(now)
   const defaultTime = `${String(now.getHours()+1).padStart(2,'0')}:00`
+  const serviceGroup = isEdit ? getAppointmentServiceGroup(appt?.service_type) : (appt?.serviceGroup || 'banho_tosa')
+  const serviceOptions = serviceOptionsForGroup(serviceGroup)
+  const defaultService = serviceOptions[0] || SERVICES[0]
 
   const [form, setForm] = useState(isEdit ? {
     pet_id:       appt.pets?.id || '',
@@ -188,8 +225,8 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
     status:       appt.status || 'agendado',
     notes:        appt.notes || '',
   } : {
-    pet_id: '', service_type: 'banho', date: defaultDate, time: defaultTime,
-    duration_min: 60, price: 60, status: 'agendado', notes: '',
+    pet_id: '', service_type: defaultService.value, date: defaultDate, time: defaultTime,
+    duration_min: 60, price: defaultService.price, status: 'agendado', notes: '',
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
@@ -268,7 +305,10 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
               {/* Serviço */}
               <div>
                 <select className="inp" value={form.service_type} onChange={e => handleServiceChange(e.target.value)}>
-                  {SERVICES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                  {isEdit && form.service_type && !serviceOptions.some(s => s.value === form.service_type) && (
+                    <option value={form.service_type}>{serviceLabelFallback(form.service_type)}</option>
+                  )}
+                  {serviceOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
               </div>
 
@@ -406,7 +446,7 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
 
 // ── Página Principal ──────────────────────────────────────────────────────────
 export default function AgendaPage() {
-  const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel, statusBadge, todayStats } =
+  const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel, statusBadge } =
     useAppointments()
   const { clients: pets, load: loadPets } = useClients()
 
@@ -416,6 +456,7 @@ export default function AgendaPage() {
   const [view, setView]             = useState('list')  // 'list' | 'kanban'
   const [filterStatus, setFilterStatus] = useState('')
   const [search, setSearch]         = useState('')
+  const [activeAgendaTab, setActiveAgendaTab] = useState('banho_tosa')
 
   useEffect(() => {
     loadPets()
@@ -425,9 +466,16 @@ export default function AgendaPage() {
     load({ date: isoDate(selectedDate), status: filterStatus || undefined })
   }, [selectedDate, filterStatus])
 
-  const stats = todayStats()
+  const tabbedAppointments = appointments.filter((appointment) =>
+    getAppointmentServiceGroup(appointment.service_type) === activeAgendaTab
+  )
+  const stats = buildStatsForDate(tabbedAppointments, selectedDate)
+  const tabCounts = AGENDA_TABS.reduce((acc, tab) => ({
+    ...acc,
+    [tab.id]: appointments.filter((appointment) => getAppointmentServiceGroup(appointment.service_type) === tab.id).length,
+  }), {})
 
-  const displayed = appointments.filter(a => {
+  const displayed = tabbedAppointments.filter(a => {
     if (!search) return true
     const q = search.toLowerCase()
     return (
@@ -452,7 +500,7 @@ export default function AgendaPage() {
             {isToday && <span className="ml-2 badge badge-amber text-[10px]">Hoje</span>}
           </p>
         </div>
-        <button onClick={() => setModal({})} className="btn btn-primary">
+        <button onClick={() => setModal({ serviceGroup: activeAgendaTab })} className="btn btn-primary">
           <Plus size={16}/> Novo Agendamento
         </button>
       </div>
@@ -472,6 +520,28 @@ export default function AgendaPage() {
             <p className="text-xs text-muted mt-0.5">{s.label}</p>
           </div>
         ))}
+      </div>
+
+      <div className="flex flex-wrap gap-2 bg-card border border-[var(--border)] rounded-xl p-1 w-fit max-w-full">
+        {AGENDA_TABS.map(tab => {
+          const Icon = tab.icon
+          const active = activeAgendaTab === tab.id
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveAgendaTab(tab.id)}
+              className={`px-3 py-2 rounded-lg text-xs font-bold flex items-center gap-2 transition-colors ${
+                active ? 'bg-amber-500 text-gray-950' : 'text-muted hover:text-text hover:bg-white/5'
+              }`}
+            >
+              <Icon size={14}/>
+              {tab.label}
+              <span className={`rounded-full px-2 py-0.5 text-[10px] ${active ? 'bg-gray-950/15' : 'bg-white/8 text-muted'}`}>
+                {tabCounts[tab.id] || 0}
+              </span>
+            </button>
+          )
+        })}
       </div>
 
       {/* Controls */}
@@ -522,7 +592,7 @@ export default function AgendaPage() {
           ))}
         </div>
 
-        <button onClick={() => load({ date: isoDate(selectedDate) })}
+        <button onClick={() => load({ date: isoDate(selectedDate), status: filterStatus || undefined })}
           className="btn btn-ghost btn-sm btn-icon" title="Atualizar">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
         </button>
@@ -542,7 +612,7 @@ export default function AgendaPage() {
               {filterStatus || search ? 'Tente remover os filtros' : 'Clique em "+ Novo Agendamento" para começar'}
             </p>
           </div>
-          <button onClick={() => setModal({})} className="btn btn-primary">
+          <button onClick={() => setModal({ serviceGroup: activeAgendaTab })} className="btn btn-primary">
             <Plus size={15}/> Novo Agendamento
           </button>
         </div>

@@ -136,6 +136,17 @@ const mixedAppointments = [
   },
 ]
 
+const finalFlowAppointments = [
+  ...mixedAppointments,
+  {
+    id: 'slot-vaccine-17',
+    service_type: 'Vacina',
+    scheduled_at: '2026-05-13T17:00:00-03:00',
+    status: 'available',
+    price: 95,
+  },
+]
+
 function turn(context, message, extra = {}) {
   const result = runPetbotGuard({
     message,
@@ -157,6 +168,244 @@ function turn(context, message, extra = {}) {
     ...result,
     context: mergePetbotContext(context, result.state),
   }
+}
+
+function runConversation(messages, extra = {}) {
+  let context = {}
+  let result = null
+  for (const message of messages) {
+    result = turn(context, message, extra)
+    context = result.context
+  }
+  return { result, context }
+}
+
+function assertConversationSaved(scenario) {
+  const { result } = runConversation(scenario.messages, scenario.extra || {})
+  assert.equal(result.shouldSaveOrder, true, scenario.name)
+  assert.equal(result.action, 'confirmar_salvar')
+  assert.equal(result.orderArgs.order_type, scenario.orderType)
+  assert.equal(result.orderArgs.payment_method, scenario.payment)
+  assert.equal(Number(result.orderArgs.total) > 0, true)
+  if (scenario.orderType === 'produto') {
+    assert.ok(result.orderArgs.items?.[0]?.product_id, scenario.name)
+    if (scenario.fulfillment) assert.equal(result.orderArgs.fulfillment_type, scenario.fulfillment)
+  } else {
+    assert.ok(result.orderArgs.appointment_id, scenario.name)
+    assert.ok(result.orderArgs.scheduled_at, scenario.name)
+  }
+
+  const saved = markPetbotOrderSaved(result.state, {
+    sale_id: `${scenario.id}-sale`,
+    order_id: `${scenario.id}-order`,
+    appointment_id: result.orderArgs.appointment_id || '',
+  })
+  assert.equal(saved.saved, true)
+  assert.equal(saved.status, 'awaiting_rating')
+  assert.equal(saved.awaiting, 'rating')
+  assert.equal(saved.lastOrderId, `${scenario.id}-order`)
+  if (scenario.orderType !== 'produto') {
+    assert.equal(saved.lastAppointmentId, result.orderArgs.appointment_id)
+  }
+
+  const rating = turn({ petbot: saved }, scenario.rating || '10', scenario.extra || {})
+  assert.equal(rating.shouldSaveRating, true)
+  assert.equal(rating.state.status, 'closed')
+}
+
+const finalFlowScenarios = [
+  {
+    id: 'produto-1',
+    type: 'produto',
+    name: 'produto shih tzu adulto com entrega',
+    orderType: 'produto',
+    payment: 'pix',
+    fulfillment: 'entrega',
+    messages: [
+      'ola bom dia',
+      'Rodrigo',
+      'quero racao pra shih tzu adulto',
+      'Premier, qualquer pacote',
+      '1',
+      'nao',
+      'pix entrega',
+      'Av. Bernardo Mascarenhas, 1327 ap 303b',
+      'Bairro Fabrica, perto da padaria',
+      'sim',
+    ],
+  },
+  {
+    id: 'produto-2',
+    type: 'produto',
+    name: 'produto gato adulto com retirada',
+    orderType: 'produto',
+    payment: 'cartao',
+    fulfillment: 'retirada',
+    messages: [
+      'oi',
+      'Camila',
+      'quero racao para gato adulto',
+      'sem preferencia',
+      '1',
+      'nao',
+      'cartao',
+      'retirada',
+      'confirmo',
+    ],
+  },
+  {
+    id: 'produto-3',
+    type: 'produto',
+    name: 'produto gato castrado saco 15kg',
+    orderType: 'produto',
+    payment: 'pix',
+    fulfillment: 'retirada',
+    messages: [
+      'boa tarde',
+      'Lara',
+      'quero racao para gato castrado',
+      'saco de 15kg, sem marca',
+      '1',
+      'nao',
+      'pix',
+      'retirada',
+      'sim',
+    ],
+  },
+  {
+    id: 'produto-4',
+    type: 'produto',
+    name: 'produto antipulgas com dinheiro e troco',
+    orderType: 'produto',
+    payment: 'dinheiro',
+    fulfillment: 'retirada',
+    messages: [
+      'oi',
+      'Joao',
+      'tem antipulgas para cachorro de 8kg?',
+      '1',
+      'nao',
+      'dinheiro',
+      'troco para 200',
+      'retirada',
+      'sim',
+    ],
+  },
+  {
+    id: 'produto-5',
+    type: 'produto',
+    name: 'produto areia higienica sem misturar agenda',
+    orderType: 'produto',
+    payment: 'pix',
+    fulfillment: 'entrega',
+    messages: [
+      'ola',
+      'Denise',
+      'tem areia higienica para gato?',
+      '1',
+      'nao',
+      'pix entrega',
+      'Rua A, 123',
+      'Centro, portao azul',
+      'sim',
+    ],
+  },
+  {
+    id: 'banho-1',
+    type: 'banho_tosa',
+    name: 'banho cachorro grande',
+    orderType: 'banho_tosa',
+    payment: 'pix',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['oi', 'Ana', 'quero banho para Thor golden', 'sem observacao', '14:00', 'pix', 'sim'],
+  },
+  {
+    id: 'banho-2',
+    type: 'banho_tosa',
+    name: 'banho e tosa com observacao',
+    orderType: 'banho_tosa',
+    payment: 'cartao',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['boa tarde', 'Marcos', 'quero banho e tosa para Nina shih tzu, sem perfume', '16:30', 'cartao', 'sim'],
+  },
+  {
+    id: 'banho-3',
+    type: 'banho_tosa',
+    name: 'agendamento generico vira banho e tosa',
+    orderType: 'banho_tosa',
+    payment: 'pix',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['oi', 'Clara', 'quero agendar', 'banho e tosa', 'Mel poodle', 'ela tem alergia ao perfume', '16:30', 'pix', 'sim'],
+  },
+  {
+    id: 'banho-4',
+    type: 'banho_tosa',
+    name: 'banho com pet bravo e dinheiro',
+    orderType: 'banho_tosa',
+    payment: 'dinheiro',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['ola', 'Rafael', 'quero banho para Rex pinscher bravo', '14:00', 'dinheiro', 'sem troco', 'sim'],
+  },
+  {
+    id: 'banho-5',
+    type: 'banho_tosa',
+    name: 'tosa higienica usa agenda de banho e tosa',
+    orderType: 'banho_tosa',
+    payment: 'pix',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['oi', 'Bia', 'quero tosa higienica para Toby spitz', 'sem observacao', '16:30', 'pix', 'sim'],
+  },
+  {
+    id: 'vet-1',
+    type: 'veterinaria',
+    name: 'veterinaria cachorro com coceira',
+    orderType: 'veterinaria',
+    payment: 'pix',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['oi', 'Paula', 'quero veterinario para Bob cachorro com coceira', '15:00', 'pix', 'sim'],
+  },
+  {
+    id: 'vet-2',
+    type: 'veterinaria',
+    name: 'veterinaria gata espirrando',
+    orderType: 'veterinaria',
+    payment: 'cartao',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['boa tarde', 'Priscila', 'preciso de consulta para Mia gata espirrando', '15:00', 'cartao', 'sim'],
+  },
+  {
+    id: 'vet-3',
+    type: 'veterinaria',
+    name: 'veterinaria cachorro mancando com dinheiro',
+    orderType: 'veterinaria',
+    payment: 'dinheiro',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['ola', 'Fernanda', 'quero vet para Apollo cachorro mancando', '15h', 'dinheiro', 'troco para 100', 'sim'],
+  },
+  {
+    id: 'vet-4',
+    type: 'veterinaria',
+    name: 'veterinaria vacina anual',
+    orderType: 'veterinaria',
+    payment: 'pix',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['oi', 'Nicole', 'quero vacina para Luna gato', 'vacina anual', '17:00', 'pix', 'sim'],
+  },
+  {
+    id: 'vet-5',
+    type: 'veterinaria',
+    name: 'veterinaria gato sem comer',
+    orderType: 'veterinaria',
+    payment: 'cartao',
+    extra: { appointments: finalFlowAppointments },
+    messages: ['bom dia', 'Bruno', 'preciso de veterinario para Simba gato, nao esta comendo', '15:00', 'cartao', 'sim'],
+  },
+]
+
+for (const scenario of finalFlowScenarios) {
+  test(`fluxo completo salva ${scenario.type}: ${scenario.name}`, () => {
+    assertConversationSaved(scenario)
+  })
 }
 
 test('produto usa raça como porte, não pede peso e soma taxa de entrega', () => {

@@ -59,3 +59,15 @@ test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {
   assert.match(env, /OPENAI_TRANSCRIPTION_MODEL=/)
   assert.match(env, /OPENAI_VISION_MODEL=/)
 })
+
+test('agenda separa banho/tosa e veterinaria em abas', () => {
+  const agenda = read('src/modules/petshop/pages/AgendaPage.jsx')
+  const appointments = read('src/shared/hooks/useAppointments.js')
+
+  assert.match(agenda, /AGENDA_TABS/)
+  assert.match(agenda, /Banho\/Tosa/)
+  assert.match(agenda, /Veterinária/)
+  assert.match(agenda, /getAppointmentServiceGroup/)
+  assert.match(appointments, /banho\.\*tosa/)
+  assert.match(appointments, /vet\|consulta\|clinica\|medico/)
+})
