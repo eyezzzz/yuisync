@@ -38,6 +38,38 @@ const products = [
     stock_quantity: 10,
     active: true,
   },
+  {
+    id: 'kitek-sache',
+    name: 'KITEKAT CAT SACHE CARNE',
+    category: 'Sachê gato',
+    price: 4,
+    stock_quantity: 20,
+    active: true,
+  },
+  {
+    id: 'whiskas-gato-adulto',
+    name: 'WHISKAS GATO ADULTO FRANGO 3KG',
+    category: 'Ração gato',
+    price: 65,
+    stock_quantity: 6,
+    active: true,
+  },
+  {
+    id: 'bravecto-8kg',
+    name: 'BRAVECTO 4.5 A 10KG',
+    category: 'Medicamentos',
+    price: 180,
+    stock_quantity: 3,
+    active: true,
+  },
+  {
+    id: 'areia-gato',
+    name: 'AREIA HIGIENICA GATO 4KG',
+    category: 'Areia',
+    price: 22,
+    stock_quantity: 8,
+    active: true,
+  },
 ]
 
 const appointments = [
@@ -306,6 +338,41 @@ test('banho entende nome e raça sem vírgula', () => {
   assert.equal(result.state.breed, 'Golden Retriever')
 })
 
+test('banho extrai nome quando cliente informa pet e porte em frase natural', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+  result = turn(context, 'Leticia')
+  context = result.context
+
+  result = turn(context, 'quero banho para o Thor cachorro médio')
+  assert.match(result.reply, /14:00/)
+  assert.equal(result.state.petName, 'Thor')
+  assert.equal(result.state.species, 'dog')
+  assert.equal(result.state.size, 'medio')
+})
+
+test('veterinaria extrai nome, especie e sintoma em frase natural', () => {
+  const vetAppointments = [{
+    id: 'slot-vet',
+    service_type: 'Consulta veterinária',
+    scheduled_at: '2026-05-13T15:00:00-03:00',
+    status: 'available',
+    price: 120,
+  }]
+  let context = {}
+  let result = turn(context, 'boa tarde', { appointments: vetAppointments })
+  context = result.context
+  result = turn(context, 'Fernanda', { appointments: vetAppointments })
+  context = result.context
+
+  result = turn(context, 'quero veterinário para Totó cachorro pequeno com coceira', { appointments: vetAppointments })
+  assert.match(result.reply, /15:00/)
+  assert.equal(result.state.petName, 'Totó')
+  assert.equal(result.state.species, 'dog')
+  assert.match(result.state.symptom, /coceira/i)
+})
+
 test('agenda cheia nao inventa horario e pode acionar humano', () => {
   let context = {}
   let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
@@ -362,6 +429,87 @@ test('cumprimento comum pede nome com saudacao natural', () => {
   assert.equal(result.action, 'pedir_nome')
   assert.match(result.reply, /^Bom dia!/)
   assert.doesNotMatch(result.reply, /Claro/)
+})
+
+test('racao por raca sem idade pede adulto ou filhote antes de buscar estoque', () => {
+  let context = {}
+  let result = turn(context, 'ola bom dia')
+  context = result.context
+
+  result = turn(context, 'joberson')
+  context = result.context
+
+  result = turn(context, 'quero uma ração para meu shih tzu')
+  assert.equal(result.action, 'pedir_categoria_pet')
+  assert.match(result.reply, /adulto ou filhote/i)
+  assert.doesNotMatch(result.reply, /não encontrei produto disponível/i)
+})
+
+test('areia higienica e produto, nao fluxo misto de agendamento', () => {
+  let context = {}
+  let result = turn(context, 'boa tarde')
+  context = result.context
+  result = turn(context, 'Denise')
+  context = result.context
+
+  result = turn(context, 'tem areia higiênica para gato?')
+  assert.equal(result.state.intent, 'produto')
+  assert.notEqual(result.state.intent, 'multi')
+  assert.match(result.reply, /AREIA HIGIENICA/i)
+})
+
+test('antipulgas com peso prioriza medicamento real e nao item aleatorio', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+  result = turn(context, 'João')
+  context = result.context
+
+  result = turn(context, 'tem antipulgas para cachorro de 8kg?')
+  assert.equal(result.state.intent, 'produto')
+  assert.match(result.reply, /BRAVECTO/i)
+  assert.doesNotMatch(result.reply, /CANISTER/i)
+})
+
+test('racao de gato adulto nao oferece produto de cachorro', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+  result = turn(context, 'Camila')
+  context = result.context
+
+  result = turn(context, 'quero ração para gato adulto')
+  assert.equal(result.state.species, 'cat')
+  assert.match(result.reply, /WHISKAS/i)
+  assert.doesNotMatch(result.reply, /CÃES|CÃO|CACHORRO|PREMIER/i)
+})
+
+test('desconto antes de escolher produto nao sugere item aleatorio', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+  result = turn(context, 'Rafael')
+  context = result.context
+  result = turn(context, 'quero ração golden')
+  context = result.context
+
+  result = turn(context, 'faz desconto?')
+  assert.match(result.reply, /Infelizmente não conseguimos aplicar desconto/i)
+  assert.doesNotMatch(result.reply, /DENTAL|Petisco|BONE/i)
+  assert.match(result.reply, /adulto ou filhote/i)
+})
+
+test('upsell de cachorro nao oferece sache de gato', () => {
+  let context = {}
+  let result = turn(context, 'Oi, quero ração pra cachorro pequeno adulto')
+  context = result.context
+  result = turn(context, 'Bruno')
+  context = result.context
+
+  result = turn(context, '1')
+  assert.equal(result.action, 'oferecer_upsell')
+  assert.match(result.reply, /Petisco Dental/i)
+  assert.doesNotMatch(result.reply, /KITEKAT/i)
 })
 
 test('guardiao usa contexto persistido para nao pedir nome de novo', () => {

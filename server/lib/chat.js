@@ -45,10 +45,6 @@ const PRODUCT_STOP_WORDS = new Set([
   'opa',
   'bom',
   'boa',
-  'cao',
-  'caes',
-  'cachorro',
-  'cachorros',
   'dia',
   'ela',
   'ele',
@@ -377,13 +373,50 @@ function productSearchText(product) {
   ].filter(Boolean).join(' '))
 }
 
+function requestedWeightKg(terms = []) {
+  for (const term of terms || []) {
+    const match = String(term).match(/^(\d{1,2})(?:kg)?$/)
+    if (match) return Number(match[1])
+  }
+  return null
+}
+
+function productWeightRangeScore(product, weightKg) {
+  if (!weightKg) return 0
+  const raw = String(product?.name || '').toLowerCase().replace(/,/g, '.')
+  const ranges = [...raw.matchAll(/(\d+(?:\.\d+)?)\s*(?:a|-|ate|até)\s*(\d+(?:\.\d+)?)\s*kg/g)]
+  if (!ranges.length) return 0
+  const matches = ranges.some((range) => {
+    const min = Number(range[1])
+    const max = Number(range[2])
+    return Number.isFinite(min) && Number.isFinite(max) && weightKg >= min && weightKg <= max
+  })
+  return matches ? 18 : -10
+}
+
+function hasDogBreedProductText(searchable = '') {
+  return /shih tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês/.test(searchable)
+}
+
 function rankProduct(product, terms) {
   const searchable = productSearchText(product)
   const name = normalizeSearchText(product?.name)
   const category = normalizeSearchText(product?.category)
   let score = 0
+  const weightKg = requestedWeightKg(terms)
   const wantsAdult = terms.some((term) => ['adulto', 'adultos', 'adulta', 'adultas'].includes(term))
   const wantsPuppy = terms.some((term) => ['filhote', 'filhotes', 'puppy', 'junior'].includes(term))
+  const wantsFlea = terms.some((term) => ['antipulga', 'antipulgas', 'pulga', 'pulgas', 'carrapato', 'carrapatos', 'bravecto', 'nexgard', 'simparic', 'credeli'].includes(term))
+  const wantsLitter = terms.some((term) => ['areia', 'higienica', 'higiênica'].includes(term))
+  const fleaProduct = /(antipulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|matacura|coleira contra)/.test(searchable)
+  const oralFleaProduct = /(bravecto|nexgard|simparic|credeli)/.test(searchable)
+  const topicalFleaProduct = /(shampoo|sabonete|spray|talco|coleira|matacura)/.test(searchable)
+  const wantsCat = terms.some((term) => ['gato', 'gatos', 'gata', 'gatas', 'cat', 'felino', 'felinos'].includes(term))
+  const wantsDog = terms.some((term) => ['cao', 'caes', 'cachorro', 'cachorros', 'cachorra', 'dog', 'canino', 'caninos'].includes(term) || KNOWN_BREED_TERMS.has(term))
+  const catProduct = /(gato|gatos|gata|felino|cat|whiskas|kitekat)/.test(searchable)
+  const dogProduct = /\b(cao|caes|cachorro|canino|dog|pedigree|bifinho|ossinho)\b/.test(searchable)
+    || /special dog/.test(searchable)
+    || hasDogBreedProductText(searchable)
   const breedTerms = terms.filter((term) => KNOWN_BREED_TERMS.has(term))
   const categoryTerms = terms.filter((term) => AGE_CATEGORY_TERMS.has(term))
   const sizeTerms = terms.filter((term) => SIZE_CATEGORY_TERMS.has(term))
@@ -413,6 +446,18 @@ function rankProduct(product, terms) {
   if (wantsAdult && /(filhote|puppy|junior)/.test(name)) score -= 12
   if (wantsPuppy && /(filhote|puppy|junior)/.test(name)) score += 8
   if (wantsPuppy && /adult/.test(name)) score -= 12
+  if (wantsFlea && fleaProduct) score += 18
+  if (wantsFlea && !fleaProduct) score -= 18
+  if (wantsFlea && oralFleaProduct) score += 20
+  if (wantsFlea && topicalFleaProduct && terms.some((term) => /\d/.test(term) || ['pequeno', 'medio', 'grande'].includes(term))) score -= 12
+  if (wantsFlea && weightKg) score += productWeightRangeScore(product, weightKg)
+  if (wantsLitter && /(areia|higienica|pa higienica)/.test(searchable)) score += 14
+  if (wantsLitter && !/(areia|higienica|pa higienica)/.test(searchable)) score -= 25
+  if (wantsCat && catProduct) score += 18
+  if (wantsCat && dogProduct) score -= 35
+  if (wantsDog && dogProduct) score += 12
+  if (wantsDog && catProduct) score -= 35
+  if (!breedTerms.length && hasDogBreedProductText(searchable)) score -= 10
   if (category.includes('racao')) score += 2
   score += Math.min(Number(product?.stock_quantity || 0), 20) / 20
   return score
@@ -456,6 +501,11 @@ function expandDbSearchTerms(terms = []) {
     cao: ['cao', 'cão'],
     sache: ['sache', 'sachê'],
     higienica: ['higienica', 'higiênica'],
+    antipulga: ['antipulga', 'antipulgas', 'pulga', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli'],
+    antipulgas: ['antipulga', 'antipulgas', 'pulga', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli'],
+    pulga: ['pulga', 'pulgas', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli'],
+    pulgas: ['pulga', 'pulgas', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli'],
+    carrapato: ['carrapato', 'carrapatos', 'bravecto', 'nexgard', 'simparic', 'credeli'],
   }
   return [...new Set((terms || []).flatMap((term) => extras[term] || [term]))].slice(0, 10)
 }
@@ -706,18 +756,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
   const selectColumns = 'id, name, category, description, species_target, image_url, price, stock_quantity, active'
-  const terms = buildSearchTerms(message)
-  if (terms.length > 0) {
-    const [searchedProducts, upsellProducts] = await Promise.all([
-      searchProductsByTerms(supabase, moduleId, tenantId, terms, selectColumns),
-      loadUpsellProducts(supabase, moduleId, tenantId, selectColumns),
-    ])
-    const selected = selectRelevantProducts(searchedProducts, message)
-    if (selected.length > 0) return mergeProductsById(selected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
-    return []
-  }
-
-  const catalog = await cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
+  const loadCatalog = () => cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
     let query = supabase
       .from('products')
       .select(selectColumns)
@@ -740,6 +779,22 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
 
     return data || []
   })
+
+  const terms = buildSearchTerms(message)
+  if (terms.length > 0) {
+    const [searchedProducts, upsellProducts] = await Promise.all([
+      searchProductsByTerms(supabase, moduleId, tenantId, terms, selectColumns),
+      loadUpsellProducts(supabase, moduleId, tenantId, selectColumns),
+    ])
+    const selected = selectRelevantProducts(searchedProducts, message)
+    if (selected.length > 0) return mergeProductsById(selected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
+    const catalog = await loadCatalog()
+    const fallbackSelected = selectRelevantProducts(catalog || [], message)
+    if (fallbackSelected.length > 0) return mergeProductsById(fallbackSelected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
+    return []
+  }
+
+  const catalog = await loadCatalog()
 
   const selected = selectRelevantProducts(catalog || [], message)
   if (selected.length > 0) return selected.slice(0, PRODUCT_CONTEXT_LIMIT)
@@ -1742,6 +1797,27 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   if (replyInsertError) {
     throw new HttpError(500, 'Unable to save assistant response.')
+  }
+
+  const { data: finalSession, error: finalSessionError } = await supabase
+    .from('chat_sessions')
+    .update({
+      context: nextContext,
+      last_message_at: botSentAt,
+    })
+    .eq('id', sessionId)
+    .select('id, context')
+    .maybeSingle()
+
+  if (finalSessionError || !finalSession || !hasPetbotState(finalSession.context)) {
+    logger.error('PetBot final session state did not persist after assistant message', {
+      sessionId,
+      moduleId,
+      code: finalSessionError?.code,
+      message: finalSessionError?.message,
+      hasFinalSession: Boolean(finalSession),
+    })
+    throw new HttpError(500, 'Unable to persist PetBot session state after assistant response.')
   }
 
   logger.info('Chat response generated', {

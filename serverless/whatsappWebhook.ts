@@ -2492,6 +2492,26 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       order_saved: Boolean(orderResult),
     },
   })
+
+  const finalSessionUpdate = await supabase
+    .from('chat_sessions')
+    .update({
+      context: mergedContext,
+      last_message_at: botSentAt,
+    })
+    .eq('id', session.id)
+    .select('id, context')
+    .maybeSingle()
+
+  if (finalSessionUpdate.error || !finalSessionUpdate.data || !hasPetbotState(finalSessionUpdate.data.context)) {
+    console.error('PetBot final session state did not persist after assistant message', {
+      sessionId: session.id,
+      error: finalSessionUpdate.error,
+      hasFinalSession: Boolean(finalSessionUpdate.data),
+    })
+    fail(500, 'Unable to persist PetBot session state after assistant response.')
+  }
+
   await sendAndMarkDelivered(supabase, env, event, savedReply)
 
   return { sessionId: session.id, ai: false, guarded: true, intent: guard.intent || detectConversationIntent(debouncedMessage) }

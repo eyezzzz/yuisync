@@ -51,7 +51,26 @@ const PRODUCT_HINTS = [
   'formula natural',
 ]
 
-const SERVICE_HINTS = ['banho', 'tosa', 'higienica', 'higiênica', 'agendar', 'agenda']
+const FOOD_HINTS = [
+  'racao',
+  'ração',
+  'comida',
+  'alimento',
+  'premier',
+  'royal',
+  'royal canin',
+  'golden',
+  'pedigree',
+  'whiskas',
+  'special dog',
+  'formula natural',
+  'gran plus',
+  'quatree',
+]
+
+const FLEA_HINTS = ['antipulga', 'anti pulga', 'pulga', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli']
+
+const SERVICE_HINTS = ['banho', 'tosa', 'agendar', 'agenda']
 const VET_HINTS = ['vet', 'veterinario', 'veterinária', 'veterinaria', 'consulta', 'vacina']
 const URGENCY_HINTS = ['vomit', 'sangr', 'veneno', 'intoxic', 'convuls', 'falta de ar', 'apatico', 'apático', 'nao come', 'não come']
 const DISCOUNT_HINTS = ['desconto', 'abaixa', 'barato', 'mais em conta', 'melhor preco', 'melhor preço']
@@ -344,6 +363,8 @@ export function buildPetbotSearchText(message = '', context = {}) {
     message,
     state.intent,
     state.species,
+    state.species === 'dog' ? 'cachorro cao caes canino' : '',
+    state.species === 'cat' ? 'gato gatos felino' : '',
     state.size,
     state.breed,
     state.ageCategory,
@@ -377,15 +398,15 @@ function hydrateFromCustomer(state, session = {}, customer = {}) {
 
 function normalizeSpecies(value = '') {
   const lower = norm(value)
-  if (lower.includes('cach') || lower.includes('cao') || lower.includes('dog')) return 'dog'
-  if (lower.includes('gat') || lower.includes('cat') || lower.includes('felin')) return 'cat'
+  if (/\b(cachorro|cachorra|cao|caes|cadela|dog|canino|caninos)\b/.test(lower)) return 'dog'
+  if (/\b(gato|gata|gatos|gatas|cat|felino|felinos)\b/.test(lower)) return 'cat'
   return clean(value)
 }
 
 function inferSpecies(message = '') {
   const lower = norm(message)
-  if (lower.includes('cach') || lower.includes('cao') || lower.includes('cadela')) return 'dog'
-  if (lower.includes('gat') || lower.includes('felin')) return 'cat'
+  if (/\b(gato|gata|gatos|gatas|cat|felino|felinos)\b/.test(lower)) return 'cat'
+  if (/\b(cachorro|cachorra|cao|caes|cadela|dog|canino|caninos)\b/.test(lower)) return 'dog'
   if (inferBreedAndSize(message).breed) return 'dog'
   return ''
 }
@@ -419,6 +440,35 @@ function inferBrand(message = '') {
   const lower = norm(message)
   const brands = ['premier', 'royal canin', 'royal', 'golden', 'pedigree', 'whiskas', 'special dog', 'formula natural', 'gran plus', 'quatree']
   return brands.find((brand) => lower.includes(norm(brand))) || ''
+}
+
+function isFoodRequest(message = '', state = {}) {
+  return hasAny([message, state.brand, state.selectedProduct?.name].filter(Boolean).join(' '), FOOD_HINTS)
+}
+
+function isFleaRequest(message = '') {
+  return hasAny(message, FLEA_HINTS)
+}
+
+function isSpecificNonFoodProductRequest(message = '') {
+  return hasAny(message, ['areia', 'shampoo', 'petisco', 'bifinho', 'sache', 'sachê', 'brinquedo', 'coleira', 'guia', 'tapete'])
+}
+
+function isLitterRequest(message = '') {
+  return hasAny(message, ['areia', 'higienica', 'higiênica'])
+}
+
+function hasDogBreedProductText(haystack = '') {
+  return /(shih tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês)/.test(haystack)
+}
+
+function isDogProductText(haystack = '') {
+  return /\b(cao|caes|cachorro|canino|dog|canister|bifinho|ossinho)\b/.test(haystack)
+    || hasDogBreedProductText(haystack)
+}
+
+function isCatProductText(haystack = '') {
+  return /(gato|gatos|felino|cat|whiskas|kitekat)/.test(haystack)
 }
 
 function detectIntent(message = '', currentIntent = '') {
@@ -497,18 +547,51 @@ function titleName(value = '') {
     .join(' ')
 }
 
+function isPlausiblePetName(value = '') {
+  const text = clean(value).split(/\s+/)[0] || ''
+  const lower = norm(text)
+  if (!isPlausibleName(text)) return false
+  if ([
+    'meu',
+    'minha',
+    'pet',
+    'cachorro',
+    'cachorra',
+    'cao',
+    'gato',
+    'gata',
+    'porte',
+    'pequeno',
+    'medio',
+    'grande',
+    'adulto',
+    'filhote',
+  ].includes(lower)) return false
+  if ([...DOG_BREEDS.keys()].some((breed) => norm(breed).split(/\s+/).includes(lower))) return false
+  return true
+}
+
 function extractPetName(message = '', state) {
   const text = clean(message)
   if (!text) return ''
   const explicit = text.match(/(?:pet chama|nome dele e|nome dele é|nome dela e|nome dela é|chama)\s+([A-Za-zÀ-ÿ'\s]{2,30})/i)
   if (explicit) return titleName(explicit[1].split(/[,.]/)[0])
+  const serviceLike = ['banho_tosa', 'veterinaria'].includes(state.intent) || hasAny(text, SERVICE_HINTS) || hasAny(text, VET_HINTS)
+  if (serviceLike) {
+    const afterPara = text.match(/(?:para|pra|pro)\s+(?:o|a)?\s*([A-Za-zÀ-ÿ']{2,24})(?=\s+(?:cachorro|cachorra|cao|cão|gato|gata|shih|golden|poodle|pinscher|spitz|pequeno|medio|médio|grande|com|que|esta|está|ta|tá)|[,.]|$)/i)
+    if (afterPara && isPlausiblePetName(afterPara[1])) return titleName(afterPara[1])
+  }
   if (state.awaiting === 'pet_name' || state.awaiting === 'pet_details' || state.awaiting === 'service_pet_details') {
+    const firstToken = text.split(/\s+/)[0]
+    if (isPlausiblePetName(firstToken) && /(cachorro|cachorra|cao|cão|gato|gata|pequeno|medio|médio|grande|shih|golden|poodle|pinscher|spitz|com|coce|manc|vomit|espirr)/i.test(text)) {
+      return titleName(firstToken)
+    }
     if (inferBreedAndSize(text).breed) {
       const firstWord = text.split(/\s+/)[0]
-      if (isPlausibleName(firstWord)) return titleName(firstWord)
+      if (isPlausiblePetName(firstWord)) return titleName(firstWord)
     }
     const first = text.split(/[,.]/)[0].trim()
-    if (isPlausibleName(first)) return titleName(first)
+    if (isPlausibleName(first) && first.split(/\s+/).length <= 2) return titleName(first)
   }
   return ''
 }
@@ -619,18 +702,52 @@ function tokenizeForScore(...values) {
     .filter((term) => term.length >= 3)
 }
 
+function requestedWeightKgFromMessage(message = '') {
+  const match = norm(message).match(/\b(\d{1,2})(?:\s*kg|kg)\b/)
+  return match ? Number(match[1]) : null
+}
+
+function productWeightRangeScore(product, weightKg) {
+  if (!weightKg) return 0
+  const raw = String(product?.name || '').toLowerCase().replace(/,/g, '.')
+  const ranges = [...raw.matchAll(/(\d+(?:\.\d+)?)\s*(?:a|-|ate|até)\s*(\d+(?:\.\d+)?)\s*kg/g)]
+  if (!ranges.length) return 0
+  const matches = ranges.some((range) => {
+    const min = Number(range[1])
+    const max = Number(range[2])
+    return Number.isFinite(min) && Number.isFinite(max) && weightKg >= min && weightKg <= max
+  })
+  return matches ? 18 : -10
+}
+
 function scoreProduct(product, state, message) {
   const haystack = norm([product.name, product.category].join(' '))
   let score = 0
+  const wantsFood = isFoodRequest(message, state)
+  const wantsFlea = isFleaRequest(message)
+  const wantsLitter = isLitterRequest(message)
+  const weightKg = requestedWeightKgFromMessage(message)
+  if (state.species === 'dog' && isCatProductText(haystack)) score -= 45
+  if (state.species === 'cat' && isDogProductText(haystack)) score -= 45
   const queryTerms = tokenizeForScore(message, state.brand, state.breed, state.size, state.ageCategory, state.species === 'dog' ? 'cao cachorro' : '', state.species === 'cat' ? 'gato' : '')
   for (const term of queryTerms) {
     if (haystack.includes(term)) score += 3
   }
   if (state.intent === 'produto' && /(racao|ração)/.test(norm(message)) && /racao|ração/.test(haystack)) score += 5
-  if (state.species === 'dog' && /(cao|cão|cachorro|canino|caes|cães)/.test(haystack)) score += 4
+  if (wantsFood && /(racao|ração|alimento|premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree)/.test(haystack)) score += 8
+  if (wantsFood && /(canister|shampoo|areia|antipulga|pulga|bravecto|nexgard|simparic|sabonete|molho|sorvete|sache|sachê|petisco|bifinho)/.test(haystack)) score -= 25
+  if (wantsFlea && /(antipulga|anti pulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|coleira contra|matacura)/.test(haystack)) score += 16
+  if (wantsFlea && !/(antipulga|anti pulga|pulga|carrapato|bravecto|nexgard|simparic|credeli|coleira contra|matacura)/.test(haystack)) score -= 18
+  if (wantsFlea && /(bravecto|nexgard|simparic|credeli)/.test(haystack)) score += 20
+  if (wantsFlea && /(shampoo|sabonete|spray|talco|coleira|matacura)/.test(haystack) && (weightKg || state.size)) score -= 12
+  if (wantsFlea && weightKg) score += productWeightRangeScore(product, weightKg)
+  if (wantsLitter && /(areia|higienica|higiênica|pa higienica)/.test(haystack)) score += 14
+  if (wantsLitter && !/(areia|higienica|higiênica|pa higienica)/.test(haystack)) score -= 25
+  if (state.species === 'dog' && /\b(cao|cachorro|canino|caes)\b/.test(haystack)) score += 4
   if (state.species === 'cat' && /(gato|gatos|felino)/.test(haystack)) score += 4
   if (state.ageCategory && haystack.includes(norm(state.ageCategory))) score += 4
   if (state.breed && haystack.includes(norm(state.breed))) score += 8
+  if (!state.breed && hasDogBreedProductText(haystack)) score -= 10
   if (state.size && haystack.includes(norm(state.size))) score += 3
   if (state.brand && haystack.includes(norm(state.brand))) score += 8
   if (/canister/.test(haystack) && /(racao|ração)/.test(norm(message))) score -= 8
@@ -668,6 +785,8 @@ function pickUpsell(products, state) {
   const scored = candidates.map((product) => {
     const haystack = norm([product.name, product.category].join(' '))
     let score = 0
+    if (lowerSpecies === 'dog' && isCatProductText(haystack)) score -= 25
+    if (lowerSpecies === 'cat' && isDogProductText(haystack)) score -= 25
     if (/(petisco|bifinho|dental|ossinho)/.test(haystack)) score += lowerSpecies === 'dog' ? 9 : 3
     if (/(dental|bifinho|ossinho)/.test(haystack)) score += lowerSpecies === 'dog' ? 4 : 1
     if (/(sache|sachê)/.test(haystack)) score += lowerSpecies === 'cat' ? 9 : 4
@@ -1226,7 +1345,19 @@ function productFlow(state, message, products, settings) {
   if (!state.species) {
     return ask('É para cachorro ou gato?', state, 'species', 'especie_pendente')
   }
+  if (!state.selectedProduct && !(state.productOptions || []).length && !state.ageCategory && isFoodRequest(message, state)) {
+    if (state.species === 'cat') {
+      return ask('Seu gato é filhote, adulto ou castrado?', state, 'pet_category', 'categoria_pendente')
+    }
+    return ask('Ele é adulto ou filhote?', state, 'pet_category', 'categoria_pendente')
+  }
   if (!state.size && !state.ageCategory) {
+    if (isFleaRequest(message)) {
+      return ask('Qual o peso ou porte dele?', state, 'pet_category', 'categoria_pendente')
+    }
+    if (isSpecificNonFoodProductRequest(message)) {
+      return presentProducts(state, products, message)
+    }
     if (state.species === 'cat') {
       return ask('Seu gato é filhote, adulto ou castrado?', state, 'pet_category', 'categoria_pendente')
     }
@@ -1298,6 +1429,12 @@ function productFlow(state, message, products, settings) {
 function maybeHandleDiscount(state, products) {
   if (state.intent !== 'produto') {
     return 'Infelizmente não conseguimos aplicar desconto nesse pedido.'
+  }
+  if (!state.selectedProduct && !(state.productOptions || []).length) {
+    if (state.awaiting === 'pet_category') {
+      return 'Infelizmente não conseguimos aplicar desconto nesse pedido.\n\nPara eu te mostrar uma opção correta do estoque, me confirma se é adulto ou filhote?'
+    }
+    return 'Infelizmente não conseguimos aplicar desconto nesse pedido.\n\nPosso te mostrar uma opção mais econômica assim que eu confirmar o produto certo.'
   }
   const optionPool = state.productOptions?.length
     ? state.productOptions
