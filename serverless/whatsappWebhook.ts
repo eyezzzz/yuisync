@@ -7,7 +7,9 @@ import {
   markPetbotOrderError,
   markPetbotOrderSaved,
   mergePetbotContext,
+  recoverPetbotContextFromHistory,
   runPetbotGuard,
+  snapshotPetbotState,
 } from '../server/lib/petbotGuard.js'
 
 const DEFAULT_MODULE_ID = 'petshop'
@@ -2403,13 +2405,15 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
 
   const history = await loadRecentHistory(supabase, session.id)
   const debouncedMessage = buildDebouncedUserMessage(history, event, env)
-  const searchText = buildPetbotSearchText(buildCatalogSearchText(history, debouncedMessage), session.context || {})
-  const context = await loadStoreContext(supabase, session, searchText, env, history)
-  const customer = await ensureCustomerProfile(supabase, session)
+  const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
+  const sessionForGuard = { ...session, context: recoveredContext }
+  const searchText = buildPetbotSearchText(buildCatalogSearchText(history, debouncedMessage), recoveredContext)
+  const context = await loadStoreContext(supabase, sessionForGuard, searchText, env, history)
+  const customer = await ensureCustomerProfile(supabase, sessionForGuard)
 
   let guard = runPetbotGuard({
     message: debouncedMessage,
-    session,
+    session: sessionForGuard,
     customer,
     products: context.products,
     appointments: context.appointments,
@@ -2423,7 +2427,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
 
   if (guard.shouldSaveOrder) {
     try {
-      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, session, context, guard.orderArgs)
+      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, sessionForGuard, context, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
       reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
     } catch (error) {
@@ -2436,7 +2440,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   if (!reply) fail(502, 'PetBot response came back empty.')
 
   const mergedContext = mergePetbotContext({
-    ...(session.context || {}),
+    ...(sessionForGuard.context || {}),
     ...(orderResult ? {
       last_sale_id: orderResult.sale_id,
       last_order_id: orderResult.order_id || null,
@@ -2477,6 +2481,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       image_url: primaryImage.imageUrl,
       media_attachments: mediaMessages,
     } : {}),
+    petbot_state: snapshotPetbotState(state),
     petbot_guard: {
       version: state?.version || 1,
       intent: guard.intent,

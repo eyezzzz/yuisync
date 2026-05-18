@@ -4,8 +4,10 @@ import {
   getPetbotState,
   markPetbotOrderSaved,
   mergePetbotContext,
+  recoverPetbotContextFromHistory,
   renderGuardedPetbotReply,
   runPetbotGuard,
+  snapshotPetbotState,
 } from '../server/lib/petbotGuard.js'
 
 const settings = { deliveryFee: 10 }
@@ -379,6 +381,53 @@ test('guardiao usa contexto persistido para nao pedir nome de novo', () => {
   assert.equal(result.state.breed, 'Shih Tzu')
   assert.equal(result.state.ageCategory, 'adulto')
   assert.doesNotMatch(result.reply, /nome/i)
+})
+
+test('guardiao recupera memoria pelo historico quando context.petbot vier vazio', () => {
+  const recovered = recoverPetbotContextFromHistory({}, {
+    customer_name: 'Gabriel',
+    intent: 'produto',
+  }, [
+    { role: 'user', content: 'ola bom dia', metadata: {} },
+    { role: 'assistant', content: 'Bom dia! Qual seu nome, por favor?', metadata: {} },
+    { role: 'user', content: 'gabriel, quero uma racao', metadata: {} },
+    { role: 'assistant', content: 'Ele é filhote, adulto ou qual porte/raça?', metadata: {} },
+    { role: 'user', content: 'filhote, spitz alemao', metadata: {} },
+  ])
+  const state = getPetbotState(recovered)
+
+  assert.equal(state.customerName, 'Gabriel')
+  assert.equal(state.nameConfirmed, true)
+  assert.equal(state.intent, 'produto')
+  assert.equal(state.breed, 'Spitz')
+  assert.equal(state.size, 'pequeno')
+  assert.equal(state.ageCategory, 'filhote')
+})
+
+test('snapshot do estado permite recuperar selecoes e checkout', () => {
+  const state = getPetbotState({})
+  state.intent = 'produto'
+  state.customerName = 'Bianca'
+  state.nameConfirmed = true
+  state.species = 'dog'
+  state.size = 'pequeno'
+  state.selectedProduct = {
+    product_id: 'premier-shih-adulto',
+    name: 'Premier Shih Tzu Adulto',
+    quantity: 1,
+    unit_price: 120,
+  }
+  state.payment.method = 'pix'
+
+  const recovered = recoverPetbotContextFromHistory({}, {}, [
+    { role: 'assistant', content: 'Pedido em andamento', metadata: { petbot_state: snapshotPetbotState(state) } },
+  ])
+  const next = getPetbotState(recovered)
+
+  assert.equal(next.customerName, 'Bianca')
+  assert.equal(next.intent, 'produto')
+  assert.equal(next.selectedProduct.product_id, 'premier-shih-adulto')
+  assert.equal(next.payment.method, 'pix')
 })
 
 test('guardiao nao permite redigir resumo parcial com LLM', () => {

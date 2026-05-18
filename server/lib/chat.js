@@ -6,7 +6,9 @@ import {
   markPetbotOrderError,
   markPetbotOrderSaved,
   mergePetbotContext,
+  recoverPetbotContextFromHistory,
   runPetbotGuard,
+  snapshotPetbotState,
 } from './petbotGuard.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
@@ -1616,20 +1618,22 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const intent = detectIntent(trimmedMessage)
   const history = await loadRecentMessages(supabase, sessionId)
-  const catalogSearchText = buildPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), session.context || {})
+  const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
+  const sessionForGuard = { ...session, context: recoveredContext }
+  const catalogSearchText = buildPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), recoveredContext)
   const [storeSettings, products, appointments] = await Promise.all([
     loadStoreSettings(supabase, moduleId, session.tenant_id),
     loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
     loadAppointments(supabase, moduleId, session.tenant_id),
   ])
-  const customer = await ensureCustomerProfile(supabase, session)
+  const customer = await ensureCustomerProfile(supabase, sessionForGuard)
 
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
   await insertUserMessages(supabase, sessionId, userMessages)
 
   let guard = runPetbotGuard({
     message: trimmedMessage,
-    session,
+    session: sessionForGuard,
     customer,
     products,
     appointments,
@@ -1643,7 +1647,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   if (guard.shouldSaveOrder) {
     try {
-      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, session, storeSettings, guard.orderArgs)
+      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, sessionForGuard, storeSettings, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
       reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
     } catch (error) {
@@ -1663,7 +1667,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const botSentAt = new Date().toISOString()
   const nextContext = mergePetbotContext({
-    ...(session.context || {}),
+    ...(sessionForGuard.context || {}),
     ...(orderResult ? {
       last_sale_id: orderResult.sale_id,
       last_order_id: orderResult.order_id || null,
@@ -1719,6 +1723,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
           image_url: primaryImage.imageUrl,
           media_attachments: mediaMessages,
         } : {}),
+        petbot_state: snapshotPetbotState(state),
         petbot_guard: {
           version: state?.version || 1,
           intent: guard.intent,

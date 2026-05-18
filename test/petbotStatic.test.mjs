@@ -39,6 +39,8 @@ test('resposta do PetBot so e salva depois do estado da sessao persistir', () =>
   assert.ok(localPersistIndex < localReplyIndex)
   assert.match(localChat, /customer_name: state\.customerName/)
   assert.match(localChat, /hasPetbotState\(updatedSession\.context\)/)
+  assert.match(localChat, /recoverPetbotContextFromHistory/)
+  assert.match(localChat, /petbot_state: snapshotPetbotState\(state\)/)
 
   const webhookPersistIndex = webhook.indexOf('const sessionUpdate = await supabase')
   const webhookReplyIndex = webhook.indexOf('const savedReply = await saveAssistantMessage')
@@ -47,6 +49,8 @@ test('resposta do PetBot so e salva depois do estado da sessao persistir', () =>
   assert.ok(webhookPersistIndex < webhookReplyIndex)
   assert.match(webhook, /customer_name: state\.customerName/)
   assert.match(webhook, /hasPetbotState\(sessionUpdate\.data\.context\)/)
+  assert.match(webhook, /recoverPetbotContextFromHistory/)
+  assert.match(webhook, /petbot_state: snapshotPetbotState\(state\)/)
 })
 
 test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {

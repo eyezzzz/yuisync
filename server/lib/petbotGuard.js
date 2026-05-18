@@ -262,6 +262,82 @@ export function mergePetbotContext(context = {}, state) {
   }
 }
 
+export function snapshotPetbotState(state = {}) {
+  const next = getPetbotState({ petbot: state })
+  return {
+    version: PETBOT_VERSION,
+    status: next.status,
+    intent: next.intent,
+    awaiting: next.awaiting,
+    lastAction: next.lastAction,
+    customerName: next.customerName,
+    nameConfirmed: Boolean(next.nameConfirmed),
+    petName: next.petName,
+    species: next.species,
+    size: next.size,
+    breed: next.breed,
+    ageCategory: next.ageCategory,
+    symptom: next.symptom,
+    brand: next.brand,
+    serviceType: next.serviceType,
+    selectedProduct: next.selectedProduct,
+    productOptions: Array.isArray(next.productOptions) ? next.productOptions.slice(0, 5) : [],
+    selectedSlot: next.selectedSlot,
+    slotOptions: Array.isArray(next.slotOptions) ? next.slotOptions.slice(0, 5) : [],
+    upsell: next.upsell,
+    payment: next.payment,
+    fulfillment: next.fulfillment,
+    totals: next.totals,
+    finalSummaryShown: Boolean(next.finalSummaryShown),
+    saved: Boolean(next.saved),
+    csatScore: next.csatScore,
+    blockedReasons: Array.isArray(next.blockedReasons) ? next.blockedReasons.slice(-8) : [],
+    updatedAt: new Date().toISOString(),
+  }
+}
+
+export function recoverPetbotContextFromHistory(context = {}, session = {}, history = []) {
+  const incoming = context && typeof context === 'object' && !Array.isArray(context) ? context : {}
+  if (incoming.petbot && typeof incoming.petbot === 'object' && Object.keys(incoming.petbot).length > 0) {
+    return incoming
+  }
+
+  const messages = Array.isArray(history) ? history : []
+  const lastSnapshot = [...messages]
+    .reverse()
+    .map((message) => message?.metadata?.petbot_state)
+    .find((state) => state && typeof state === 'object' && !Array.isArray(state))
+  const state = getPetbotState({ petbot: lastSnapshot || {} })
+
+  const sessionName = clean(session.customer_name)
+  if (!state.customerName && isKnownName(sessionName)) {
+    state.customerName = titleName(sessionName)
+    state.nameConfirmed = true
+  }
+
+  const sessionIntent = clean(session.intent)
+  if (!state.intent && sessionIntent && !['geral', 'duvida', 'dúvida'].includes(norm(sessionIntent))) {
+    state.intent = sessionIntent
+  }
+
+  for (const entry of messages) {
+    if (entry?.role !== 'user') continue
+    applyMessageFacts(state, clean(entry.content))
+  }
+
+  const hasUsefulState = state.nameConfirmed
+    || state.intent
+    || state.species
+    || state.breed
+    || state.ageCategory
+    || state.selectedProduct
+    || state.selectedSlot
+    || state.payment.method
+    || state.fulfillment.type
+
+  return hasUsefulState ? mergePetbotContext(incoming, state) : incoming
+}
+
 export function buildPetbotSearchText(message = '', context = {}) {
   const state = getPetbotState(context)
   return [
