@@ -11,6 +11,12 @@ import {
   runPetbotGuard,
   snapshotPetbotState,
 } from '../server/lib/petbotGuard.js'
+// @ts-ignore Shared AI helper is authored as ESM JavaScript for the Node API too.
+import {
+  buildInterpretedPetbotSearchText,
+  interpretPetbotMessageWithLlm,
+  redraftPetbotReplyWithLlm,
+} from '../server/lib/petbotAi.js'
 
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -2033,7 +2039,7 @@ async function loadStoreContext(
     customerContext: '',
     examplesContext: '',
     modelName: env.openAiModel,
-    temperature: 0.2,
+    temperature: 0.5,
     productContext: buildProductsContext(productsForGuard),
     appointmentsContext: buildAppointmentsContext(appointments),
     products: productsForGuard,
@@ -2212,7 +2218,7 @@ async function callOpenAi(
       signal: controller.signal,
       body: JSON.stringify({
         model: context.modelName || env.openAiModel,
-        temperature: Number.isFinite(context.temperature) ? context.temperature : 0.2,
+        temperature: Number.isFinite(context.temperature) ? context.temperature : 0.5,
         max_tokens: 500,
         messages,
         tools: PETBOT_TOOLS,
@@ -2258,7 +2264,7 @@ async function callOpenAi(
         signal: controller.signal,
         body: JSON.stringify({
           model: context.modelName || env.openAiModel,
-          temperature: Number.isFinite(context.temperature) ? context.temperature : 0.2,
+          temperature: Number.isFinite(context.temperature) ? context.temperature : 0.5,
           max_tokens: 500,
           messages: [
             ...messages,
@@ -2491,9 +2497,25 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   const debouncedMessage = buildDebouncedUserMessage(history, event, env)
   const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
   const sessionForGuard = { ...session, context: recoveredContext }
-  const searchText = buildPetbotSearchText(buildCatalogSearchText(history, debouncedMessage), recoveredContext)
-  const context = await loadStoreContext(supabase, sessionForGuard, searchText, env, history)
   const customer = await ensureCustomerProfile(supabase, sessionForGuard)
+  const customerContext = buildCustomerContext(customer)
+  const llmInterpretation = await interpretPetbotMessageWithLlm({
+    apiKey: env.openAiApiKey,
+    model: env.openAiModel,
+    temperature: 0.5,
+    timeoutMs: env.openAiTimeoutMs,
+    message: debouncedMessage,
+    history,
+    state: recoveredContext,
+    customerContext,
+    mediaContext: event.media?.description || '',
+  })
+  const searchText = buildPetbotSearchText(
+    buildInterpretedPetbotSearchText(buildCatalogSearchText(history, debouncedMessage), llmInterpretation as any),
+    recoveredContext,
+  )
+  const context = await loadStoreContext(supabase, sessionForGuard, searchText, env, history)
+  context.customerContext = customerContext
 
   let guard = runPetbotGuard({
     message: debouncedMessage,
@@ -2502,10 +2524,12 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     products: context.products,
     appointments: context.appointments,
     settings: context,
+    interpretation: llmInterpretation,
   })
   let reply = clean(guard.reply)
   let state = guard.state
   let orderResult: LooseRecord | null = null
+  let redraftResult: LooseRecord | null = null
   const mediaMessages = Array.isArray(guard.mediaMessages) ? guard.mediaMessages : []
   const primaryImage = mediaMessages.find((item: LooseRecord) => item?.type === 'image' && item.imageUrl)
 
@@ -2519,6 +2543,20 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar a equipe para resolver isso antes de finalizar.'
       console.warn('PetBot guarded order save failed', error)
     }
+  }
+
+  if (guard.guardDirective?.allowLlmRedraft) {
+    redraftResult = await redraftPetbotReplyWithLlm({
+      apiKey: env.openAiApiKey,
+      model: context.modelName || env.openAiModel,
+      temperature: context.temperature,
+      timeoutMs: env.openAiTimeoutMs,
+      message: debouncedMessage,
+      history,
+      directive: guard.guardDirective,
+      fallbackReply: reply,
+    }) as LooseRecord
+    if (redraftResult?.reply) reply = clean(redraftResult.reply)
   }
 
   if (!reply) fail(502, 'PetBot response came back empty.')
@@ -2573,6 +2611,9 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       blocked_reasons: state?.blockedReasons || [],
       needs_human: Boolean(guard.needsHuman),
       allow_llm_redraft: Boolean(guard.guardDirective?.allowLlmRedraft),
+      llm_interpretation: llmInterpretation,
+      llm_redraft_used: Boolean(redraftResult?.used),
+      llm_redraft_validation: redraftResult?.validation || null,
       order_saved: Boolean(orderResult),
     },
   })

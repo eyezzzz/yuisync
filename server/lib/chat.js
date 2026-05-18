@@ -10,6 +10,11 @@ import {
   runPetbotGuard,
   snapshotPetbotState,
 } from './petbotGuard.js'
+import {
+  buildInterpretedPetbotSearchText,
+  interpretPetbotMessageWithLlm,
+  redraftPetbotReplyWithLlm,
+} from './petbotAi.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -67,7 +72,7 @@ const PRODUCT_STOP_WORDS = new Set([
 ])
 
 const DEFAULT_BOT_MODEL = serverEnv.openAiModel
-const DEFAULT_BOT_TEMPERATURE = 0.2
+const DEFAULT_BOT_TEMPERATURE = 0.5
 const DEFAULT_DELIVERY_FEE = 10
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
 const BUSY_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
@@ -94,6 +99,7 @@ const KNOWN_BREED_TERMS = new Set([
   'pug',
   'rottweiler',
   'schnauzer',
+  'shi',
   'shih',
   'spitz',
   'tzu',
@@ -311,6 +317,7 @@ function buildSearchTerms(message = '') {
     .map((term) => term.trim())
     .filter((term) => term.length >= 3 && !PRODUCT_STOP_WORDS.has(term))
     .flatMap((term) => {
+      if (term === 'shi') return ['shi', 'shih', 'tzu', 'shihtzu']
       if (term === 'shihtzu') return ['shih', 'tzu', 'shihtzu']
       if (term === 'york') return ['york', 'yorkshire']
       return [term]
@@ -404,7 +411,7 @@ function productPackageKgScore(product, packageKg) {
 }
 
 function hasDogBreedProductText(searchable = '') {
-  return /shih tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês/.test(searchable)
+  return /shih tzu|shi tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês/.test(searchable)
 }
 
 function rankProduct(product, terms) {
@@ -1690,13 +1697,29 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const history = await loadRecentMessages(supabase, sessionId)
   const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
   const sessionForGuard = { ...session, context: recoveredContext }
-  const catalogSearchText = buildPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), recoveredContext)
-  const [storeSettings, products, appointments] = await Promise.all([
+  const [storeSettings, runtimeConfig, customer] = await Promise.all([
     loadStoreSettings(supabase, moduleId, session.tenant_id),
+    loadBotRuntimeConfig(supabase, session.tenant_id, moduleId),
+    ensureCustomerProfile(supabase, sessionForGuard),
+  ])
+  const llmInterpretation = await interpretPetbotMessageWithLlm({
+    apiKey: serverEnv.openAiApiKey,
+    model: runtimeConfig.modelName,
+    temperature: runtimeConfig.temperature,
+    timeoutMs: serverEnv.openAiTimeoutMs,
+    message: trimmedMessage,
+    history,
+    state: recoveredContext,
+    customerContext: buildCustomerContext(customer),
+  })
+  const catalogSearchText = buildPetbotSearchText(
+    buildInterpretedPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), llmInterpretation),
+    recoveredContext,
+  )
+  const [products, appointments] = await Promise.all([
     loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
     loadAppointments(supabase, moduleId, session.tenant_id),
   ])
-  const customer = await ensureCustomerProfile(supabase, sessionForGuard)
 
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
   await insertUserMessages(supabase, sessionId, userMessages)
@@ -1708,10 +1731,12 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     products,
     appointments,
     settings: storeSettings,
+    interpretation: llmInterpretation,
   })
   let reply = guard.reply?.trim()
   let state = guard.state
   let orderResult = null
+  let redraftResult = null
   const mediaMessages = Array.isArray(guard.mediaMessages) ? guard.mediaMessages : []
   const primaryImage = mediaMessages.find((item) => item?.type === 'image' && item.imageUrl)
 
@@ -1729,6 +1754,20 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  if (guard.guardDirective?.allowLlmRedraft) {
+    redraftResult = await redraftPetbotReplyWithLlm({
+      apiKey: serverEnv.openAiApiKey,
+      model: runtimeConfig.modelName,
+      temperature: runtimeConfig.temperature,
+      timeoutMs: serverEnv.openAiTimeoutMs,
+      message: trimmedMessage,
+      history,
+      directive: guard.guardDirective,
+      fallbackReply: reply,
+    })
+    if (redraftResult?.reply) reply = redraftResult.reply
   }
 
   if (!reply) {
@@ -1801,6 +1840,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
           blocked_reasons: state?.blockedReasons || [],
           needs_human: Boolean(guard.needsHuman),
           allow_llm_redraft: Boolean(guard.guardDirective?.allowLlmRedraft),
+          llm_interpretation: llmInterpretation,
+          llm_redraft_used: Boolean(redraftResult?.used),
+          llm_redraft_validation: redraftResult?.validation || null,
           order_saved: Boolean(orderResult),
         },
       },

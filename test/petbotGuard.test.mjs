@@ -865,6 +865,55 @@ test('racao por raca sem idade pede adulto ou filhote antes de buscar estoque', 
   assert.doesNotMatch(result.reply, /não encontrei produto disponível/i)
 })
 
+test('racao com grafia shi tzu entende cachorro pequeno e nao pede especie', () => {
+  let context = {}
+  let result = turn(context, 'boa tarde')
+  context = result.context
+
+  result = turn(context, 'Robertao, quero uma racao para shi tzu adulto')
+  assert.equal(result.state.customerName, 'Robertao')
+  assert.equal(result.state.species, 'dog')
+  assert.equal(result.state.breed, 'Shih Tzu')
+  assert.equal(result.state.size, 'pequeno')
+  assert.notEqual(result.action, 'pedir_especie')
+  assert.doesNotMatch(result.reply, /cachorro ou gato/i)
+})
+
+test('guardiao usa interpretacao da LLM antes de decidir proxima acao', () => {
+  const result = runPetbotGuard({
+    message: 'Robertao, quero uma racao para shi tzu adulto',
+    session: {
+      id: 'session-1',
+      module_id: 'petshop',
+      tenant_id: 'tenant-1',
+      customer_phone: '123',
+      customer_name: null,
+      context: {},
+    },
+    customer: { client: null, phone: '123', isKnown: false },
+    products,
+    appointments,
+    settings,
+    interpretation: {
+      customer_name: 'Robertao',
+      intent: 'produto',
+      species: 'dog',
+      breed: 'Shih Tzu',
+      size: 'pequeno',
+      age_category: 'adulto',
+      product_kind: 'food',
+      confidence: 0.94,
+    },
+  })
+
+  assert.equal(result.state.customerName, 'Robertao')
+  assert.equal(result.state.intent, 'produto')
+  assert.equal(result.state.species, 'dog')
+  assert.equal(result.state.breed, 'Shih Tzu')
+  assert.notEqual(result.action, 'pedir_nome')
+  assert.notEqual(result.action, 'pedir_especie')
+})
+
 test('racao pergunta marca e embalagem antes de listar quando faltam filtros', () => {
   let context = {}
   let result = turn(context, 'oi')

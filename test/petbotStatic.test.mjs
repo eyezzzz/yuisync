@@ -85,3 +85,27 @@ test('ordens mantem cards ativos de hoje e historico concluido em tabela', () =>
   assert.match(hook, /dateField/)
   assert.match(hook, /\.limit\(limit\)/)
 })
+
+test('PetBot usa temperatura 0.5 para respostas da LLM', () => {
+  const localChat = read('server/lib/chat.js')
+  const webhook = read('serverless/whatsappWebhook.ts')
+
+  assert.match(localChat, /DEFAULT_BOT_TEMPERATURE = 0\.5/)
+  assert.match(webhook, /temperature: 0\.5/)
+  assert.doesNotMatch(webhook, /temperature: 0\.2/)
+})
+
+test('PetBot usa LLM como interpretador antes do guardiao', () => {
+  const localChat = read('server/lib/chat.js')
+  const webhook = read('serverless/whatsappWebhook.ts')
+  const ai = read('server/lib/petbotAi.js')
+
+  assert.match(ai, /interpretPetbotMessageWithLlm/)
+  assert.match(ai, /redraftPetbotReplyWithLlm/)
+  assert.match(localChat, /interpretPetbotMessageWithLlm/)
+  assert.match(localChat, /interpretation: llmInterpretation/)
+  assert.match(localChat, /redraftPetbotReplyWithLlm/)
+  assert.match(webhook, /interpretPetbotMessageWithLlm/)
+  assert.match(webhook, /interpretation: llmInterpretation/)
+  assert.match(webhook, /redraftPetbotReplyWithLlm/)
+})

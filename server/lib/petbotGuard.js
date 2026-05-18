@@ -4,6 +4,7 @@ const PETBOT_VERSION = 1
 
 const DOG_BREEDS = new Map([
   ['shih tzu', { breed: 'Shih Tzu', size: 'pequeno' }],
+  ['shi tzu', { breed: 'Shih Tzu', size: 'pequeno' }],
   ['shihtzu', { breed: 'Shih Tzu', size: 'pequeno' }],
   ['shitzu', { breed: 'Shih Tzu', size: 'pequeno' }],
   ['yorkshire', { breed: 'Yorkshire', size: 'pequeno' }],
@@ -495,7 +496,7 @@ function isLitterRequest(message = '') {
 }
 
 function hasDogBreedProductText(haystack = '') {
-  return /(shih tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês)/.test(haystack)
+  return /(shih tzu|shi tzu|shihtzu|yorkshire|lhasa|spitz|poodle|pinscher|bulldog|pug|maltes|maltês)/.test(haystack)
 }
 
 function isDogProductText(haystack = '') {
@@ -827,6 +828,104 @@ function inferPackagePreference(message = '') {
     return { packagePreference: '', packageKg: null, any: true }
   }
   return null
+}
+
+function applyInterpretedFacts(state, facts = {}) {
+  if (!facts || typeof facts !== 'object') return
+
+  const interpretedName = clean(facts.customer_name || facts.customerName)
+  if (interpretedName && !state.nameConfirmed && isPlausibleName(interpretedName)) {
+    state.customerName = titleName(interpretedName)
+    state.nameConfirmed = true
+  }
+
+  const nextIntent = clean(facts.intent)
+  if (nextIntent && ['produto', 'banho_tosa', 'veterinaria', 'multi'].includes(nextIntent)) {
+    if (state.intent && state.intent !== nextIntent) resetOrderProgressForIntentChange(state, nextIntent)
+    state.intent = nextIntent
+  }
+
+  const interpretedSpecies = normalizeSpecies(facts.species)
+  if (interpretedSpecies === 'dog' || interpretedSpecies === 'cat') state.species = interpretedSpecies
+
+  const interpretedBreed = clean(facts.breed)
+  if (interpretedBreed) {
+    state.breed = normalizeBreedLabel(interpretedBreed)
+    const breedInfo = inferBreedAndSize(interpretedBreed)
+    if (breedInfo.breed) {
+      state.breed = breedInfo.breed
+      state.species ||= 'dog'
+      state.size ||= breedInfo.size
+    }
+  }
+
+  const interpretedSize = clean(facts.size)
+  if (['pequeno', 'medio', 'grande'].includes(norm(interpretedSize))) state.size = norm(interpretedSize)
+
+  const interpretedAge = clean(facts.age_category || facts.ageCategory)
+  if (['filhote', 'adulto', 'castrado', 'senior'].includes(norm(interpretedAge))) state.ageCategory = norm(interpretedAge)
+
+  const interpretedPetName = clean(facts.pet_name || facts.petName)
+  if (interpretedPetName && !state.petName && isPlausiblePetName(interpretedPetName)) {
+    state.petName = titleName(interpretedPetName)
+  }
+
+  const productKind = clean(facts.product_kind || facts.productKind)
+  if (['food', 'flea', 'litter', 'specific'].includes(productKind) && state.intent === 'produto') {
+    state.productKind = productKind
+  }
+
+  const brand = clean(facts.brand)
+  if (brand && state.intent === 'produto') {
+    state.brand = brand
+    state.brandPreferenceAny = false
+    state.brandPreferenceAsked = true
+  }
+
+  const packagePreference = clean(facts.package_preference || facts.packagePreference)
+  const packageKg = Number(facts.package_kg ?? facts.packageKg)
+  if ((packagePreference || Number.isFinite(packageKg)) && state.intent === 'produto') {
+    state.packagePreference = packagePreference || `${packageKg}kg`
+    state.packageKg = Number.isFinite(packageKg) ? packageKg : null
+    state.packagePreferenceAny = false
+    state.packagePreferenceAsked = true
+  }
+
+  const quantity = Number(facts.quantity)
+  if (Number.isFinite(quantity) && quantity > 0 && state.intent === 'produto') {
+    if (state.selectedProduct && state.awaiting !== 'product_choice') state.selectedProduct.quantity = quantity
+    else state.pendingQuantity = quantity
+  }
+
+  const serviceType = clean(facts.service_type || facts.serviceType)
+  if (serviceType && ['banho_tosa', 'veterinaria'].includes(state.intent)) state.serviceType = serviceType
+
+  const serviceNotes = clean(facts.service_notes || facts.serviceNotes)
+  if (serviceNotes && state.intent === 'banho_tosa') {
+    state.serviceNotes = serviceNotes.slice(0, 160)
+    state.serviceNotesAsked = true
+  }
+
+  const symptom = clean(facts.symptom)
+  if (symptom && state.intent === 'veterinaria') state.symptom = symptom.slice(0, 160)
+
+  const payment = detectPayment(facts.payment_method || facts.payment)
+  if (payment) state.payment.method = payment
+
+  const fulfillment = detectFulfillment(facts.fulfillment_type || facts.fulfillmentType)
+  if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
+
+  const address = clean(facts.delivery_address || facts.deliveryAddress)
+  if (address && state.intent === 'produto') updateAddressFromMessage(state, address)
+  if (clean(facts.neighborhood)) state.fulfillment.neighborhood = clean(facts.neighborhood)
+  if (clean(facts.city)) state.fulfillment.city = clean(facts.city)
+  if (clean(facts.reference)) state.fulfillment.reference = clean(facts.reference)
+}
+
+function normalizeBreedLabel(value = '') {
+  const lower = norm(value)
+  if (['shi tzu', 'shih tzu', 'shihtzu', 'shitzu'].includes(lower)) return 'Shih Tzu'
+  return clean(value)
 }
 
 function productPackageMatches(product, packageKg) {
@@ -1742,6 +1841,7 @@ export function runPetbotGuard({
   products = [],
   appointments = [],
   settings = {},
+  interpretation = null,
 } = {}) {
   const trimmed = clean(message)
   const context = session.context || {}
@@ -1759,9 +1859,10 @@ export function runPetbotGuard({
     }
   }
 
+  applyInterpretedFacts(state, interpretation)
   applyMessageFacts(state, trimmed)
 
-  if (hasAny(trimmed, HUMAN_HINTS)) {
+  if (interpretation?.wants_human || hasAny(trimmed, HUMAN_HINTS)) {
     return handoffToHuman(state, 'Claro. Vou chamar a equipe para continuar com você por aqui.', 'humano_solicitado')
   }
 
@@ -1775,21 +1876,21 @@ export function runPetbotGuard({
     return handoffToHuman(state, 'Perfeito. Vou chamar a equipe para verificar isso certinho com você.', state.lastAction)
   }
 
-  if (state.finalSummaryShown && !state.saved && isAffirmative(trimmed)) {
+  if (state.finalSummaryShown && !state.saved && (interpretation?.confirmation || isAffirmative(trimmed))) {
     recalcTotals(state, settings.deliveryFee)
     state.status = 'confirmando'
     state.confirmationKey = `${state.intent}:${state.customerName}:${state.totals.total}:${state.selectedProduct?.product_id || state.selectedSlot?.id || ''}`
     return guardResult('Perfeito, vou registrar agora.', state, { shouldSaveOrder: true, orderArgs: buildOrderArgs(state), action: 'confirmar_salvar' })
   }
 
-  if (state.finalSummaryShown && !state.saved && isNegative(trimmed)) {
+  if (state.finalSummaryShown && !state.saved && (interpretation?.negation || isNegative(trimmed))) {
     state.status = 'cancelado'
     state.awaiting = ''
     state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'confirmacao_recusada'])]
     return guardResult('Tudo bem, não vou finalizar esse pedido. Se quiser alterar algo, me diga o que prefere.', state, { action: 'cancelar' })
   }
 
-  if (hasAny(trimmed, DISCOUNT_HINTS)) {
+  if (interpretation?.wants_discount || hasAny(trimmed, DISCOUNT_HINTS)) {
     return guardResult(maybeHandleDiscount(state, products), state, { action: 'recusar_desconto' })
   }
 
