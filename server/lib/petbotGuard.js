@@ -93,6 +93,7 @@ const AWAITING_ACTIONS = {
   change_for: 'pedir_troco',
   fulfillment: 'pedir_entrega_retirada',
   delivery_address: 'pedir_endereco',
+  food_preferences: 'pedir_preferencia_racao',
   rating: 'pedir_avaliacao',
   human: 'handoff_humano',
 }
@@ -108,6 +109,7 @@ const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
   'pedir_troco',
   'pedir_entrega_retirada',
   'pedir_endereco',
+  'pedir_preferencia_racao',
   'oferecer_upsell',
   'recusar_desconto',
   'cancelar',
@@ -233,7 +235,14 @@ function defaultState() {
     ageCategory: '',
     symptom: '',
     brand: '',
+    brandPreferenceAny: false,
+    brandPreferenceAsked: false,
     productKind: '',
+    packagePreference: '',
+    packageKg: null,
+    packagePreferenceAny: false,
+    packagePreferenceAsked: false,
+    pendingQuantity: null,
     selectedProduct: null,
     productOptions: [],
     selectedSlot: null,
@@ -300,7 +309,14 @@ export function snapshotPetbotState(state = {}) {
     ageCategory: next.ageCategory,
     symptom: next.symptom,
     brand: next.brand,
+    brandPreferenceAny: Boolean(next.brandPreferenceAny),
+    brandPreferenceAsked: Boolean(next.brandPreferenceAsked),
     productKind: next.productKind,
+    packagePreference: next.packagePreference,
+    packageKg: next.packageKg,
+    packagePreferenceAny: Boolean(next.packagePreferenceAny),
+    packagePreferenceAsked: Boolean(next.packagePreferenceAsked),
+    pendingQuantity: next.pendingQuantity,
     serviceType: next.serviceType,
     selectedProduct: next.selectedProduct,
     productOptions: Array.isArray(next.productOptions) ? next.productOptions.slice(0, 5) : [],
@@ -372,6 +388,8 @@ export function buildPetbotSearchText(message = '', context = {}) {
     state.breed,
     state.ageCategory,
     state.brand,
+    state.packagePreference,
+    state.packageKg ? `${state.packageKg}kg` : '',
     state.selectedProduct?.name,
     ...(state.productOptions || []).slice(0, 3).map((item) => item.name),
   ].filter(Boolean).join(' ')
@@ -443,6 +461,11 @@ function inferBrand(message = '') {
   const lower = norm(message)
   const brands = ['premier', 'royal canin', 'royal', 'golden', 'pedigree', 'whiskas', 'special dog', 'formula natural', 'gran plus', 'quatree']
   return brands.find((brand) => lower.includes(norm(brand))) || ''
+}
+
+function hasNoBrandPreference(message = '') {
+  const lower = norm(message)
+  return /(sem preferencia|sem preferência|tanto faz|qualquer marca|pode ser qualquer|a que tiver|nao tenho marca|não tenho marca|nao tenho preferencia|não tenho preferência)/.test(lower)
 }
 
 function isFoodRequest(message = '', state = {}) {
@@ -656,7 +679,14 @@ function resetOrderProgressForIntentChange(state, nextIntent) {
   if (nextIntent === 'produto') state.symptom = ''
   if (nextIntent !== 'produto') {
     state.brand = ''
+    state.brandPreferenceAny = false
+    state.brandPreferenceAsked = false
     state.productKind = ''
+    state.packagePreference = ''
+    state.packageKg = null
+    state.packagePreferenceAny = false
+    state.packagePreferenceAsked = false
+    state.pendingQuantity = null
   }
 }
 
@@ -728,6 +758,24 @@ function requestedPackageKgFromMessage(message = '') {
   return match ? Number(match[1]) : null
 }
 
+function inferPackagePreference(message = '') {
+  const lower = norm(message)
+  const kg = requestedPackageKgFromMessage(message)
+  if (kg) return { packagePreference: `${kg}kg`, packageKg: kg, any: false }
+  if (/(granel|a granel)/.test(lower)) return { packagePreference: 'granel', packageKg: null, any: false }
+  if (/(pacote pequeno|pacotinho|1\s?kg|um kg|1 quilo)/.test(lower)) return { packagePreference: '1kg', packageKg: 1, any: false }
+  if (/(saco fechado|saco grande|saco|fechado)/.test(lower)) return { packagePreference: 'saco fechado', packageKg: null, any: false }
+  if (/(sem preferencia|sem preferência|tanto faz|qualquer embalagem|qualquer pacote|pode ser qualquer|a que tiver)/.test(lower)) {
+    return { packagePreference: '', packageKg: null, any: true }
+  }
+  return null
+}
+
+function productPackageMatches(product, packageKg) {
+  if (!packageKg) return false
+  return productPackageKgScore(product, packageKg) > 0
+}
+
 function productWeightRangeScore(product, weightKg) {
   if (!weightKg) return 0
   const raw = String(product?.name || '').toLowerCase().replace(/,/g, '.')
@@ -756,7 +804,7 @@ function scoreProduct(product, state, message) {
   const wantsFlea = isFleaRequest(message)
   const wantsLitter = isLitterRequest(message)
   const weightKg = requestedWeightKgFromMessage(message)
-  const packageKg = requestedPackageKgFromMessage(message)
+  const packageKg = requestedPackageKgFromMessage(message) || state.packageKg
   const wantsFood = isFoodRequest(message, state) || state.productKind === 'food' || Boolean(packageKg && state.intent === 'produto')
   if (state.species === 'dog' && isCatProductText(haystack)) score -= 45
   if (state.species === 'cat' && isDogProductText(haystack)) score -= 45
@@ -777,6 +825,9 @@ function scoreProduct(product, state, message) {
   if (litterRequest && /(areia|higienica|higiênica|pa higienica)/.test(haystack)) score += 14
   if (litterRequest && !/(areia|higienica|higiênica|pa higienica)/.test(haystack)) score -= 25
   if (wantsFood && packageKg) score += productPackageKgScore(product, packageKg)
+  if (wantsFood && state.packagePreference === 'granel' && /granel/.test(haystack)) score += 16
+  if (wantsFood && state.packagePreference === 'granel' && !/granel/.test(haystack)) score -= 8
+  if (wantsFood && state.packagePreference === 'saco fechado' && /granel/.test(haystack)) score -= 12
   if (state.species === 'dog' && /\b(cao|cachorro|canino|caes)\b/.test(haystack)) score += 4
   if (state.species === 'cat' && /(gato|gatos|felino)/.test(haystack)) score += 4
   if (state.ageCategory && haystack.includes(norm(state.ageCategory))) score += 4
@@ -784,6 +835,7 @@ function scoreProduct(product, state, message) {
   if (!state.breed && hasDogBreedProductText(haystack)) score -= 10
   if (state.size && haystack.includes(norm(state.size))) score += 3
   if (state.brand && haystack.includes(norm(state.brand))) score += 8
+  if (state.brand && !haystack.includes(norm(state.brand))) score -= 3
   if (/canister/.test(haystack) && /(racao|ração)/.test(norm(message))) score -= 8
   return score
 }
@@ -1038,7 +1090,25 @@ function applyMessageFacts(state, message) {
   if (age) state.ageCategory = age
 
   const brand = inferBrand(message)
-  if (brand) state.brand = brand
+  if (brand) {
+    state.brand = brand
+    state.brandPreferenceAny = false
+    state.brandPreferenceAsked = true
+  } else if (state.awaiting === 'food_preferences' && (hasNoBrandPreference(message) || isNegative(message))) {
+    state.brandPreferenceAny = true
+    state.brandPreferenceAsked = true
+  }
+
+  const packagePreference = inferPackagePreference(message)
+  if (packagePreference) {
+    state.packagePreference = packagePreference.packagePreference
+    state.packageKg = packagePreference.packageKg
+    state.packagePreferenceAny = Boolean(packagePreference.any)
+    state.packagePreferenceAsked = true
+  } else if (state.awaiting === 'food_preferences' && (hasNoBrandPreference(message) || isNegative(message))) {
+    state.packagePreferenceAny = true
+    state.packagePreferenceAsked = true
+  }
 
   const petName = extractPetName(message, state)
   if (petName && !state.petName) state.petName = petName
@@ -1053,8 +1123,12 @@ function applyMessageFacts(state, message) {
   if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
 
   const quantity = parseProductQuantity(message)
-  if (quantity && state.intent === 'produto' && state.selectedProduct && state.awaiting !== 'product_choice') {
-    state.selectedProduct.quantity = quantity
+  if (quantity && state.intent === 'produto') {
+    if (state.selectedProduct && state.awaiting !== 'product_choice') {
+      state.selectedProduct.quantity = quantity
+    } else {
+      state.pendingQuantity = quantity
+    }
   }
 
   if (state.payment.method === 'dinheiro' && state.payment.changeAsked) {
@@ -1113,6 +1187,12 @@ function buildAllowedData(state) {
     },
     intent: state.intent,
     product_kind: state.productKind,
+    brand: state.brand,
+    brand_preference_any: Boolean(state.brandPreferenceAny),
+    package_preference: state.packagePreference,
+    package_kg: state.packageKg,
+    package_preference_any: Boolean(state.packagePreferenceAny),
+    pending_quantity: state.pendingQuantity,
     selected_product: compactProduct(state.selectedProduct),
     product_options: (state.productOptions || []).map(compactProduct).filter(Boolean),
     selected_slot: compactSlot(state.selectedSlot),
@@ -1267,7 +1347,16 @@ function presentProducts(state, products, message) {
   if (hasRequestedBrand && !hasBrandMatch) {
     state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'marca_sem_estoque'])]
   }
-  const intro = strong.length && hasBrandMatch ? 'Consultei o estoque e tenho essas opções:' : 'Não encontrei exatamente o que você pediu, mas tenho essas alternativas com estoque:'
+  const hasRequestedPackage = Boolean(state.packageKg)
+  const hasPackageMatch = !hasRequestedPackage || state.productOptions.some((product) => productPackageMatches(product, state.packageKg))
+  if (hasRequestedPackage && !hasPackageMatch) {
+    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'embalagem_sem_estoque'])]
+  }
+  const intro = strong.length && hasBrandMatch && hasPackageMatch
+    ? 'Consultei o estoque e tenho essas opções:'
+    : hasRequestedPackage && !hasPackageMatch
+      ? `Infelizmente não tenho essa embalagem de ${state.packageKg}kg no estoque, mas tenho essas alternativas:`
+      : 'Não encontrei exatamente o que você pediu, mas tenho essas alternativas com estoque:'
   const lines = state.productOptions.map((product, index) => `${index + 1}. ${product.name} - ${money(product.unit_price)}${product.image_url ? ' (tem foto)' : ''}`)
   return guardResult(`${intro}\n${lines.join('\n')}\n\nQual prefere?`, state, { action: 'oferecer_produtos' })
 }
@@ -1387,6 +1476,26 @@ function checkoutFlow(state, settings) {
   return guardResult('Só preciso da sua confirmação para finalizar.', state, { action: 'aguardar_confirmacao' })
 }
 
+function needsFoodPreferences(state) {
+  if (state.intent !== 'produto' || state.productKind !== 'food' || state.selectedProduct) return false
+  if (!state.species || (!state.size && !state.ageCategory)) return false
+  if (state.brandPreferenceAsked || state.packagePreferenceAsked) return false
+  const hasBrandSignal = Boolean(state.brand || state.brandPreferenceAny)
+  const hasPackageSignal = Boolean(state.packagePreference || state.packageKg || state.packagePreferenceAny)
+  return !hasBrandSignal && !hasPackageSignal
+}
+
+function askFoodPreferences(state) {
+  state.brandPreferenceAsked = true
+  state.packagePreferenceAsked = true
+  return ask(
+    'Tem preferência de marca?\n\nE prefere granel, pacote de 1kg ou saco fechado? Se quiser, pode pedir 7kg, 15kg ou 20kg.',
+    state,
+    'food_preferences',
+    'preferencia_racao_pendente',
+  )
+}
+
 function productFlow(state, message, products, settings) {
   if (!state.species) {
     return ask('É para cachorro ou gato?', state, 'species', 'especie_pendente')
@@ -1410,11 +1519,15 @@ function productFlow(state, message, products, settings) {
     return ask('Ele é filhote, adulto ou qual porte/raça?', state, 'pet_category', 'categoria_pendente')
   }
 
+  if (!availableProducts(products).length) return presentProducts(state, products, message)
+  if (needsFoodPreferences(state)) return askFoodPreferences(state)
+
   const chosen = chooseProductFromOptions(state, message)
   if (chosen) {
     state.selectedProduct = chosen
-    const quantity = parseProductQuantity(message)
+    const quantity = parseProductQuantity(message) || state.pendingQuantity
     if (quantity) state.selectedProduct.quantity = quantity
+    state.pendingQuantity = null
   }
 
   if (wantsProductImage(message)) {

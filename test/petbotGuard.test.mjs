@@ -137,6 +137,10 @@ test('produto usa raça como porte, não pede peso e soma taxa de entrega', () =
   result = turn(context, 'Rodrigo')
   context = result.context
   assert.doesNotMatch(result.reply, /peso/i)
+  assert.match(result.reply, /marca/i)
+
+  result = turn(context, 'Premier, pode ser qualquer pacote')
+  context = result.context
   assert.match(result.reply, /Premier/i)
 
   result = turn(context, '1')
@@ -193,7 +197,8 @@ test('cliente conhecido pelo telefone nao precisa informar nome de novo', () => 
 
   assert.equal(result.state.customerName, 'Marina')
   assert.notEqual(result.action, 'pedir_nome')
-  assert.match(result.reply, /Premier/i)
+  assert.equal(result.action, 'pedir_preferencia_racao')
+  assert.match(result.reply, /marca/i)
 })
 
 test('produto aceita escolha por marca em frase natural', () => {
@@ -204,6 +209,11 @@ test('produto aceita escolha por marca em frase natural', () => {
   context = result.context
 
   result = turn(context, 'pode ser premier')
+  context = result.context
+  assert.equal(result.action, 'oferecer_produtos')
+  assert.match(result.reply, /Premier/i)
+
+  result = turn(context, 'pode ser a premier')
   assert.equal(result.action, 'oferecer_upsell')
   assert.match(result.reply, /Premier/i)
 })
@@ -216,6 +226,10 @@ test('produto preserva quantidade quando cliente escolhe em frase natural', () =
   context = result.context
 
   result = turn(context, 'vou querer 2 sacos da premier')
+  context = result.context
+  assert.equal(result.action, 'oferecer_produtos')
+
+  result = turn(context, 'pode ser a premier')
   assert.equal(result.action, 'oferecer_upsell')
   assert.equal(result.state.selectedProduct.quantity, 2)
 })
@@ -228,7 +242,12 @@ test('produto envia foto aprovada quando cliente pede imagem', () => {
   context = result.context
 
   result = turn(context, 'manda foto da premier')
+  context = result.context
+  assert.equal(result.action, 'oferecer_produtos')
 
+  result = turn(context, 'pode ser a premier')
+  context = result.context
+  result = turn(context, 'manda foto')
   assert.equal(result.action, 'enviar_foto_produto')
   assert.equal(result.mediaMessages?.[0]?.type, 'image')
   assert.equal(result.mediaMessages?.[0]?.imageUrl, 'https://cdn.example.com/premier-shih-tzu.jpg')
@@ -478,6 +497,26 @@ test('racao por raca sem idade pede adulto ou filhote antes de buscar estoque', 
   assert.doesNotMatch(result.reply, /não encontrei produto disponível/i)
 })
 
+test('racao pergunta marca e embalagem antes de listar quando faltam filtros', () => {
+  let context = {}
+  let result = turn(context, 'oi')
+  context = result.context
+  result = turn(context, 'Camila')
+  context = result.context
+
+  result = turn(context, 'quero ração para gato adulto')
+  context = result.context
+  assert.equal(result.action, 'pedir_preferencia_racao')
+  assert.match(result.reply, /marca/i)
+  assert.match(result.reply, /granel|1kg|saco/i)
+
+  result = turn(context, 'sem preferencia, pode ser qualquer pacote')
+  assert.equal(result.state.species, 'cat')
+  assert.match(result.reply, /WHISKAS/i)
+  assert.doesNotMatch(result.reply, /KITEKAT|SACH/i)
+  assert.doesNotMatch(result.reply, /CÃES|CÃO|CACHORRO|PREMIER/i)
+})
+
 test('areia higienica e produto, nao fluxo misto de agendamento', () => {
   let context = {}
   let result = turn(context, 'boa tarde')
@@ -512,6 +551,8 @@ test('racao de gato adulto nao oferece produto de cachorro', () => {
   context = result.context
 
   result = turn(context, 'quero ração para gato adulto')
+  context = result.context
+  result = turn(context, 'sem preferencia')
   assert.equal(result.state.species, 'cat')
   assert.match(result.reply, /WHISKAS/i)
   assert.doesNotMatch(result.reply, /KITEKAT|SACH/i)
@@ -532,6 +573,20 @@ test('pedido de saco 15kg refaz ranking por embalagem e nao muda porte do gato',
   assert.equal(result.state.size, '')
   assert.match(result.reply, /15 KG/i)
   assert.ok(result.state.productOptions[0].name.includes('15 KG'))
+})
+
+test('racao com marca e embalagem ausente oferece alternativa proxima', () => {
+  let context = {}
+  let result = turn(context, 'Oi, tem ração pra shih tzu adulto?')
+  context = result.context
+  result = turn(context, 'Rodrigo')
+  context = result.context
+
+  result = turn(context, 'quero royal 15kg')
+  assert.equal(result.state.brand, 'royal')
+  assert.equal(result.state.packageKg, 15)
+  assert.match(result.reply, /15kg/i)
+  assert.match(result.reply, /alternativas|exatamente/i)
 })
 
 test('desconto antes de escolher produto nao sugere item aleatorio', () => {
@@ -556,6 +611,8 @@ test('upsell de cachorro nao oferece sache de gato', () => {
   result = turn(context, 'Bruno')
   context = result.context
 
+  result = turn(context, 'sem preferencia')
+  context = result.context
   result = turn(context, '1')
   assert.equal(result.action, 'oferecer_upsell')
   assert.match(result.reply, /Petisco Dental/i)
@@ -634,6 +691,8 @@ test('guardiao nao permite redigir resumo parcial com LLM', () => {
   context = result.context
   result = turn(context, 'Rodrigo')
   context = result.context
+  result = turn(context, 'sem preferencia')
+  context = result.context
   result = turn(context, '1')
   context = result.context
   result = turn(context, 'não')
@@ -647,6 +706,8 @@ test('mudanca de produto para veterinaria limpa selecao anterior', () => {
   let result = turn(context, 'quero ração pra shih tzu adulto')
   context = result.context
   result = turn(context, 'Igor')
+  context = result.context
+  result = turn(context, 'sem preferencia')
   context = result.context
   result = turn(context, '1')
   context = result.context
