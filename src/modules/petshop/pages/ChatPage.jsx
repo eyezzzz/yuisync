@@ -226,8 +226,8 @@ export default function ChatPage() {
   useEffect(() => {
     loadSessions(statusFilter || undefined)
     loadQuickReplies()
-    subscribeSessionsList()
-  }, [statusFilter])
+    subscribeSessionsList(statusFilter || undefined)
+  }, [loadQuickReplies, loadSessions, statusFilter, subscribeSessionsList])
 
   // Auto-scroll
   useEffect(() => {

@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState, useCallback } from 'react'
-import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, X, CheckCircle, ShieldAlert, Star, UserCheck } from 'lucide-react'
+import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, X, CheckCircle, ShieldAlert, Star, UserCheck, RefreshCw } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import { useProducts }      from '../../../shared/hooks/useProducts'
 import { useAppointments }  from '../../../shared/hooks/useAppointments'
@@ -10,6 +10,7 @@ import { supabase, fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { useAnalytics } from '../../../shared/hooks/useAnalytics'
+import { useDashboardSnapshot } from '../../../shared/hooks/useDashboardSnapshot'
 import AIHoursSavedCard from '../components/AIHoursSavedCard'
 import { AI_HOURS_SAVED_MOCK, AI_HOURS_SAVED_SERIES } from '../constants/aiHoursSavedMock'
 import { buildAIHoursFromScopedSessions } from '../utils/aiHoursSaved'
@@ -157,33 +158,67 @@ export default function DashboardPage({ setPage }) {
   const { loadSessions, sessions }                  = useChat()
   const { invoices, loadInvoices, deleteInvoice } = useFinance()
   const { getChatResolutionMetrics } = useAnalytics()
+  const { loadDashboardSnapshot } = useDashboardSnapshot()
   // const { activeModuleId } = useModuleCtx()
 
+  const [snapshot, setSnapshot]     = useState(null)
   const [critical, setCritical]     = useState([])
   const [stats, setStats]           = useState({ revenue: 0, count: 0, upsells: 0, salesMix: [] })
   const [chatQuality, setChatQuality] = useState({ avgCsat: null, csatCount: 0, aiResolved: 0, humanResolved: 0, closedCount: 0 })
   const [loading, setLoading]       = useState(true)
+  const [lastUpdated, setLastUpdated] = useState(null)
+  const [snapshotError, setSnapshotError] = useState('')
   const [showResetModal, setShowResetModal] = useState(false)
   const [isWiping, setIsWiping]     = useState(false)
   const canWipeData = isGlobalAdmin
 
   const reloadAll = useCallback(async () => {
     setLoading(true)
-    await Promise.all([
-      load({ date: todayISO() }),
-      loadMetrics(),
-      loadSessions('bot'),
-      loadInvoices(),
-      getCriticalStock().then(setCritical),
-      getDailyStats().then(setStats),
-      getChatResolutionMetrics().then(setChatQuality),
-    ])
-    setLoading(false)
-  }, [load, loadMetrics, loadSessions, loadInvoices, getCriticalStock, getDailyStats, getChatResolutionMetrics])
+    setSnapshotError('')
+    try {
+      const data = await loadDashboardSnapshot(todayISO())
+      if (!data) throw new Error('Snapshot vazio.')
+      setSnapshot(data)
+      setCritical(data.stock?.criticalItems || [])
+      setStats({
+        revenue: Number(data.sales?.revenue || 0),
+        count: Number(data.sales?.count || 0),
+        upsells: Number(data.sales?.upsells || 0),
+        salesMix: (data.sales?.salesMix || []).map((item) => ({
+          ...item,
+          amount: Number(item.amount || 0),
+        })),
+      })
+      setChatQuality({
+        avgCsat: data.chat?.avgCsat === null || data.chat?.avgCsat === undefined ? null : Number(data.chat.avgCsat),
+        csatCount: Number(data.chat?.csatCount || 0),
+        aiResolved: Number(data.chat?.aiResolved || 0),
+        humanResolved: Number(data.chat?.humanResolved || 0),
+        closedCount: Number(data.chat?.closedCount || 0),
+      })
+      setLastUpdated(new Date())
+    } catch (snapshotFailure) {
+      console.warn('Snapshot do dashboard indisponivel; usando fallback legado.', snapshotFailure)
+      setSnapshot(null)
+      setSnapshotError('Usando carregamento legado. Aplique database/petshop_performance_cleanup.sql para ativar o modo leve.')
+      await Promise.all([
+        load({ date: todayISO() }),
+        loadMetrics(),
+        loadSessions('bot'),
+        loadInvoices(),
+        getCriticalStock().then(setCritical),
+        getDailyStats().then(setStats),
+        getChatResolutionMetrics().then(setChatQuality),
+      ])
+      setLastUpdated(new Date())
+    } finally {
+      setLoading(false)
+    }
+  }, [loadDashboardSnapshot, load, loadMetrics, loadSessions, loadInvoices, getCriticalStock, getDailyStats, getChatResolutionMetrics])
 
   useEffect(() => {
     reloadAll()
-    const interval = setInterval(reloadAll, 60_000)
+    const interval = setInterval(reloadAll, 300_000)
     return () => clearInterval(interval)
   }, [reloadAll, activeModuleId])
 
@@ -213,13 +248,19 @@ export default function DashboardPage({ setPage }) {
     }
   }
 
-  const ts = todayStats()
-  const openChats = sessions.filter(s => s.status !== 'closed').length
+  const ts = snapshot?.todayStats || todayStats()
+  const dashboardAppointments = snapshot?.appointments || appointments
+  const openChats = Number(snapshot?.chat?.openChats ?? sessions.filter(s => s.status !== 'closed').length)
+  const botChats = Number(snapshot?.chat?.botChats ?? sessions.filter(s => s.status === 'bot').length)
+  const stockOutCount = Number(snapshot?.stock?.outCount ?? critical.filter(p => Number(p.stock_quantity || 0) === 0).length)
   const aiHoursScoped = buildAIHoursFromScopedSessions(sessions, {
     totalHours: AI_HOURS_SAVED_MOCK.totalHours,
     savingPerSession: 0.4,
   })
-  const aiHoursInput = aiHoursScoped.savedHours > 0
+  const aiHoursSnapshot = snapshot?.chat?.aiHours
+  const aiHoursInput = aiHoursSnapshot?.series?.length
+    ? aiHoursSnapshot
+    : aiHoursScoped.savedHours > 0
     ? aiHoursScoped
     : {
         totalHours: AI_HOURS_SAVED_MOCK.totalHours,
@@ -234,15 +275,28 @@ export default function DashboardPage({ setPage }) {
   return (
     <div className="page animate-content">
       {/* Header */}
-      <div>
-        <h1 className="page-title !flex items-center gap-3">
-          <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse shadow-[0_0_10px_rgba(0,224,255,0.8)]" />
-          {greeting}! <span className="opacity-40 font-normal">/ Dashboard</span>
-        </h1>
-        <p className="page-sub !mt-1">
-          {now.toLocaleDateString('pt-BR', { weekday:'long', day:'2-digit', month:'long', year:'numeric' })}
-        </p>
+      <div className="page-header">
+        <div>
+          <h1 className="page-title !flex items-center gap-3">
+            <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse shadow-[0_0_10px_rgba(0,224,255,0.8)]" />
+            {greeting}! <span className="opacity-40 font-normal">/ Dashboard</span>
+          </h1>
+          <p className="page-sub !mt-1">
+            {now.toLocaleDateString('pt-BR', { weekday:'long', day:'2-digit', month:'long', year:'numeric' })}
+            {lastUpdated && ` • Atualizado ${lastUpdated.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`}
+          </p>
+        </div>
+        <button onClick={reloadAll} disabled={loading} className="btn btn-secondary">
+          <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
+          Atualizar
+        </button>
       </div>
+
+      {snapshotError && (
+        <div className="rounded-xl border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-500">
+          {snapshotError}
+        </div>
+      )}
 
       {/* KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 items-stretch">
@@ -284,7 +338,7 @@ export default function DashboardPage({ setPage }) {
             accent="red" icon={ShieldAlert}
             label="Estoque Crítico"
             value={critical.length}
-            sub={critical.filter(p => p.stock_quantity === 0).length + ' produto(s) esgotado(s)'}
+            sub={stockOutCount + ' produto(s) esgotado(s)'}
             onClick={() => setPage('estoque')}
           />
         </div>
@@ -293,7 +347,7 @@ export default function DashboardPage({ setPage }) {
             accent="violet" icon={MessageSquare}
             label="Chats Ativos"
             value={openChats}
-            sub={sessions.filter(s => s.status === 'bot').length + ' no bot'}
+            sub={botChats + ' no bot'}
             onClick={() => setPage('chat')}
           />
         </div>
@@ -330,7 +384,7 @@ export default function DashboardPage({ setPage }) {
           </div>
           {loading ? (
             <div className="flex items-center justify-center py-10 text-muted text-sm">Carregando...</div>
-          ) : appointments.length === 0 ? (
+          ) : dashboardAppointments.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 gap-3">
               <Calendar size={32} className="text-muted/30" />
               <p className="text-muted text-sm">Nenhum agendamento para hoje</p>
@@ -345,7 +399,7 @@ export default function DashboardPage({ setPage }) {
                   <th>Hora</th><th>Pet</th><th>Serviço</th><th>Status</th>{isAdmin && <th>Valor</th>}
                 </tr></thead>
                 <tbody>
-                  {appointments.slice(0, 8).map(a => (
+                  {dashboardAppointments.slice(0, 8).map(a => (
                     <ApptRow key={a.id} appt={a} serviceLabel={serviceLabel} statusBadge={statusBadge} isAdmin={isAdmin} />
                   ))}
                 </tbody>

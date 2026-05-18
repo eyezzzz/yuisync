@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Package, Plus, Search, Edit2, Trash2, X, AlertTriangle,
@@ -50,7 +50,7 @@ const emptyForm = {
 }
 
 // ── Product Modal ─────────────────────────────────────────────────────────────
-function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate, onUpdate }) {
+function ProductModal({ product, upsellOptions = [], moduleId, tenantId, onClose, onCreate, onUpdate }) {
   const isEdit = !!product?.id
   const [form, setForm] = useState(isEdit ? {
     name:           product.name,
@@ -318,7 +318,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
               <label className="inp-label">Produto de Upsell</label>
               <select className="inp" value={form.upsell_link_id || ''} onChange={e => set('upsell_link_id', e.target.value)}>
                 <option value="">Sem upsell</option>
-                {products.filter(p => p.id !== product?.id).map(p => (
+                {upsellOptions.filter(p => p.id !== product?.id).map(p => (
                   <option key={p.id} value={p.id}>{p.name} — {fmtCurrency(p.price)}</option>
                 ))}
               </select>
@@ -371,7 +371,7 @@ function AdjustModal({ product, onClose, onAdjust }) {
 
   const submit = async () => {
     setSaving(true)
-    await onAdjust(product.id, newQty)
+    await onAdjust(product.id, Number(delta))
     setSaving(false)
     onClose()
   }
@@ -626,12 +626,27 @@ export default function EstoquePage() {
                  (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
   const isGlobalAdmin = auth?.profile?.role === 'admin'
 
-  const { products, loading, load, create, update, adjustStock, remove, stockStatus } = useProducts()
+  const {
+    products,
+    productTotal,
+    productSummary,
+    loading,
+    load,
+    create,
+    update,
+    adjustStock,
+    remove,
+    stockStatus,
+    getProductSummary,
+    searchProducts,
+  } = useProducts()
 
   const [search, setSearch]     = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [catFilter, setCatFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [modal, setModal]       = useState(null)   // null | {} | product
+  const [upsellCandidates, setUpsellCandidates] = useState([])
   const [importModal, setImportModal] = useState(false)
   const [legacyImportModal, setLegacyImportModal] = useState(false)
   const [adjusting, setAdjusting] = useState(null) // product | null
@@ -640,18 +655,52 @@ export default function EstoquePage() {
   const [page, setPage] = useState(1)
 
   useEffect(() => {
-    load({ activeOnly: false })
-  }, [load])
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [search])
 
   useEffect(() => {
     setPage(1)
-  }, [search, catFilter, statusFilter, pageSize])
+  }, [debouncedSearch, catFilter, statusFilter, pageSize])
+
+  const reloadProducts = useCallback(async () => {
+    await Promise.all([
+      load({
+        paginated: true,
+        activeOnly: false,
+        search: debouncedSearch,
+        category: catFilter,
+        status: statusFilter,
+        page,
+        pageSize,
+      }),
+      getProductSummary(),
+    ])
+  }, [catFilter, debouncedSearch, getProductSummary, load, page, pageSize, statusFilter])
+
+  useEffect(() => {
+    reloadProducts()
+  }, [reloadProducts])
+
+  useEffect(() => {
+    if (modal === null) {
+      setUpsellCandidates([])
+      return
+    }
+
+    searchProducts({ activeOnly: true, pageSize: 100 })
+      .then((result) => setUpsellCandidates(result.data || []))
+      .catch(() => setUpsellCandidates(products || []))
+  }, [modal, products, searchProducts])
 
   const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
 
   const dynamicCategories = useMemo(() => {
     const base = PRODUCT_CATEGORIES
-    const fromProducts = Array.from(new Set(products.map(p => p.category).filter(Boolean)))
+    const fromProducts = Array.from(new Set([
+      ...(productSummary.categories || []),
+      ...products.map(p => p.category).filter(Boolean),
+    ]))
     
     const results = [...base]
     fromProducts.forEach(cat => {
@@ -660,46 +709,51 @@ export default function EstoquePage() {
     })
     
     return results.sort()
-  }, [products])
+  }, [productSummary.categories, products])
 
-  const filtered = useMemo(() => (products || []).filter(p => {
-    // Filtro de Busca (Nome ou Categoria)
-    const q = normalize(search)
-    const matchQ = !search || 
-                  normalize(p.name).includes(q) || 
-                  normalize(p.category).includes(q) ||
-                  normalize(p.barcode).includes(q)
-    
-    // Filtro de Categoria (Smarth Match - ignora acentos/case)
-    const matchC = !catFilter || normalize(p.category) === normalize(catFilter)
-    
-    // Filtro de Status
-    const matchS = !statusFilter || stockStatus(p) === statusFilter
-    
-    return matchQ && matchC && matchS
-  }), [products, search, catFilter, statusFilter])
-  const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
+  const filtered = products || []
+  const totalPages = Math.max(1, Math.ceil(productTotal / pageSize))
   const currentPage = Math.min(page, totalPages)
-  const pageStart = filtered.length ? (currentPage - 1) * pageSize : 0
-  const pageEnd = Math.min(pageStart + pageSize, filtered.length)
-  const visibleProducts = useMemo(
-    () => filtered.slice(pageStart, pageEnd),
-    [filtered, pageStart, pageEnd]
-  )
+  const pageStart = productTotal ? (currentPage - 1) * pageSize : 0
+  const pageEnd = Math.min(pageStart + filtered.length, productTotal)
+  const visibleProducts = filtered
 
   useEffect(() => {
     setPage((current) => Math.min(current, totalPages))
   }, [totalPages])
 
-  const criticalCount = products.filter(p => stockStatus(p) === 'critico').length
-  const outCount      = products.filter(p => stockStatus(p) === 'esgotado').length
-  const totalValue    = products.reduce((s, p) => s + p.price * p.stock_quantity, 0)
+  const criticalCount = Number(productSummary.criticalCount || 0)
+  const outCount      = Number(productSummary.outCount || 0)
+  const totalValue    = Number(productSummary.totalValue || 0)
 
   const stockBadge = (p) => {
     const s = stockStatus(p)
     if (s === 'esgotado') return { cls: 'badge-red',   label: 'Esgotado',  cellCls: 'stock-critical' }
     if (s === 'critico')  return { cls: 'badge-amber', label: 'Crítico',   cellCls: 'stock-warn'    }
     return                       { cls: 'badge-green', label: 'Normal',    cellCls: 'stock-ok'      }
+  }
+
+  const handleCreate = async (payload) => {
+    const result = await create(payload)
+    await reloadProducts()
+    return result
+  }
+
+  const handleUpdate = async (id, payload) => {
+    const result = await update(id, payload)
+    await reloadProducts()
+    return result
+  }
+
+  const handleRemove = async (id) => {
+    await remove(id)
+    await reloadProducts()
+  }
+
+  const handleAdjustStock = async (id, value) => {
+    const result = await adjustStock(id, value)
+    await reloadProducts()
+    return result
   }
 
   const handleResetStock = async () => {
@@ -712,7 +766,7 @@ export default function EstoquePage() {
         moduleId: activeModuleId,
         tenantId: auth?.activeTenantId,
       })
-      await load({ activeOnly: false })
+      await reloadProducts()
       window.alert(`${Number(result.deletedProducts || 0)} produto(s) removido(s) do estoque.`)
     } catch (err) {
       window.alert(err?.message || 'Nao foi possivel resetar o estoque.')
@@ -759,7 +813,7 @@ export default function EstoquePage() {
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label:'Total de Produtos', value: products.length,       cls:'text-text',        icon: Package, color: 'text-primary', show: true },
+          { label:'Total de Produtos', value: productSummary.totalProducts || productTotal,       cls:'text-text',        icon: Package, color: 'text-primary', show: true },
           { label:'Valor em Estoque',  value: fmtCurrency(totalValue), cls:'text-emerald-400', icon: DollarSign, color: 'text-emerald-400', show: isAdmin },
           { label:'Estoque Crítico',   value: criticalCount,          cls:'text-amber-400',   icon: ShieldAlert, color: 'text-amber-400', show: true },
           { label:'Esgotados',         value: outCount,               cls:'text-red-400',     icon: Ban, color: 'text-red-400', show: true },
@@ -804,17 +858,17 @@ export default function EstoquePage() {
             <option value="critico">Crítico</option>
             <option value="esgotado">Esgotado</option>
           </select>
-          <button onClick={() => load({ activeOnly: false })}
+          <button onClick={reloadProducts}
             className="btn btn-ghost btn-sm btn-icon" title="Atualizar">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
           </button>
         </div>
       </div>
 
-      {filtered.length > 0 && (
+      {productTotal > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-card px-4 py-3">
           <p className="text-xs font-semibold text-muted">
-            Mostrando {pageStart + 1}-{pageEnd} de {filtered.length} produto(s)
+            Mostrando {pageStart + 1}-{pageEnd} de {productTotal} produto(s)
           </p>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label className="flex items-center gap-2 text-muted">
@@ -873,7 +927,7 @@ export default function EstoquePage() {
           <div className="flex items-center justify-center py-16 text-muted text-sm">
             <RefreshCw size={16} className="animate-spin mr-2"/> Carregando...
           </div>
-        ) : filtered.length === 0 ? (
+        ) : productTotal === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <Package size={36} className="text-muted/30"/>
             <p className="text-sm text-muted">Nenhum produto encontrado</p>
@@ -976,7 +1030,7 @@ export default function EstoquePage() {
                             </button>
                           )}
                           {isAdmin && (
-                            <button onClick={() => remove(p.id)}
+                            <button onClick={() => handleRemove(p.id)}
                               className="btn btn-danger btn-sm btn-icon" title="Desativar">
                               <Trash2 size={13}/>
                             </button>
@@ -991,7 +1045,7 @@ export default function EstoquePage() {
             {totalPages > 1 && (
               <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--border2)] bg-surface/70 p-4">
                 <p className="text-xs font-semibold text-muted">
-                  Mostrando {pageStart + 1}-{pageEnd} de {filtered.length}
+                  Mostrando {pageStart + 1}-{pageEnd} de {productTotal}
                 </p>
                 <div className="flex flex-wrap items-center gap-2 text-xs">
                   <button
@@ -1024,19 +1078,19 @@ export default function EstoquePage() {
       {modal !== null && (
         <ProductModal
           product={modal?.id ? modal : null}
-          products={products}
+          upsellOptions={upsellCandidates}
           moduleId={activeModuleId}
           tenantId={auth?.activeTenantId}
           onClose={() => setModal(null)}
-          onCreate={create}
-          onUpdate={update}
+          onCreate={handleCreate}
+          onUpdate={handleUpdate}
         />
       )}
       {adjusting && (
         <AdjustModal
           product={adjusting}
           onClose={() => setAdjusting(null)}
-          onAdjust={adjustStock}
+          onAdjust={handleAdjustStock}
         />
       )}
       {/* Import CSV Modal */}
@@ -1051,7 +1105,7 @@ export default function EstoquePage() {
           moduleId={activeModuleId}
           tenantId={auth?.activeTenantId}
           onClose={() => setLegacyImportModal(false)}
-          onDone={() => load({ activeOnly: false })}
+          onDone={reloadProducts}
         />
       )}
     </div>

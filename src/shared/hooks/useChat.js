@@ -6,6 +6,7 @@ import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
 const DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS = 8000
+const SESSION_LIST_LIMIT = 80
 const DASHBOARD_REPLY_DEBOUNCE_MS = (() => {
   const parsed = Number(import.meta.env.VITE_CHAT_REPLY_DEBOUNCE_MS)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS
@@ -27,6 +28,24 @@ function normalizeIncomingMessage(message) {
     ...message,
     sent_at: message.sent_at,
   }
+}
+
+function mapSessionRow(session) {
+  if (!session?.clients) return session
+  return {
+    ...session,
+    pets: {
+      pet_name: session.clients.details?.pet_name || session.clients.name || '',
+      species: session.clients.details?.species || '',
+    },
+    clients: undefined,
+  }
+}
+
+function sortSessionList(rows) {
+  return [...rows].sort((a, b) => (
+    new Date(b.last_message_at || b.opened_at || 0) - new Date(a.last_message_at || a.opened_at || 0)
+  ))
 }
 
 function isMatchingPendingMessage(localMessage, incomingMessage) {
@@ -78,7 +97,7 @@ export function useChat() {
     activeSessionIdRef.current = activeSession?.id || null
   }, [activeSession?.id])
 
-  const loadSessions = useCallback(async (statusFilter = '') => {
+  const loadSessions = useCallback(async (statusFilter = '', options = {}) => {
     if (!activeModuleId) return
     setLoading(true)
 
@@ -89,6 +108,7 @@ export function useChat() {
           .select('id, customer_phone, customer_name, status, intent, last_message_at, opened_at, csat_score, clients(name, details)')
           .eq('module_id', activeModuleId)
           .order('last_message_at', { ascending: false })
+          .limit(options.limit || SESSION_LIST_LIMIT)
 
         query = applyTenantFilter(query, activeTenantId, includeTenant)
         if (statusFilter) query = query.eq('status', statusFilter)
@@ -97,17 +117,7 @@ export function useChat() {
 
       if (response.error) throw response.error
 
-      const mapped = (response.data || []).map((session) => {
-        if (!session.clients) return session
-        return {
-          ...session,
-          pets: {
-            pet_name: session.clients.details?.pet_name || session.clients.name || '',
-            species: session.clients.details?.species || '',
-          },
-          clients: undefined,
-        }
-      })
+      const mapped = (response.data || []).map(mapSessionRow)
 
       setSessions(mapped)
     } finally {
@@ -170,7 +180,7 @@ export function useChat() {
     })
 
     if (response.error) throw response.error
-    setSessions((prev) => [response.data, ...prev])
+    setSessions((prev) => sortSessionList([response.data, ...prev]).slice(0, SESSION_LIST_LIMIT))
     return response.data
   }, [activeModuleId, activeTenantId])
 
@@ -297,7 +307,7 @@ export function useChat() {
     if (activeSession?.id === sessionId) setActiveSession(null)
   }, [activeSession?.id, activeTenantId])
 
-  const subscribeSessionsList = useCallback(() => {
+  const subscribeSessionsList = useCallback((statusFilter = '') => {
     if (!activeModuleId) return
 
     channelRef.current?.unsubscribe()
@@ -308,9 +318,43 @@ export function useChat() {
         schema: 'public',
         table: 'chat_sessions',
         filter: `module_id=eq.${activeModuleId}`,
-      }, () => loadSessions())
+      }, (payload) => {
+        const row = payload.new || payload.old
+        if (!row?.id) return
+        if (activeTenantId && row.tenant_id && row.tenant_id !== activeTenantId) return
+
+        if (payload.eventType === 'DELETE') {
+          setSessions((prev) => prev.filter((session) => session.id !== row.id))
+          return
+        }
+
+        setActiveSession((current) => (
+          current?.id === row.id ? { ...current, ...row } : current
+        ))
+
+        setSessions((prev) => {
+          const shouldShow = !statusFilter || row.status === statusFilter
+          const existing = prev.find((session) => session.id === row.id)
+
+          if (!shouldShow) {
+            return prev.filter((session) => session.id !== row.id)
+          }
+
+          const merged = {
+            ...(existing || {}),
+            ...row,
+            pets: existing?.pets,
+          }
+
+          const next = existing
+            ? prev.map((session) => (session.id === row.id ? merged : session))
+            : [merged, ...prev]
+
+          return sortSessionList(next).slice(0, SESSION_LIST_LIMIT)
+        })
+      })
       .subscribe()
-  }, [activeModuleId, loadSessions])
+  }, [activeModuleId, activeTenantId])
 
   const loadQuickReplies = useCallback(async () => {
     const { data } = await supabase

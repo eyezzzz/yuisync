@@ -7,6 +7,15 @@ import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '..
 
 const BASE_SELECT = 'id, module_id, type, name, document, phone, email, address, neighborhood, city, notes, active, details, created_at'
 
+function isClientSearchRpcMissing(error) {
+  const message = String(error?.message || '').toLowerCase()
+  return message.includes('function') && (
+    message.includes('search_petshop_clients')
+    || message.includes('does not exist')
+    || message.includes('schema cache')
+  )
+}
+
 const mapClientToPet = (c) => ({
   id: c.id,
   owner_name: c.name || '',
@@ -49,27 +58,67 @@ const mapPetToClient = (p, moduleId) => ({
 
 export function useClients() {
   const [clients, setClients]   = useState([])
+  const [clientTotal, setClientTotal] = useState(0)
   const [loading, setLoading]   = useState(false)
   const [error, setError]       = useState(null)
   const { activeModuleId }      = useModuleCtx()
   const { activeTenantId }      = useAuthCtx()
 
-  const load = useCallback(async (search = '') => {
+  const load = useCallback(async (options = '') => {
     if (!activeModuleId) return
+    const filters = typeof options === 'string' ? { search: options } : (options || {})
     setLoading(true); setError(null)
     try {
+      if (filters.paginated) {
+        try {
+          const page = Math.max(1, Number(filters.page || 1))
+          const pageSize = Math.min(Math.max(Number(filters.pageSize || 50), 1), 200)
+          const { data, error: rpcError } = await supabase.rpc('search_petshop_clients', {
+            p_tenant_id: activeTenantId || null,
+            p_module_id: activeModuleId,
+            p_search: filters.search || null,
+            p_species: filters.species || null,
+            p_plan_status: filters.planStatus || null,
+            p_limit: pageSize,
+            p_offset: (page - 1) * pageSize,
+          })
+
+          if (rpcError) throw rpcError
+
+          const rows = data || []
+          const mapped = rows.map(({ total_count, ...client }) => mapClientToPet(client))
+          setClients(mapped)
+          setClientTotal(Number(rows[0]?.total_count || 0))
+          return { data: mapped, total: Number(rows[0]?.total_count || 0) }
+        } catch (rpcError) {
+          if (!isClientSearchRpcMissing(rpcError)) throw rpcError
+          console.warn('RPC de clientes nao aplicada; usando fallback legado.', rpcError)
+        }
+      }
+
       const { data, error: err } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
         let q = supabase.from('clients').select(BASE_SELECT)
           .eq('module_id', activeModuleId)
           .order('name')
 
         q = applyTenantFilter(q, activeTenantId, includeTenant)
-        if (search) q = q.or(`name.ilike.%${search}%,phone.ilike.%${search}%`)
+        if (filters.search) q = q.or(`name.ilike.%${filters.search}%,phone.ilike.%${filters.search}%`)
         return q
       })
 
       if (err) throw err
-      setClients((data || []).map(mapClientToPet))
+      let mapped = (data || []).map(mapClientToPet)
+      if (filters.species) mapped = mapped.filter((pet) => pet.species === filters.species)
+      const total = mapped.length
+      if (filters.paginated) {
+        const page = Math.max(1, Number(filters.page || 1))
+        const pageSize = Math.min(Math.max(Number(filters.pageSize || 50), 1), 200)
+        const from = (page - 1) * pageSize
+        mapped = mapped.slice(from, from + pageSize)
+      }
+      setClients(mapped)
+      setClientTotal(total)
+      return { data: mapped, total }
     } catch (e) {
       setError(e.message)
     } finally {
@@ -110,6 +159,7 @@ export function useClients() {
     if (error) throw error
     const newPet = mapClientToPet(data)
     setClients(prev => [newPet, ...prev])
+    setClientTotal(prev => prev + 1)
     return newPet
   }, [activeModuleId, activeTenantId])
 
@@ -146,6 +196,7 @@ export function useClients() {
 
     if (error) throw error
     setClients(prev => prev.filter(p => p.id !== id))
+    setClientTotal(prev => Math.max(0, prev - 1))
   }, [activeModuleId, activeTenantId])
 
   const speciesIcon = (s) => ({
@@ -158,5 +209,5 @@ export function useClients() {
     return months < 12 ? `${months}m` : `${Math.floor(months/12)}a`
   }
 
-  return { clients, loading, error, load, getById, create, update, remove, speciesIcon, age }
+  return { clients, clientTotal, loading, error, load, getById, create, update, remove, speciesIcon, age }
 }

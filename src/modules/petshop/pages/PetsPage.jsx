@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { AlertCircle, Calendar as CalendarIcon, Cat, Dog, Fish, Grid, List as ListIcon, PawPrint, Phone, Plus, RefreshCw, Search, Trash2, Upload, Weight, X } from 'lucide-react'
 import { useClients } from '../../../shared/hooks/useClients'
@@ -25,6 +25,7 @@ const EMPTY_FORM = {
 }
 
 const PLAN_LABELS = { active: 'Ativo', paused: 'Pausado', cancelled: 'Encerrado' }
+const CLIENT_PAGE_SIZE_OPTIONS = [50, 100, 200]
 
 function digits(value) { return String(value || '').replace(/\D/g, '') }
 function normalize(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() }
@@ -219,15 +220,18 @@ function LegacyClientsImportModal({ onClose, moduleId, tenantId, onDone }) {
 }
 
 export default function PetsPage() {
-  const { clients: pets, loading, load, create, update, remove, speciesIcon, age } = useClients()
+  const { clients: pets, clientTotal, loading, load, create, update, remove, speciesIcon, age } = useClients()
   const { serviceLabel, statusBadge } = useAppointments()
   const { loadPlans, loadClientSubscriptions, saveClientSubscription } = usePetshopAdvanced()
   const { activeModuleId } = useModuleCtx()
   const auth = useAuthCtx()
   const isGlobalAdmin = auth?.profile?.role === 'admin'
   const [search, setSearch] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [speciesFilter, setSpeciesFilter] = useState('')
   const [planFilter, setPlanFilter] = useState('')
+  const [pageSize, setPageSize] = useState(CLIENT_PAGE_SIZE_OPTIONS[0])
+  const [page, setPage] = useState(1)
   const [view, setView] = useState('grid')
   const [modalPet, setModalPet] = useState(null)
   const [drawerPet, setDrawerPet] = useState(null)
@@ -238,16 +242,50 @@ export default function PetsPage() {
 
   const isPetModule = activeModuleId === 'petshop'
 
-  async function reloadAll() {
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search.trim()), 300)
+    return () => clearTimeout(timer)
+  }, [search])
+
+  useEffect(() => {
+    setPage(1)
+  }, [debouncedSearch, speciesFilter, planFilter, pageSize])
+
+  const reloadClients = useCallback(async () => {
     try {
       setPageError('')
-      await Promise.all([load(), loadPlans().then(setPlans), loadClientSubscriptions().then(setSubscriptions)])
+      await load({
+        paginated: true,
+        search: debouncedSearch,
+        species: speciesFilter,
+        planStatus: planFilter,
+        page,
+        pageSize,
+      })
     } catch (error) {
       setPageError(error.message || 'Nao foi possivel carregar os clientes.')
     }
-  }
+  }, [debouncedSearch, load, page, pageSize, planFilter, speciesFilter])
 
-  useEffect(() => { reloadAll() }, [])
+  useEffect(() => {
+    reloadClients()
+  }, [reloadClients])
+
+  useEffect(() => {
+    async function loadLookups() {
+      try {
+        const [plansData, subscriptionsData] = await Promise.all([
+          loadPlans(),
+          loadClientSubscriptions(),
+        ])
+        setPlans(plansData)
+        setSubscriptions(subscriptionsData)
+      } catch (error) {
+        setPageError(error.message || 'Nao foi possivel carregar planos.')
+      }
+    }
+    loadLookups()
+  }, [loadClientSubscriptions, loadPlans])
 
   const latestSubscriptionByClient = useMemo(() => {
     const map = new Map()
@@ -257,18 +295,15 @@ export default function PetsPage() {
 
   const activePlanCount = useMemo(() => [...latestSubscriptionByClient.values()].filter((item) => item.status === 'active').length, [latestSubscriptionByClient])
 
-  const filteredPets = useMemo(() => {
-    const query = normalize(search)
-    const queryDigits = digits(search)
-    return (pets || []).filter((pet) => {
-      const subscription = latestSubscriptionByClient.get(pet.id)
-      const matchesText = !query || [pet.owner_name, pet.pet_name, pet.breed, pet.owner_address, pet.owner_neighborhood, pet.owner_city, subscription?.subscription_plans?.name].some((field) => normalize(field).includes(query))
-      const matchesDigits = !queryDigits || [pet.phone, pet.owner_cpf].some((field) => digits(field).includes(queryDigits))
-      const matchesSpecies = !speciesFilter || pet.species === speciesFilter
-      const matchesPlan = !planFilter || subscription?.status === planFilter
-      return (matchesText || matchesDigits) && matchesSpecies && matchesPlan
-    })
-  }, [latestSubscriptionByClient, pets, planFilter, search, speciesFilter])
+  const filteredPets = pets || []
+  const totalPages = Math.max(1, Math.ceil(clientTotal / pageSize))
+  const currentPage = Math.min(page, totalPages)
+  const pageStart = clientTotal ? (currentPage - 1) * pageSize : 0
+  const pageEnd = Math.min(pageStart + filteredPets.length, clientTotal)
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, totalPages))
+  }, [totalPages])
 
   async function handleSave({ petPayload, planId, subscriptionStatus }) {
     const currentSubscription = modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null
@@ -279,17 +314,25 @@ export default function PetsPage() {
     } else if (currentSubscription && currentSubscription.status !== 'cancelled') {
       await saveClientSubscription({ id: currentSubscription.id, client_id: savedPet.id, plan_id: currentSubscription.plan_id, plan: currentSubscription.subscription_plans, status: 'cancelled', started_at: currentSubscription.started_at, next_billing_date: currentSubscription.next_billing_date, services_used: currentSubscription.services_used || {} })
     }
-    await reloadAll()
+    const [subscriptionsData] = await Promise.all([
+      loadClientSubscriptions(),
+      reloadClients(),
+    ])
+    setSubscriptions(subscriptionsData)
   }
 
-  async function handleDelete(id) { await remove(id); if (drawerPet?.id === id) setDrawerPet(null) }
+  async function handleDelete(id) {
+    await remove(id)
+    if (drawerPet?.id === id) setDrawerPet(null)
+    await reloadClients()
+  }
 
   return (
     <div className="page animate-fade-up space-y-6">
       <div className="page-header">
         <div>
           <h1 className="page-title flex items-center gap-2"><PawPrint size={22} className="text-emerald-500" />{isPetModule ? 'Clientes & Pets' : 'Clientes'}</h1>
-          <p className="page-sub">{pets.length} cadastros, {activePlanCount} com plano ativo visivel nesta aba.</p>
+          <p className="page-sub">{clientTotal} cadastros, {activePlanCount} com plano ativo visivel nesta aba.</p>
         </div>
         <div className="flex gap-2">
           {isGlobalAdmin && <button onClick={() => setLegacyImportModal(true)} className="btn btn-secondary border-emerald-500/20 text-emerald-500"><Upload size={15} /> Import Legado</button>}
@@ -298,7 +341,7 @@ export default function PetsPage() {
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-card border border-[var(--border)] rounded-2xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold">Cadastros ativos</p><p className="font-display font-bold text-3xl text-text mt-2">{pets.length}</p></div>
+        <div className="bg-card border border-[var(--border)] rounded-2xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold">Cadastros ativos</p><p className="font-display font-bold text-3xl text-text mt-2">{clientTotal}</p></div>
         <div className="bg-card border border-[var(--border)] rounded-2xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold">Planos ativos</p><p className="font-display font-bold text-3xl text-emerald-500 mt-2">{activePlanCount}</p></div>
         <div className="bg-card border border-[var(--border)] rounded-2xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold">Conexao com a aba de planos</p><p className="text-sm text-muted mt-2">Voce consegue cadastrar, pausar ou trocar plano direto daqui.</p></div>
       </div>
@@ -308,8 +351,49 @@ export default function PetsPage() {
         <select className="inp w-auto" value={speciesFilter} onChange={(e) => setSpeciesFilter(e.target.value)}><option value="">Especies</option>{SPECIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         <select className="inp w-auto" value={planFilter} onChange={(e) => setPlanFilter(e.target.value)}><option value="">Todos os planos</option><option value="active">Plano ativo</option><option value="paused">Plano pausado</option></select>
         <div className="flex bg-surface border border-[var(--border)] rounded-xl p-1"><button onClick={() => setView('grid')} className={`px-3 py-2 rounded-lg ${view === 'grid' ? 'bg-emerald-500 text-white' : 'text-muted'}`}><Grid size={16} /></button><button onClick={() => setView('list')} className={`px-3 py-2 rounded-lg ${view === 'list' ? 'bg-emerald-500 text-white' : 'text-muted'}`}><ListIcon size={16} /></button></div>
-        <button onClick={reloadAll} className="btn btn-secondary"><RefreshCw size={14} /> Atualizar</button>
+        <button onClick={reloadClients} className="btn btn-secondary"><RefreshCw size={14} /> Atualizar</button>
       </div>
+
+      {clientTotal > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-card px-4 py-3">
+          <p className="text-xs font-semibold text-muted">
+            Mostrando {pageStart + 1}-{pageEnd} de {clientTotal} cadastro(s)
+          </p>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <label className="flex items-center gap-2 text-muted">
+              Exibir
+              <select
+                className="inp py-1.5 w-auto text-xs"
+                value={pageSize}
+                onChange={(event) => setPageSize(Number(event.target.value))}
+              >
+                {CLIENT_PAGE_SIZE_OPTIONS.map((size) => (
+                  <option key={size} value={size}>{size}</option>
+                ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm disabled:opacity-50"
+              disabled={currentPage <= 1}
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+            >
+              Anterior
+            </button>
+            <span className="text-muted">
+              Pagina {currentPage} de {totalPages}
+            </span>
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm disabled:opacity-50"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage((current) => Math.min(totalPages, current + 1))}
+            >
+              Proxima
+            </button>
+          </div>
+        </div>
+      )}
 
       {pageError && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{pageError}</div>}
 
@@ -359,7 +443,7 @@ export default function PetsPage() {
 
       {modalPet !== null && <PetModal pet={modalPet?.id ? modalPet : null} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onClose={() => setModalPet(null)} onSave={handleSave} />}
       {drawerPet && <PetDrawer pet={drawerPet} subscription={latestSubscriptionByClient.get(drawerPet.id)} onClose={() => setDrawerPet(null)} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
-      {legacyImportModal && <LegacyClientsImportModal moduleId={activeModuleId} tenantId={auth?.activeTenantId} onClose={() => setLegacyImportModal(false)} onDone={reloadAll} />}
+      {legacyImportModal && <LegacyClientsImportModal moduleId={activeModuleId} tenantId={auth?.activeTenantId} onClose={() => setLegacyImportModal(false)} onDone={reloadClients} />}
     </div>
   )
 }
