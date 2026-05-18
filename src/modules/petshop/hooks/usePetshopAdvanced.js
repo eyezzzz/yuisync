@@ -541,12 +541,19 @@ export function usePetshopAdvanced() {
     return filterProfilesByStaffType(profiles, ORDER_ASSIGNEE_STAFF_TYPES)
   }, [activeTenantId, moduleId])
 
-  const loadServiceOrders = useCallback(async ({ status = '', orderType = '' } = {}) => {
+  const loadServiceOrders = useCallback(async ({ status = '', excludeStatus = '', orderType = '', date = '', dateField = 'created_at', limit = 120 } = {}) => {
     const res = await runScoped(async (includeTenant) => {
       let q = supabase.from('service_delivery_orders').select(ORDER_SELECT).eq('module_id', moduleId).order('created_at', { ascending: false })
       q = applyTenantFilter(q, activeTenantId, includeTenant)
       if (status) q = q.eq('status', status)
+      if (excludeStatus) q = q.neq('status', excludeStatus)
       if (orderType) q = q.eq('order_type', orderType)
+      if (date) {
+        const { start, end } = getDateBounds(date)
+        const field = dateField === 'updated_at' ? 'updated_at' : 'created_at'
+        q = q.gte(field, start).lte(field, end)
+      }
+      if (limit) q = q.limit(limit)
       return q
     })
     if (res.error) throw res.error

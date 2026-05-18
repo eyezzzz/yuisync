@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { ClipboardList, MapPin, MessageSquare, Package, Printer, RefreshCw, Truck, UserCheck } from 'lucide-react'
+import { Calendar, ClipboardList, MapPin, MessageSquare, Package, Printer, RefreshCw, Truck, UserCheck } from 'lucide-react'
 import { useAuthCtx } from '../../../context/AuthContext'
-import { fmtCurrency } from '../../../lib/supabase'
+import { fmtCurrency, todayISO } from '../../../lib/supabase'
 import { SERVICE_ORDER_FLOW, usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 
 const ALL_STATUS_STEPS = [
@@ -54,6 +54,15 @@ function orderSessionId(order) {
 
 function orderOriginAddress(order) {
   return orderAddress(order) || extractNoteValue(order.notes || order.sale?.notes, 'Endereco')
+}
+
+function orderCompletedAt(order) {
+  return order.updated_at || order.sale?.created_at || order.created_at
+}
+
+function formatDateTime(value) {
+  if (!value) return '-'
+  return new Date(value).toLocaleString('pt-BR')
 }
 
 function visibleOrderNotes(order) {
@@ -196,7 +205,7 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-1">Contato</p>
-          <p className="text-text">{order.contact_phone || order.client.phone || '-'}</p>
+          <p className="text-text">{order.contact_phone || order.client?.phone || '-'}</p>
         </div>
         <div>
           <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-1">Criada em</p>
@@ -289,24 +298,125 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
   )
 }
 
+function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage }) {
+  return (
+    <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
+      <div className="overflow-x-auto">
+        <table className="tbl table-fixed min-w-[1120px]">
+          <thead>
+            <tr>
+              <th className="w-[220px]">Cliente</th>
+              <th className="w-[320px]">Itens</th>
+              <th className="w-[120px]">Venda</th>
+              <th className="w-[120px]">Total</th>
+              <th className="w-[260px]">Origem</th>
+              <th className="w-[170px]">Concluida em</th>
+              <th className="w-[120px]">Acoes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {orders.map((order) => {
+              const ownerName = order.client?.owner_name || order.sale?.customer_name || 'Cliente'
+              const petName = order.client?.pet_name && order.client.pet_name !== ownerName ? order.client.pet_name : ''
+              const directItems = orderItems(order)
+              const items = directItems.length ? directItems : fallbackItemsForOrder(order)
+              const originAddress = orderAddress(order) || orderOriginAddress(order) || sourceLabel(order)
+              const firstItem = items[0]
+              const extraCount = Math.max(0, items.length - 1)
+
+              return (
+                <tr key={order.id}>
+                  <td>
+                    <p className="font-semibold text-text truncate">{ownerName}</p>
+                    <p className="text-xs text-muted truncate">{petName ? `Pet: ${petName}` : order.contact_phone || order.client?.phone || '-'}</p>
+                  </td>
+                  <td>
+                    {items.length ? (
+                      <div className="flex items-start gap-2 min-w-0">
+                        <Package size={16} className="text-emerald-400 mt-0.5 flex-shrink-0" />
+                        <div className="min-w-0">
+                          <p className="text-sm text-text truncate">
+                            {firstItem.raw || `${firstItem.quantity}x ${firstItem.name}`}
+                          </p>
+                          <p className="text-xs text-muted">
+                            {extraCount ? `+ ${extraCount} item(ns)` : firstItem.raw ? '' : fmtCurrency(firstItem.subtotal)}
+                          </p>
+                        </div>
+                      </div>
+                    ) : (
+                      <span className="text-sm text-amber-500">Sem itens vinculados</span>
+                    )}
+                  </td>
+                  <td className="font-semibold text-text">#{String(order.sale_id || '').slice(0, 8) || '-'}</td>
+                  <td className="font-semibold text-emerald-400">{fmtCurrency(order.sale?.total_price || 0)}</td>
+                  <td>
+                    <div className="flex items-start gap-2 text-sm text-text">
+                      <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />
+                      <span className="line-clamp-2">{originAddress}</span>
+                    </div>
+                  </td>
+                  <td className="text-sm text-muted">{formatDateTime(orderCompletedAt(order))}</td>
+                  <td>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => onPrint(order, items)}
+                        className="btn btn-secondary btn-icon h-10 w-10 justify-center"
+                        title="Imprimir ordem 80mm"
+                        aria-label="Imprimir ordem 80mm"
+                      >
+                        <Printer size={15} />
+                      </button>
+                      {setPage && (
+                        <button onClick={() => setPage('chat')} className="btn btn-secondary btn-icon h-10 w-10 justify-center" title="Abrir chat" aria-label="Abrir chat">
+                          <MessageSquare size={15} />
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
 export default function OrdensEntregaPage({ setPage }) {
   const { loadOrderAssignees, loadServiceOrders, updateServiceOrder } = usePetshopAdvanced()
   const { storeSettings } = useAuthCtx()
   const [orderType, setOrderType] = useState('entrega')
-  const [orders, setOrders] = useState([])
+  const [activeOrders, setActiveOrders] = useState([])
+  const [completedOrders, setCompletedOrders] = useState([])
+  const [historyDate, setHistoryDate] = useState(todayISO())
   const [assignees, setAssignees] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  async function reload(nextOrderType = orderType) {
+  async function reload(nextOrderType = orderType, nextHistoryDate = historyDate) {
     setLoading(true)
     setError('')
     try {
-      const [orderRows, profileRows] = await Promise.all([
-        loadServiceOrders({ orderType: nextOrderType || '' }),
+      const [activeRows, completedRows, profileRows] = await Promise.all([
+        loadServiceOrders({
+          orderType: nextOrderType || '',
+          excludeStatus: 'concluida',
+          date: todayISO(),
+          dateField: 'created_at',
+          limit: 120,
+        }),
+        loadServiceOrders({
+          orderType: nextOrderType || '',
+          status: 'concluida',
+          date: nextHistoryDate,
+          dateField: 'updated_at',
+          limit: 200,
+        }),
         loadOrderAssignees(),
       ])
-      setOrders(orderRows)
+      setActiveOrders(activeRows)
+      setCompletedOrders(completedRows)
       setAssignees(profileRows)
     } catch (err) {
       setError(err.message)
@@ -316,13 +426,13 @@ export default function OrdensEntregaPage({ setPage }) {
   }
 
   useEffect(() => {
-    reload(orderType)
-  }, [orderType])
+    reload(orderType, historyDate)
+  }, [orderType, historyDate])
 
   async function handleAssign(order, assignedTo) {
     try {
       await updateServiceOrder(order, { assigned_to: assignedTo || null })
-      await reload(orderType)
+      await reload(orderType, historyDate)
     } catch (err) {
       setError(err.message)
     }
@@ -331,7 +441,7 @@ export default function OrdensEntregaPage({ setPage }) {
   async function handleAdvance(order, nextStatus) {
     try {
       await updateServiceOrder(order, { status: nextStatus })
-      await reload(orderType)
+      await reload(orderType, historyDate)
     } catch (err) {
       setError(err.message)
     }
@@ -339,7 +449,7 @@ export default function OrdensEntregaPage({ setPage }) {
 
   const itemsBySession = useMemo(() => {
     const map = new Map()
-    orders.forEach((order) => {
+    ;[...activeOrders, ...completedOrders].forEach((order) => {
       const sessionId = orderSessionId(order)
       const items = orderItems(order)
       if (sessionId && items.length && !map.has(sessionId)) {
@@ -347,19 +457,19 @@ export default function OrdensEntregaPage({ setPage }) {
       }
     })
     return map
-  }, [orders])
+  }, [activeOrders, completedOrders])
 
   function handlePrint(order, fallbackItems = []) {
     printOrderReceipt(order, storeSettings, fallbackItems)
   }
 
-  const steps = orderType ? (SERVICE_ORDER_FLOW[orderType] || ALL_STATUS_STEPS) : ALL_STATUS_STEPS
-  const pendingCount = orders.filter((order) => ['pendente', 'separacao', 'agendado'].includes(order.status)).length
-  const routeCount = orders.filter((order) => order.status === 'em_rota').length
-  const doneCount = orders.filter((order) => order.status === 'concluida').length
+  const steps = (orderType ? (SERVICE_ORDER_FLOW[orderType] || ALL_STATUS_STEPS) : ALL_STATUS_STEPS).filter((step) => step.id !== 'concluida')
+  const pendingCount = activeOrders.filter((order) => ['pendente', 'separacao', 'agendado'].includes(order.status)).length
+  const routeCount = activeOrders.filter((order) => order.status === 'em_rota').length
+  const doneCount = completedOrders.length
   const totalValue = useMemo(
-    () => orders.reduce((sum, order) => sum + Number(order.sale?.total_price || 0), 0),
-    [orders]
+    () => [...activeOrders, ...completedOrders].reduce((sum, order) => sum + Number(order.sale?.total_price || 0), 0),
+    [activeOrders, completedOrders]
   )
 
   return (
@@ -373,7 +483,7 @@ export default function OrdensEntregaPage({ setPage }) {
           <p className="page-sub">Fila operacional nascida das vendas por WhatsApp, com dono, rota e status.</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={() => reload(orderType)} className="btn btn-secondary">
+          <button onClick={() => reload(orderType, historyDate)} className="btn btn-secondary">
             <RefreshCw size={15} /> Atualizar
           </button>
           {setPage && (
@@ -402,6 +512,23 @@ export default function OrdensEntregaPage({ setPage }) {
         ))}
       </div>
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-card px-4 py-3">
+        <div>
+          <p className="text-sm font-bold text-text">Operacao ativa de hoje</p>
+          <p className="text-xs text-muted">Cards mostram apenas ordens abertas criadas hoje. Concluidas ficam no historico abaixo.</p>
+        </div>
+        <label className="flex items-center gap-2 text-xs font-bold text-muted uppercase tracking-widest">
+          <Calendar size={15} className="text-amber-400" />
+          Historico
+          <input
+            type="date"
+            className="inp py-2 w-auto normal-case tracking-normal"
+            value={historyDate}
+            onChange={(event) => setHistoryDate(event.target.value || todayISO())}
+          />
+        </label>
+      </div>
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-card border border-[var(--border)] rounded-xl p-5">
           <p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Na fila</p>
@@ -412,7 +539,7 @@ export default function OrdensEntregaPage({ setPage }) {
           <p className="font-display font-bold text-3xl text-sky-400">{routeCount}</p>
         </div>
         <div className="bg-card border border-[var(--border)] rounded-xl p-5">
-          <p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Concluidas</p>
+          <p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Concluidas na data</p>
           <p className="font-display font-bold text-3xl text-emerald-400">{doneCount}</p>
         </div>
         <div className="bg-card border border-[var(--border)] rounded-xl p-5">
@@ -428,45 +555,73 @@ export default function OrdensEntregaPage({ setPage }) {
           <RefreshCw size={15} className="animate-spin" /> Carregando ordens operacionais...
         </div>
       ) : (
-        <div className="grid grid-cols-1 xl:grid-cols-4 gap-6">
-          {steps.map((step) => (
-            <div key={step.id} className="space-y-4">
-              <div className="flex items-center justify-between">
-                <div>
-                  <p className="font-bold text-text">{step.label}</p>
-                  <p className="text-xs text-muted">
-                    {(SERVICE_ORDER_FLOW[orderType] || []).find((item) => item.id === step.id)?.hint || 'Acompanhamento operacional'}
-                  </p>
-                </div>
-                <span className="badge badge-gray">{orders.filter((order) => order.status === step.id).length}</span>
-              </div>
-
-              <div className="space-y-3">
-                {orders
-                  .filter((order) => order.status === step.id)
-                  .map((order) => (
-                    <OrderCard
-                      key={order.id}
-                      order={order}
-                      assignees={assignees}
-                      onAssign={handleAssign}
-                      onAdvance={handleAdvance}
-                      onPrint={handlePrint}
-                      fallbackItems={itemsBySession.get(orderSessionId(order)) || []}
-                      setPage={setPage}
-                    />
-                  ))}
-
-                {!orders.some((order) => order.status === step.id) && (
-                  <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-muted text-sm">
-                    <UserCheck size={20} className="mx-auto mb-2 opacity-50" />
-                    Nada neste status agora.
+        <>
+          <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
+            {steps.map((step) => (
+              <div key={step.id} className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <p className="font-bold text-text">{step.label}</p>
+                    <p className="text-xs text-muted">
+                      {(SERVICE_ORDER_FLOW[orderType] || []).find((item) => item.id === step.id)?.hint || 'Acompanhamento operacional'}
+                    </p>
                   </div>
-                )}
+                  <span className="badge badge-gray">{activeOrders.filter((order) => order.status === step.id).length}</span>
+                </div>
+
+                <div className="space-y-3">
+                  {activeOrders
+                    .filter((order) => order.status === step.id)
+                    .map((order) => (
+                      <OrderCard
+                        key={order.id}
+                        order={order}
+                        assignees={assignees}
+                        onAssign={handleAssign}
+                        onAdvance={handleAdvance}
+                        onPrint={handlePrint}
+                        fallbackItems={itemsBySession.get(orderSessionId(order)) || []}
+                        setPage={setPage}
+                      />
+                    ))}
+
+                  {!activeOrders.some((order) => order.status === step.id) && (
+                    <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-muted text-sm">
+                      <UserCheck size={20} className="mx-auto mb-2 opacity-50" />
+                      Nada neste status agora.
+                    </div>
+                  )}
+                </div>
               </div>
+            ))}
+          </div>
+
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="font-bold text-text">Historico de concluidas</p>
+                <p className="text-xs text-muted">
+                  Ordens concluidas em {new Date(`${historyDate}T00:00:00`).toLocaleDateString('pt-BR')}, em formato compacto para consulta e impressao.
+                </p>
+              </div>
+              <span className="badge badge-green">{completedOrders.length} concluida(s)</span>
             </div>
-          ))}
-        </div>
+
+            {completedOrders.length ? (
+              <CompletedOrdersTable
+                orders={completedOrders}
+                onPrint={handlePrint}
+                fallbackItemsForOrder={(order) => itemsBySession.get(orderSessionId(order)) || []}
+                setPage={setPage}
+              />
+            ) : (
+              <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-muted text-sm">
+                <UserCheck size={20} className="mx-auto mb-2 opacity-50" />
+                Nenhuma ordem concluida nesta data.
+              </div>
+            )}
+          </section>
+        </>
       )}
     </div>
   )

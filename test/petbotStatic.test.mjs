@@ -71,3 +71,17 @@ test('agenda separa banho/tosa e veterinaria em abas', () => {
   assert.match(appointments, /banho\.\*tosa/)
   assert.match(appointments, /vet\|consulta\|clinica\|medico/)
 })
+
+test('ordens mantem cards ativos de hoje e historico concluido em tabela', () => {
+  const page = read('src/modules/petshop/pages/OrdensEntregaPage.jsx')
+  const hook = read('src/modules/petshop/hooks/usePetshopAdvanced.js')
+
+  assert.match(page, /activeOrders/)
+  assert.match(page, /completedOrders/)
+  assert.match(page, /CompletedOrdersTable/)
+  assert.match(page, /Historico de concluidas/)
+  assert.match(page, /\.filter\(\(step\) => step\.id !== 'concluida'\)/)
+  assert.match(hook, /excludeStatus/)
+  assert.match(hook, /dateField/)
+  assert.match(hook, /\.limit\(limit\)/)
+})
