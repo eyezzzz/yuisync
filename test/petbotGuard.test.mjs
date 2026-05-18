@@ -105,6 +105,37 @@ const appointments = [
   },
 ]
 
+const mixedAppointments = [
+  {
+    id: 'slot-bath-14',
+    service_type: 'Banho',
+    scheduled_at: '2026-05-13T14:00:00-03:00',
+    status: 'available',
+    price: 70,
+  },
+  {
+    id: 'slot-bath-busy',
+    service_type: 'Banho',
+    scheduled_at: '2026-05-13T10:00:00-03:00',
+    status: 'booked',
+    price: 70,
+  },
+  {
+    id: 'slot-groom-16',
+    service_type: 'Banho e tosa',
+    scheduled_at: '2026-05-13T16:30:00-03:00',
+    status: 'available',
+    price: 90,
+  },
+  {
+    id: 'slot-vet-15',
+    service_type: 'Consulta veterinária',
+    scheduled_at: '2026-05-13T15:00:00-03:00',
+    status: 'available',
+    price: 120,
+  },
+]
+
 function turn(context, message, extra = {}) {
   const result = runPetbotGuard({
     message,
@@ -356,6 +387,10 @@ test('banho mostra múltiplos horários reais com preço', () => {
   assert.match(result.reply, /nome do pet/i)
 
   result = turn(context, 'Thor, Golden')
+  context = result.context
+  assert.match(result.reply, /observa/i)
+
+  result = turn(context, 'sem observacao')
   assert.match(result.reply, /14:00/)
   assert.match(result.reply, /16:30/)
   assert.match(result.reply, /R\$ 70,00/)
@@ -369,6 +404,8 @@ test('banho entende nome e raça sem vírgula', () => {
   context = result.context
 
   result = turn(context, 'Thor golden')
+  context = result.context
+  result = turn(context, 'sem observacao')
   assert.match(result.reply, /14:00/)
   assert.equal(result.state.petName, 'Thor')
   assert.equal(result.state.breed, 'Golden Retriever')
@@ -382,6 +419,8 @@ test('banho extrai nome quando cliente informa pet e porte em frase natural', ()
   context = result.context
 
   result = turn(context, 'quero banho para o Thor cachorro médio')
+  context = result.context
+  result = turn(context, 'sem observacao')
   assert.match(result.reply, /14:00/)
   assert.equal(result.state.petName, 'Thor')
   assert.equal(result.state.species, 'dog')
@@ -417,6 +456,8 @@ test('agenda cheia nao inventa horario e pode acionar humano', () => {
   context = result.context
   result = turn(context, 'Thor golden', { appointments: [] })
   context = result.context
+  result = turn(context, 'sem observacao', { appointments: [] })
+  context = result.context
 
   assert.equal(result.action, 'sem_horario')
   assert.match(result.reply, /não achei horário disponível/i)
@@ -424,6 +465,84 @@ test('agenda cheia nao inventa horario e pode acionar humano', () => {
   result = turn(context, 'sim', { appointments: [] })
   assert.equal(result.needsHuman, true)
   assert.equal(result.action, 'handoff_humano')
+})
+
+test('banho e tosa usa agenda certa e salva observacao operacional', () => {
+  let context = {}
+  let result = turn(context, 'oi', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Ana', { appointments: mixedAppointments })
+  context = result.context
+
+  result = turn(context, 'quero banho e tosa para Thor golden, ele morde e tem nos no pelo', { appointments: mixedAppointments })
+  context = result.context
+  assert.match(result.reply, /16:30/)
+  assert.match(result.reply, /R\$ 90,00/)
+  assert.doesNotMatch(result.reply, /14:00/)
+  assert.doesNotMatch(result.reply, /15:00/)
+
+  result = turn(context, '16:30', { appointments: mixedAppointments })
+  context = result.context
+  assert.match(result.reply, /Pedido em andamento/i)
+  assert.match(result.reply, /Observa/i)
+  assert.match(result.reply, /morde/i)
+
+  result = turn(context, 'pix', { appointments: mixedAppointments })
+  context = result.context
+  assert.match(result.reply, /Confirma o agendamento/i)
+
+  result = turn(context, 'sim', { appointments: mixedAppointments })
+  assert.equal(result.shouldSaveOrder, true)
+  assert.match(result.orderArgs.notes, /Observa/)
+  assert.match(result.orderArgs.notes, /morde/)
+  assert.equal(result.orderArgs.appointment_id, 'slot-groom-16')
+})
+
+test('veterinaria com erro de digitacao usa somente agenda veterinaria', () => {
+  let context = {}
+  let result = turn(context, 'boa tarde', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Paula', { appointments: mixedAppointments })
+  context = result.context
+
+  result = turn(context, 'preciso de vetrinario para Bob cachorro vomitando', { appointments: mixedAppointments })
+  assert.equal(result.state.intent, 'veterinaria')
+  assert.match(result.reply, /15:00/)
+  assert.match(result.reply, /R\$ 120,00/)
+  assert.doesNotMatch(result.reply, /14:00/)
+  assert.doesNotMatch(result.reply, /16:30/)
+})
+
+test('horario de outro servico ou ocupado nao e aceito em banho', () => {
+  let context = {}
+  let result = turn(context, 'oi', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Bia', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'quero banho para Rex cachorro pequeno', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'sem observacao', { appointments: mixedAppointments })
+  context = result.context
+  assert.match(result.reply, /14:00/)
+  assert.doesNotMatch(result.reply, /10:00/)
+  assert.doesNotMatch(result.reply, /15:00/)
+
+  result = turn(context, '15h', { appointments: mixedAppointments })
+  assert.equal(result.state.selectedSlot, null)
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.doesNotMatch(result.reply, /Pedido em andamento/i)
+})
+
+test('pedido generico de agendamento pergunta tipo de servico antes da agenda', () => {
+  let context = {}
+  let result = turn(context, 'oi', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Clara', { appointments: mixedAppointments })
+  context = result.context
+
+  result = turn(context, 'quero agendar', { appointments: mixedAppointments })
+  assert.equal(result.action, 'pedir_tipo_servico')
+  assert.match(result.reply, /banho, tosa ou banho e tosa/i)
 })
 
 test('estoque vazio nao inventa produto e pode acionar humano', () => {

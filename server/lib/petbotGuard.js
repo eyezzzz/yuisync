@@ -70,8 +70,8 @@ const FOOD_HINTS = [
 
 const FLEA_HINTS = ['antipulga', 'anti pulga', 'pulga', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli']
 
-const SERVICE_HINTS = ['banho', 'tosa', 'agendar', 'agenda']
-const VET_HINTS = ['vet', 'veterinario', 'veterinária', 'veterinaria', 'consulta', 'vacina']
+const SERVICE_HINTS = ['banho', 'banh', 'tosa', 'tosar', 'higien', 'agendar', 'agenda']
+const VET_HINTS = ['vet', 'vetrinario', 'veternario', 'veterinario', 'veterinária', 'veterinaria', 'consulta', 'vacina', 'clinica', 'clínica', 'medico', 'médico']
 const URGENCY_HINTS = ['vomit', 'sangr', 'veneno', 'intoxic', 'convuls', 'falta de ar', 'apatico', 'apático', 'nao come', 'não come']
 const DISCOUNT_HINTS = ['desconto', 'abaixa', 'barato', 'mais em conta', 'melhor preco', 'melhor preço']
 const HUMAN_HINTS = ['atendente', 'humano', 'pessoa', 'equipe', 'gerente', 'falar com alguem', 'falar com alguém', 'me liga', 'ligacao', 'ligação']
@@ -84,6 +84,8 @@ const AWAITING_ACTIONS = {
   species: 'pedir_especie',
   pet_category: 'pedir_categoria_pet',
   service_pet_details: 'pedir_categoria_pet',
+  service_type: 'pedir_tipo_servico',
+  service_notes: 'pedir_observacao_servico',
   pet_name: 'pedir_nome_pet',
   symptom: 'pedir_sintoma',
   product_choice: 'oferecer_produtos',
@@ -103,6 +105,8 @@ const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
   'identificar_intencao',
   'pedir_especie',
   'pedir_categoria_pet',
+  'pedir_tipo_servico',
+  'pedir_observacao_servico',
   'pedir_nome_pet',
   'pedir_sintoma',
   'pedir_pagamento',
@@ -248,6 +252,8 @@ function defaultState() {
     selectedSlot: null,
     slotOptions: [],
     serviceType: '',
+    serviceNotes: '',
+    serviceNotesAsked: false,
     upsell: defaultUpsell(),
     payment: defaultPayment(),
     fulfillment: defaultFulfillment(),
@@ -318,6 +324,8 @@ export function snapshotPetbotState(state = {}) {
     packagePreferenceAsked: Boolean(next.packagePreferenceAsked),
     pendingQuantity: next.pendingQuantity,
     serviceType: next.serviceType,
+    serviceNotes: next.serviceNotes,
+    serviceNotesAsked: Boolean(next.serviceNotesAsked),
     selectedProduct: next.selectedProduct,
     productOptions: Array.isArray(next.productOptions) ? next.productOptions.slice(0, 5) : [],
     selectedSlot: next.selectedSlot,
@@ -390,6 +398,8 @@ export function buildPetbotSearchText(message = '', context = {}) {
     state.brand,
     state.packagePreference,
     state.packageKg ? `${state.packageKg}kg` : '',
+    state.serviceType,
+    state.serviceNotes,
     state.selectedProduct?.name,
     ...(state.productOptions || []).slice(0, 3).map((item) => item.name),
   ].filter(Boolean).join(' ')
@@ -500,12 +510,14 @@ function isCatProductText(haystack = '') {
 function detectIntent(message = '', currentIntent = '') {
   const hasProductCore = hasAny(message, ['racao', 'ração', 'petisco', 'sache', 'sachê', 'areia', 'antipulga', 'shampoo', 'comprar', 'produto', 'estoque'])
   const hasProduct = hasAny(message, PRODUCT_HINTS)
-  const hasService = hasAny(message, SERVICE_HINTS)
+  const hasServiceCore = hasAny(message, ['banho', 'banh', 'tosa', 'tosar', 'agendar', 'agenda'])
+  const hasHygienicService = hasAny(message, ['higien']) && !hasAny(message, ['areia', 'tapete'])
+  const hasService = hasServiceCore || hasHygienicService
   const hasVet = hasAny(message, VET_HINTS) || hasAny(message, URGENCY_HINTS)
   if ((currentIntent === 'banho_tosa' || currentIntent === 'veterinaria') && !hasProductCore && !hasService && !hasVet) {
     return currentIntent
   }
-  if ((hasProduct && (hasService || hasVet))) return 'multi'
+  if ((hasProductCore && (hasService || hasVet))) return 'multi'
   if (hasVet) return 'veterinaria'
   if (hasService) return 'banho_tosa'
   if (hasProduct) return 'produto'
@@ -638,6 +650,40 @@ function extractSymptom(message = '') {
   return ''
 }
 
+function inferServiceType(message = '', intent = '') {
+  const lower = norm(message)
+  if (/(vacina|vacinacao)/.test(lower)) return 'Vacina'
+  if (/(vet|vetrinario|veternario|veterinari|consulta|avaliacao|clinica|medico)/.test(lower)) {
+    return intent === 'veterinaria' ? 'Consulta veterinária' : ''
+  }
+  const wantsBath = /\bbanh/.test(lower)
+  const wantsGroom = /\btos|higien/.test(lower)
+  if (wantsBath && wantsGroom) return 'Banho e tosa'
+  if (wantsGroom && /higien/.test(lower)) return 'Tosa higiênica'
+  if (wantsGroom) return 'Tosa'
+  if (wantsBath) return 'Banho'
+  return ''
+}
+
+function hasNoServiceNotes(message = '') {
+  const lower = norm(message)
+  return /^(sem obs|sem observacao|sem observacoes|sem nada|nada|nao|não|n|nenhuma|nenhum|nao tem|não tem|tudo certo|normal)\b/.test(lower)
+}
+
+function extractServiceNotes(message = '', state = {}) {
+  const text = clean(message)
+  const lower = norm(text)
+  if (!text || hasNoServiceNotes(text)) return ''
+  if (state.awaiting === 'service_notes') {
+    if (detectPayment(text) || detectFulfillment(text)) return ''
+    return text.slice(0, 160)
+  }
+  if (/(morde|bravo|agressiv|arisco|medo|alerg|sensivel|sensível|idoso|sem perfume|nao usar perfume|não usar perfume|perfume nao|perfume não|no pelo|nó no pelo|nos pelo|nós no pelo|embolad|machuc|ferid|pulga|carrapato)/.test(lower)) {
+    return text.slice(0, 160)
+  }
+  return ''
+}
+
 function parseChangeFor(message = '') {
   const lower = norm(message)
   if (lower.includes('sem troco') || lower.includes('nao precisa') || lower.includes('não precisa')) return 0
@@ -667,6 +713,8 @@ function resetOrderProgressForIntentChange(state, nextIntent) {
   state.selectedSlot = null
   state.slotOptions = []
   state.serviceType = ''
+  state.serviceNotes = ''
+  state.serviceNotesAsked = false
   state.upsell = defaultUpsell()
   state.payment = defaultPayment()
   state.fulfillment = defaultFulfillment()
@@ -886,10 +934,24 @@ function pickUpsell(products, state) {
   return scored[0]?.score > 0 ? productSnapshot(scored[0].product, true) : null
 }
 
-function serviceMatches(intent, appointment) {
+function serviceMatches(intent, appointment, requestedServiceType = '') {
   const service = norm(appointment?.service_type)
-  if (intent === 'veterinaria') return /(vet|consulta|vacina|avaliacao|avaliação)/.test(service)
-  return /(banho|tosa|higien)/.test(service)
+  const requested = norm(requestedServiceType)
+  const isVetSlot = /(vet|veterinari|consulta|vacina|avaliacao|clinica|medico)/.test(service)
+  const isBathSlot = /(banho|tosa|higien)/.test(service)
+
+  if (intent === 'veterinaria') {
+    if (!isVetSlot) return false
+    if (/vacina/.test(requested)) return /vacina/.test(service)
+    return true
+  }
+
+  if (isVetSlot || !isBathSlot) return false
+  if (/tosa higien/.test(requested)) return /(higien|tosa)/.test(service)
+  if (/tosa/.test(requested) && !/banho/.test(requested)) return /(tosa|higien)/.test(service)
+  if (/banho/.test(requested) && /tosa/.test(requested)) return /(banho.*tosa|tosa.*banho|higien)/.test(service)
+  if (/banho/.test(requested)) return /banho/.test(service)
+  return true
 }
 
 function formatSlot(slot) {
@@ -962,6 +1024,7 @@ function buildPartialSummary(state) {
   } else {
     lines.push(`• Serviço: ${state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')}`)
     if (state.selectedSlot) lines.push(`• Horário: ${formatSlot(state.selectedSlot)}`)
+    if (state.serviceNotes) lines.push(`• Observação: ${state.serviceNotes}`)
   }
   lines.push(`• Extra: ${state.upsell.accepted && state.upsell.item ? state.upsell.item.name : 'não adicionado'}`)
   lines.push(`• Total parcial: ${money(state.totals.subtotal)}`)
@@ -984,6 +1047,7 @@ function buildFinalSummary(state) {
   } else {
     lines.push(`• Serviço: ${state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')}`)
     if (state.selectedSlot) lines.push(`• Horário: ${formatSlot(state.selectedSlot)}`)
+    if (state.serviceNotes) lines.push(`• Observação: ${state.serviceNotes}`)
   }
   lines.push(`• Total: ${money(state.totals.total)}`)
   lines.push(`• Pagamento: ${state.payment.method}${state.payment.method === 'dinheiro' && state.payment.changeFor ? `, troco para ${money(state.payment.changeFor)}` : ''}`)
@@ -1048,7 +1112,11 @@ function buildOrderArgs(state) {
     payment_method: state.payment.method,
     change_for: state.payment.changeFor,
     fulfillment_type: 'servico',
-    notes: [state.symptom ? `Sintoma: ${state.symptom}` : null, `PetBot guard v${PETBOT_VERSION}`].filter(Boolean).join(' | '),
+    notes: [
+      state.symptom ? `Sintoma: ${state.symptom}` : null,
+      state.serviceNotes ? `Observação: ${state.serviceNotes}` : null,
+      `PetBot guard v${PETBOT_VERSION}`,
+    ].filter(Boolean).join(' | '),
   }
 }
 
@@ -1065,6 +1133,11 @@ function applyMessageFacts(state, message) {
     resetOrderProgressForIntentChange(state, intent)
   }
   if (intent) state.intent = intent
+
+  const serviceType = inferServiceType(message, state.intent)
+  if (serviceType && ['banho_tosa', 'veterinaria'].includes(state.intent)) {
+    state.serviceType = serviceType
+  }
 
   if (state.intent === 'produto') {
     if (isFleaRequest(message)) state.productKind = 'flea'
@@ -1115,6 +1188,19 @@ function applyMessageFacts(state, message) {
 
   const symptom = extractSymptom(message)
   if (symptom && state.intent === 'veterinaria') state.symptom = symptom
+
+  if (state.intent === 'banho_tosa') {
+    if (hasNoServiceNotes(message) && state.awaiting === 'service_notes') {
+      state.serviceNotes = ''
+      state.serviceNotesAsked = true
+    } else {
+      const serviceNotes = extractServiceNotes(message, state)
+      if (serviceNotes) {
+        state.serviceNotes = serviceNotes
+        state.serviceNotesAsked = true
+      }
+    }
+  }
 
   const payment = detectPayment(message)
   if (payment) state.payment.method = payment
@@ -1193,6 +1279,8 @@ function buildAllowedData(state) {
     package_kg: state.packageKg,
     package_preference_any: Boolean(state.packagePreferenceAny),
     pending_quantity: state.pendingQuantity,
+    service_type: state.serviceType,
+    service_notes: state.serviceNotes,
     selected_product: compactProduct(state.selectedProduct),
     product_options: (state.productOptions || []).map(compactProduct).filter(Boolean),
     selected_slot: compactSlot(state.selectedSlot),
@@ -1384,7 +1472,7 @@ function sendProductImage(state) {
 }
 
 function presentSlots(state, appointments) {
-  const slots = availableAppointments(appointments).filter((appointment) => serviceMatches(state.intent, appointment)).slice(0, 3)
+  const slots = availableAppointments(appointments).filter((appointment) => serviceMatches(state.intent, appointment, state.serviceType)).slice(0, 3)
   state.slotOptions = slots.map((slot) => ({
     id: clean(slot.id),
     service_type: clean(slot.service_type),
@@ -1403,6 +1491,9 @@ function presentSlots(state, appointments) {
 }
 
 function serviceFlow(state, message, appointments, settings) {
+  if (state.intent === 'banho_tosa' && !state.serviceType) {
+    return ask('É banho, tosa ou banho e tosa?', state, 'service_type', 'tipo_servico_pendente')
+  }
   if (!state.petName) {
     return ask('Perfeito. Qual o nome do pet?', state, 'pet_name', 'pet_nome_pendente')
   }
@@ -1414,6 +1505,9 @@ function serviceFlow(state, message, appointments, settings) {
   }
   if (state.intent === 'veterinaria' && !state.symptom) {
     return ask('Qual é o problema principal dele?', state, 'symptom', 'sintoma_pendente')
+  }
+  if (state.intent === 'banho_tosa' && !state.serviceNotesAsked && !state.serviceNotes) {
+    return ask('Alguma observação para banho/tosa? Ex: alergia, nós no pelo, bravo ou sem perfume. Se não tiver, me fala "sem observação".', state, 'service_notes', 'observacao_servico_pendente')
   }
 
   const chosenSlot = chooseSlotFromOptions(state, message)
