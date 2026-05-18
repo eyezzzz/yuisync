@@ -134,6 +134,15 @@ function hasAny(text, terms) {
   return terms.some((term) => lower.includes(norm(term)))
 }
 
+function buildNamePrompt(message = '') {
+  const lower = norm(message)
+  if (/\bbom dia\b/.test(lower)) return 'Bom dia! Qual seu nome, por favor?'
+  if (/\bboa tarde\b/.test(lower)) return 'Boa tarde! Qual seu nome, por favor?'
+  if (/\bboa noite\b/.test(lower)) return 'Boa noite! Qual seu nome, por favor?'
+  if (/^(oi|ola|opa)\b/.test(lower)) return 'Oi! Qual seu nome, por favor?'
+  return 'Claro. Posso saber seu nome, por favor?'
+}
+
 function wantsProductImage(message = '') {
   return hasAny(message, IMAGE_HINTS)
 }
@@ -1300,7 +1309,7 @@ export function runPetbotGuard({
   }
 
   if (!state.nameConfirmed) {
-    return ask('Oi! Claro. Posso saber seu nome, por favor?', state, 'customer_name', 'nome_pendente')
+    return ask(buildNamePrompt(trimmed), state, 'customer_name', 'nome_pendente')
   }
 
   if (!state.intent) {

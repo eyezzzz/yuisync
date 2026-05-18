@@ -274,6 +274,11 @@ function parseJsonObject(value) {
   }
 }
 
+function hasPetbotState(context) {
+  const parsed = parseJsonObject(context)
+  return Boolean(parsed.petbot && typeof parsed.petbot === 'object' && parsed.petbot.updatedAt)
+}
+
 function isUuid(value = '') {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(cleanText(value))
 }
@@ -1657,6 +1662,50 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   }
 
   const botSentAt = new Date().toISOString()
+  const nextContext = mergePetbotContext({
+    ...(session.context || {}),
+    ...(orderResult ? {
+      last_sale_id: orderResult.sale_id,
+      last_order_id: orderResult.order_id || null,
+      last_appointment_id: orderResult.appointment_id || null,
+    } : {}),
+  }, state)
+
+  const sessionPatch = {
+    intent: guard.intent || intent,
+    context: nextContext,
+    ...(state?.customerName ? { customer_name: state.customerName } : {}),
+    ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: botSentAt } : {}),
+    ...(guard.needsHuman ? { status: 'human' } : {}),
+    last_message_at: botSentAt,
+  }
+
+  const { data: updatedSession, error: sessionUpdateError } = await supabase
+    .from('chat_sessions')
+    .update(sessionPatch)
+    .eq('id', sessionId)
+    .select('id, context')
+    .maybeSingle()
+
+  if (sessionUpdateError) {
+    logger.error('Unable to persist PetBot session state', {
+      sessionId,
+      moduleId,
+      code: sessionUpdateError.code,
+      message: sessionUpdateError.message,
+    })
+    throw new HttpError(500, `Unable to update chat session: ${sessionUpdateError.message}`)
+  }
+
+  if (!updatedSession || !hasPetbotState(updatedSession.context)) {
+    logger.error('PetBot session update did not persist context.petbot', {
+      sessionId,
+      moduleId,
+      hasUpdatedSession: Boolean(updatedSession),
+    })
+    throw new HttpError(500, 'Unable to persist PetBot session state.')
+  }
+
   const { data: savedReply, error: replyInsertError } = await supabase
     .from('chat_messages')
     .insert({
@@ -1688,28 +1737,6 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   if (replyInsertError) {
     throw new HttpError(500, 'Unable to save assistant response.')
-  }
-
-  const { error: sessionUpdateError } = await supabase
-    .from('chat_sessions')
-    .update({
-      intent: guard.intent || intent,
-      context: mergePetbotContext({
-        ...(session.context || {}),
-        ...(orderResult ? {
-          last_sale_id: orderResult.sale_id,
-          last_order_id: orderResult.order_id || null,
-          last_appointment_id: orderResult.appointment_id || null,
-        } : {}),
-      }, state),
-      ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: botSentAt } : {}),
-      ...(guard.needsHuman ? { status: 'human' } : {}),
-      last_message_at: botSentAt,
-    })
-    .eq('id', sessionId)
-
-  if (sessionUpdateError) {
-    throw new HttpError(500, 'Unable to update chat session.')
   }
 
   logger.info('Chat response generated', {

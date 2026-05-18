@@ -355,6 +355,32 @@ test('guardiao bloqueia rascunho da LLM que pula a acao autorizada', () => {
   assert.equal(rendered.reply, result.reply)
 })
 
+test('cumprimento comum pede nome com saudacao natural', () => {
+  const result = turn({}, 'ola bom dia')
+  assert.equal(result.action, 'pedir_nome')
+  assert.match(result.reply, /^Bom dia!/)
+  assert.doesNotMatch(result.reply, /Claro/)
+})
+
+test('guardiao usa contexto persistido para nao pedir nome de novo', () => {
+  let context = {}
+  let result = turn(context, 'ola bom dia')
+  context = result.context
+
+  result = turn(context, 'gabriel, quero uma racao')
+  context = result.context
+  assert.equal(result.state.customerName, 'Gabriel')
+  assert.equal(result.state.nameConfirmed, true)
+  assert.equal(result.state.intent, 'produto')
+
+  result = turn(context, 'e um shih tzu adulto')
+  assert.equal(result.state.customerName, 'Gabriel')
+  assert.equal(result.state.nameConfirmed, true)
+  assert.equal(result.state.breed, 'Shih Tzu')
+  assert.equal(result.state.ageCategory, 'adulto')
+  assert.doesNotMatch(result.reply, /nome/i)
+})
+
 test('guardiao nao permite redigir resumo parcial com LLM', () => {
   let context = {}
   let result = turn(context, 'Oi, tem ração pra shih tzu adulto?')

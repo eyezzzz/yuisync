@@ -339,6 +339,11 @@ function parseJsonObject(value: unknown): LooseRecord {
   }
 }
 
+function hasPetbotState(context: unknown): boolean {
+  const parsed = parseJsonObject(context)
+  return Boolean(parsed.petbot && typeof parsed.petbot === 'object' && parsed.petbot.updatedAt)
+}
+
 function isUuid(value: unknown): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(clean(value))
 }
@@ -2438,17 +2443,34 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       last_appointment_id: orderResult.appointment_id || null,
     } : {}),
   }, state)
+  const botSentAt = new Date().toISOString()
 
-  await supabase
+  const sessionUpdate = await supabase
     .from('chat_sessions')
     .update({
       intent: guard.intent || detectConversationIntent(event.text),
       context: mergedContext,
-      ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: new Date().toISOString() } : {}),
+      ...(state?.customerName ? { customer_name: state.customerName } : {}),
+      ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: botSentAt } : {}),
       ...(guard.needsHuman ? { status: 'human' } : {}),
-      last_message_at: new Date().toISOString(),
+      last_message_at: botSentAt,
     })
     .eq('id', session.id)
+    .select('id, context')
+    .maybeSingle()
+
+  if (sessionUpdate.error) {
+    console.error('Unable to persist PetBot session state', sessionUpdate.error)
+    fail(500, `Unable to update chat session: ${sessionUpdate.error.message}`)
+  }
+
+  if (!sessionUpdate.data || !hasPetbotState(sessionUpdate.data.context)) {
+    console.error('PetBot session update did not persist context.petbot', {
+      sessionId: session.id,
+      hasUpdatedSession: Boolean(sessionUpdate.data),
+    })
+    fail(500, 'Unable to persist PetBot session state.')
+  }
 
   const savedReply = await saveAssistantMessage(supabase, session.id, event, reply, 0, {
     ...(primaryImage ? {

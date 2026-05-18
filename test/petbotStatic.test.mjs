@@ -28,6 +28,27 @@ test('pedido PetBot usa RPC transacional no backend local e serverless', () => {
   assert.match(migration, /create_petbot_order_transaction/)
 })
 
+test('resposta do PetBot so e salva depois do estado da sessao persistir', () => {
+  const localChat = read('server/lib/chat.js')
+  const webhook = read('serverless/whatsappWebhook.ts')
+
+  const localPersistIndex = localChat.indexOf('const { data: updatedSession')
+  const localReplyIndex = localChat.indexOf('const { data: savedReply', localPersistIndex)
+  assert.ok(localPersistIndex > -1)
+  assert.ok(localReplyIndex > -1)
+  assert.ok(localPersistIndex < localReplyIndex)
+  assert.match(localChat, /customer_name: state\.customerName/)
+  assert.match(localChat, /hasPetbotState\(updatedSession\.context\)/)
+
+  const webhookPersistIndex = webhook.indexOf('const sessionUpdate = await supabase')
+  const webhookReplyIndex = webhook.indexOf('const savedReply = await saveAssistantMessage')
+  assert.ok(webhookPersistIndex > -1)
+  assert.ok(webhookReplyIndex > -1)
+  assert.ok(webhookPersistIndex < webhookReplyIndex)
+  assert.match(webhook, /customer_name: state\.customerName/)
+  assert.match(webhook, /hasPetbotState\(sessionUpdate\.data\.context\)/)
+})
+
 test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {
   const env = read('.env.example')
   assert.match(env, /WHATSAPP_REPLY_DEBOUNCE_MS=0/)
