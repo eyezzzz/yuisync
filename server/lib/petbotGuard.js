@@ -87,6 +87,8 @@ const AWAITING_ACTIONS = {
   service_pet_details: 'pedir_categoria_pet',
   service_type: 'pedir_tipo_servico',
   service_notes: 'pedir_observacao_servico',
+  service_date: 'pedir_dia_agendamento',
+  service_time_preference: 'pedir_preferencia_horario',
   pet_name: 'pedir_nome_pet',
   symptom: 'pedir_sintoma',
   product_choice: 'oferecer_produtos',
@@ -108,6 +110,8 @@ const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
   'pedir_categoria_pet',
   'pedir_tipo_servico',
   'pedir_observacao_servico',
+  'pedir_dia_agendamento',
+  'pedir_preferencia_horario',
   'pedir_nome_pet',
   'pedir_sintoma',
   'pedir_pagamento',
@@ -153,6 +157,31 @@ function norm(value = '') {
 
 function money(value = 0) {
   return `R$ ${Number(value || 0).toFixed(2).replace('.', ',')}`
+}
+
+function saoPauloTodayIso() {
+  return new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+}
+
+function addDaysIso(dateIso, days) {
+  const [year, month, day] = String(dateIso || saoPauloTodayIso()).split('-').map(Number)
+  if (![year, month, day].every(Number.isFinite)) return saoPauloTodayIso()
+  const date = new Date(Date.UTC(year, month - 1, day + Number(days || 0), 12, 0, 0))
+  return date.toISOString().slice(0, 10)
+}
+
+function isoFromBrazilianDate(day, month, year = '') {
+  const today = saoPauloTodayIso()
+  const currentYear = Number(today.slice(0, 4))
+  const parsedYear = year
+    ? (String(year).length === 2 ? 2000 + Number(year) : Number(year))
+    : currentYear
+  const parsedDay = Number(day)
+  const parsedMonth = Number(month)
+  if (!parsedYear || parsedMonth < 1 || parsedMonth > 12 || parsedDay < 1 || parsedDay > 31) return ''
+  const date = new Date(Date.UTC(parsedYear, parsedMonth - 1, parsedDay, 12, 0, 0))
+  if (date.getUTCFullYear() !== parsedYear || date.getUTCMonth() !== parsedMonth - 1 || date.getUTCDate() !== parsedDay) return ''
+  return date.toISOString().slice(0, 10)
 }
 
 function hasAny(text, terms) {
@@ -255,6 +284,9 @@ function defaultState() {
     serviceType: '',
     serviceNotes: '',
     serviceNotesAsked: false,
+    serviceDate: '',
+    serviceTimePreference: '',
+    servicePreferredTime: '',
     upsell: defaultUpsell(),
     payment: defaultPayment(),
     fulfillment: defaultFulfillment(),
@@ -327,6 +359,9 @@ export function snapshotPetbotState(state = {}) {
     serviceType: next.serviceType,
     serviceNotes: next.serviceNotes,
     serviceNotesAsked: Boolean(next.serviceNotesAsked),
+    serviceDate: next.serviceDate,
+    serviceTimePreference: next.serviceTimePreference,
+    servicePreferredTime: next.servicePreferredTime,
     selectedProduct: next.selectedProduct,
     productOptions: Array.isArray(next.productOptions) ? next.productOptions.slice(0, 5) : [],
     selectedSlot: next.selectedSlot,
@@ -379,6 +414,7 @@ export function recoverPetbotContextFromHistory(context = {}, session = {}, hist
     || state.ageCategory
     || state.selectedProduct
     || state.selectedSlot
+    || state.serviceDate
     || state.payment.method
     || state.fulfillment.type
 
@@ -401,6 +437,9 @@ export function buildPetbotSearchText(message = '', context = {}) {
     state.packageKg ? `${state.packageKg}kg` : '',
     state.serviceType,
     state.serviceNotes,
+    state.serviceDate,
+    state.serviceTimePreference,
+    state.servicePreferredTime,
     state.selectedProduct?.name,
     ...(state.productOptions || []).slice(0, 3).map((item) => item.name),
   ].filter(Boolean).join(' ')
@@ -685,6 +724,97 @@ function extractServiceNotes(message = '', state = {}) {
   return ''
 }
 
+const WEEKDAY_INDEXES = [
+  ['domingo', 0],
+  ['segunda', 1],
+  ['segunda feira', 1],
+  ['terca', 2],
+  ['terca feira', 2],
+  ['terça', 2],
+  ['terça feira', 2],
+  ['quarta', 3],
+  ['quarta feira', 3],
+  ['quinta', 4],
+  ['quinta feira', 4],
+  ['sexta', 5],
+  ['sexta feira', 5],
+  ['sabado', 6],
+  ['sábado', 6],
+]
+
+function parseServiceDatePreference(message = '') {
+  const lower = norm(message)
+  if (!lower) return ''
+  if (/(qualquer dia|tanto faz o dia|dia tanto faz|sem preferencia de dia|sem preferência de dia)/.test(lower)) return 'any'
+  if (/\bhoje\b/.test(lower)) return saoPauloTodayIso()
+  if (/(depois de amanha|depois de amanhã)/.test(lower)) return addDaysIso(saoPauloTodayIso(), 2)
+  if (/\bamanha\b|\bamanhã\b/.test(lower)) return addDaysIso(saoPauloTodayIso(), 1)
+
+  const iso = lower.match(/\b(20\d{2})-(\d{2})-(\d{2})\b/)
+  if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+
+  const brDate = lower.match(/\b(\d{1,2})[\/.-](\d{1,2})(?:[\/.-](\d{2,4}))?\b/)
+  if (brDate) return isoFromBrazilianDate(brDate[1], brDate[2], brDate[3] || '')
+
+  const today = saoPauloTodayIso()
+  const todayWeekday = new Date(`${today}T12:00:00-03:00`).getDay()
+  for (const [label, target] of WEEKDAY_INDEXES) {
+    if (!new RegExp(`\\b${label}\\b`).test(lower)) continue
+    const delta = (target - todayWeekday + 7) % 7
+    return addDaysIso(today, delta)
+  }
+  return ''
+}
+
+function parseServiceTimePreference(message = '', awaiting = '') {
+  const lower = norm(message)
+  if (!lower) return null
+  if (/(qualquer horario|qualquer horário|qualquer hora|tanto faz|sem preferencia|sem preferência|nao tenho preferencia|não tenho preferência)/.test(lower)) {
+    return { period: 'any', exact: '' }
+  }
+  if (awaiting === 'service_time_preference' && isNegative(message)) return { period: 'any', exact: '' }
+
+  const exactMatches = [...lower.matchAll(/\b(?:as|às|pelas|por volta de|perto de|umas)?\s*([01]?\d|2[0-3])(?:\s*(?:h|horas?)|:([0-5]\d))\b/g)]
+  const exactMatch = exactMatches.find((match) => {
+    const start = match.index || 0
+    const end = start + match[0].length
+    const previous = lower[start - 1] || ''
+    const next = lower[end] || ''
+    return !['/', '.', '-'].includes(previous) && !['/', '.', '-'].includes(next)
+  })
+  if (exactMatch) {
+    const hour = exactMatch[1].padStart(2, '0')
+    const minute = (exactMatch[2] || '00').padStart(2, '0')
+    return { period: 'specific', exact: `${hour}:${minute}` }
+  }
+
+  if (/fim da tarde|final da tarde/.test(lower)) return { period: 'late_afternoon', exact: '' }
+  if (/\bmanha\b|\bmanhã\b/.test(lower)) return { period: 'morning', exact: '' }
+  if (/\btarde\b/.test(lower)) return { period: 'afternoon', exact: '' }
+  if (/\bnoite\b/.test(lower)) return { period: 'evening', exact: '' }
+  return null
+}
+
+function applyServiceSchedulePreference(state, message = '') {
+  if (!['banho_tosa', 'veterinaria'].includes(state.intent)) return state
+  const date = parseServiceDatePreference(message)
+  if (date) {
+    state.serviceDate = date
+    state.selectedSlot = null
+    state.slotOptions = []
+  }
+  const time = parseServiceTimePreference(message, state.awaiting)
+  if (time) {
+    state.serviceTimePreference = time.period
+    state.servicePreferredTime = time.exact
+    if (state.awaiting !== 'slot_choice') {
+      state.selectedSlot = null
+      state.slotOptions = []
+    }
+  }
+  return state
+}
+
 function parseChangeFor(message = '') {
   const lower = norm(message)
   if (lower.includes('sem troco') || lower.includes('nao precisa') || lower.includes('não precisa')) return 0
@@ -739,6 +869,9 @@ function resetOrderProgressForIntentChange(state, nextIntent) {
   state.serviceType = ''
   state.serviceNotes = ''
   state.serviceNotesAsked = false
+  state.serviceDate = ''
+  state.serviceTimePreference = ''
+  state.servicePreferredTime = ''
   state.upsell = defaultUpsell()
   state.payment = defaultPayment()
   state.fulfillment = defaultFulfillment()
@@ -931,6 +1064,15 @@ function applyInterpretedFacts(state, facts = {}) {
     state.serviceNotesAsked = true
   }
 
+  const serviceDate = clean(facts.service_date || facts.serviceDate || facts.appointment_date || facts.appointmentDate || facts.preferred_date || facts.preferredDate)
+  if (serviceDate && ['banho_tosa', 'veterinaria'].includes(state.intent)) {
+    applyServiceSchedulePreference(state, serviceDate)
+  }
+  const serviceTimePreference = clean(facts.service_time_preference || facts.serviceTimePreference || facts.time_preference || facts.timePreference || facts.preferred_time || facts.preferredTime)
+  if (serviceTimePreference && ['banho_tosa', 'veterinaria'].includes(state.intent)) {
+    applyServiceSchedulePreference(state, serviceTimePreference)
+  }
+
   const symptom = clean(facts.symptom)
   if (symptom && state.intent === 'veterinaria') state.symptom = symptom.slice(0, 160)
 
@@ -1088,10 +1230,70 @@ function serviceMatches(intent, appointment, requestedServiceType = '') {
   return true
 }
 
+function slotDateIso(slot) {
+  if (slot?.service_date) return String(slot.service_date).slice(0, 10)
+  if (!slot?.scheduled_at) return ''
+  return new Date(slot.scheduled_at).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+}
+
+function slotTimeText(slot) {
+  if (slot?.start_time) return String(slot.start_time).slice(0, 5)
+  if (!slot?.scheduled_at) return ''
+  return new Date(slot.scheduled_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+}
+
+function slotScheduledAt(slot) {
+  if (slot?.scheduled_at) return slot.scheduled_at
+  const date = slotDateIso(slot)
+  const time = slotTimeText(slot)
+  return date && time ? `${date}T${time}:00-03:00` : ''
+}
+
+function slotMatchesDate(slot, serviceDate = '') {
+  if (!serviceDate || serviceDate === 'any') return true
+  return slotDateIso(slot) === serviceDate
+}
+
+function slotMatchesTimePreference(slot, state = {}) {
+  const preference = clean(state.serviceTimePreference)
+  if (!preference || preference === 'any') return true
+  const time = slotTimeText(slot)
+  const [hour] = time.split(':').map(Number)
+  if (!Number.isFinite(hour)) return true
+  if (preference === 'specific') return time === clean(state.servicePreferredTime)
+  if (preference === 'morning') return hour >= 7 && hour < 12
+  if (preference === 'afternoon') return hour >= 12 && hour < 18
+  if (preference === 'late_afternoon') return hour >= 16 && hour < 19
+  if (preference === 'evening') return hour >= 18 && hour < 22
+  return true
+}
+
+function scheduleLabel(state = {}) {
+  const parts = []
+  if (state.serviceDate && state.serviceDate !== 'any') {
+    const date = new Date(`${state.serviceDate}T12:00:00-03:00`)
+    parts.push(date.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' }))
+  } else if (state.serviceDate === 'any') {
+    parts.push('qualquer dia')
+  }
+  const periodLabels = {
+    morning: 'de manhã',
+    afternoon: 'à tarde',
+    late_afternoon: 'no fim da tarde',
+    evening: 'à noite',
+    specific: state.servicePreferredTime ? `às ${state.servicePreferredTime}` : '',
+    any: 'em qualquer horário',
+  }
+  const timeLabel = periodLabels[state.serviceTimePreference]
+  if (timeLabel) parts.push(timeLabel)
+  return parts.join(' ')
+}
+
 function formatSlot(slot) {
-  const date = new Date(slot.scheduled_at)
+  const dateIso = slotDateIso(slot)
+  const date = dateIso ? new Date(`${dateIso}T12:00:00-03:00`) : new Date(slot.scheduled_at)
   const day = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' })
-  const time = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+  const time = slotTimeText(slot)
   const service = clean(slot.service_type) || 'Atendimento'
   const price = Number(slot.price || 0) > 0 ? ` - ${money(slot.price)}` : ''
   return `${day} às ${time} (${service})${price}`
@@ -1113,8 +1315,7 @@ function chooseSlotFromOptions(state, message) {
     const hour = time[1].padStart(2, '0')
     const minute = (time[2] || '00').padStart(2, '0')
     return options.find((slot) => {
-      const date = new Date(slot.scheduled_at)
-      const slotTime = date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+      const slotTime = slotTimeText(slot)
       return slotTime === `${hour}:${minute}`
     }) || null
   }
@@ -1256,7 +1457,7 @@ function buildOrderArgs(state) {
     symptom: state.symptom,
     order_type: state.intent,
     service_type: state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa'),
-    scheduled_at: state.selectedSlot?.scheduled_at,
+    scheduled_at: slotScheduledAt(state.selectedSlot),
     appointment_id: state.selectedSlot?.id,
     items: [{
       name: state.serviceType || (state.intent === 'veterinaria' ? 'Consulta veterinária' : 'Banho/tosa'),
@@ -1364,6 +1565,8 @@ function applyMessageFacts(state, message) {
     }
   }
 
+  applyServiceSchedulePreference(state, message)
+
   const payment = detectPayment(message)
   if (payment) state.payment.method = payment
 
@@ -1417,6 +1620,8 @@ function compactSlot(slot) {
     id: clean(slot.id),
     service_type: clean(slot.service_type),
     scheduled_at: slot.scheduled_at,
+    service_date: slot.service_date,
+    start_time: slot.start_time,
     price: Number(slot.price || 0),
     label: formatSlot(slot),
   }
@@ -1443,6 +1648,9 @@ function buildAllowedData(state) {
     pending_quantity: state.pendingQuantity,
     service_type: state.serviceType,
     service_notes: state.serviceNotes,
+    service_date: state.serviceDate,
+    service_time_preference: state.serviceTimePreference,
+    service_preferred_time: state.servicePreferredTime,
     selected_product: compactProduct(state.selectedProduct),
     product_options: (state.productOptions || []).map(compactProduct).filter(Boolean),
     selected_slot: compactSlot(state.selectedSlot),
@@ -1643,11 +1851,18 @@ function sendProductImage(state) {
 }
 
 function presentSlots(state, appointments) {
-  const slots = availableAppointments(appointments).filter((appointment) => serviceMatches(state.intent, appointment, state.serviceType)).slice(0, 3)
+  const serviceSlots = availableAppointments(appointments)
+    .filter((appointment) => serviceMatches(state.intent, appointment, state.serviceType))
+  const dateSlots = serviceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
+  const preferredSlots = dateSlots.filter((slot) => slotMatchesTimePreference(slot, state))
+  const chosenSlots = preferredSlots.length ? preferredSlots : dateSlots.length ? dateSlots : serviceSlots
+  const slots = chosenSlots.slice(0, 3)
   state.slotOptions = slots.map((slot) => ({
     id: clean(slot.id),
     service_type: clean(slot.service_type),
     scheduled_at: slot.scheduled_at,
+    service_date: slot.service_date,
+    start_time: slot.start_time,
     price: Number(slot.price || 0),
   }))
   state.awaiting = 'slot_choice'
@@ -1658,7 +1873,15 @@ function presentSlots(state, appointments) {
   }
 
   const lines = state.slotOptions.map((slot, index) => `${index + 1}. ${formatSlot(slot)}`)
-  return guardResult(`Consultei a agenda e tenho:\n${lines.join('\n')}\n\nQual horário prefere?`, state, { action: 'oferecer_horarios' })
+  const requested = scheduleLabel(state)
+  const intro = requested && preferredSlots.length
+    ? `Consultei a agenda para ${requested} e tenho:`
+    : requested && dateSlots.length
+      ? `Não achei nesse horário exato, mas para ${state.serviceDate === 'any' ? 'os próximos dias' : requested} tenho:`
+      : requested
+        ? `Não achei para ${requested}, mas tenho estes próximos horários:`
+        : 'Consultei a agenda e tenho:'
+  return guardResult(`${intro}\n${lines.join('\n')}\n\nQual horário prefere?`, state, { action: 'oferecer_horarios' })
 }
 
 function serviceFlow(state, message, appointments, settings) {
@@ -1679,6 +1902,12 @@ function serviceFlow(state, message, appointments, settings) {
   }
   if (state.intent === 'banho_tosa' && !state.serviceNotesAsked && !state.serviceNotes) {
     return ask('Alguma observação para banho/tosa? Ex: alergia, nós no pelo, bravo ou sem perfume. Se não tiver, me fala "sem observação".', state, 'service_notes', 'observacao_servico_pendente')
+  }
+  if (!state.serviceDate) {
+    return ask('Para qual dia você quer agendar?', state, 'service_date', 'dia_agendamento_pendente')
+  }
+  if (!state.serviceTimePreference) {
+    return ask('Tem preferência de horário? Pode ser manhã, tarde ou um horário específico.', state, 'service_time_preference', 'preferencia_horario_pendente')
   }
 
   const chosenSlot = chooseSlotFromOptions(state, message)

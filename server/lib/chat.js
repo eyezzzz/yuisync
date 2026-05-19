@@ -263,6 +263,35 @@ function cleanText(value = '') {
   return String(value || '').trim()
 }
 
+function appointmentDateIso(row = {}) {
+  if (row.service_date) return String(row.service_date).slice(0, 10)
+  if (!row.scheduled_at) return ''
+  return new Date(row.scheduled_at).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+}
+
+function appointmentTimeText(row = {}) {
+  if (row.start_time) return String(row.start_time).slice(0, 5)
+  if (!row.scheduled_at) return ''
+  return new Date(row.scheduled_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+}
+
+function normalizeAppointmentRows(rows = []) {
+  const byId = new Map()
+  for (const row of rows || []) {
+    if (!row) continue
+    const date = appointmentDateIso(row)
+    const time = appointmentTimeText(row)
+    const scheduledAt = row.scheduled_at || (date && time ? `${date}T${time}:00-03:00` : null)
+    byId.set(row.id || `${date}-${time}-${row.service_type}`, {
+      ...row,
+      scheduled_at: scheduledAt,
+      service_date: row.service_date || date || null,
+      start_time: row.start_time || (time ? `${time}:00` : null),
+    })
+  }
+  return [...byId.values()].filter((row) => row.scheduled_at)
+}
+
 function escapeIlike(value = '') {
   return cleanText(value).replace(/[%_\\]/g, (char) => `\\${char}`)
 }
@@ -609,12 +638,10 @@ function buildAppointmentsContext(appointments) {
   const lines = appointments
     .slice(0, 30)
     .map((appointment) => {
-      const time = new Date(appointment.scheduled_at).toLocaleTimeString('pt-BR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'America/Sao_Paulo',
-      })
-      const date = new Date(appointment.scheduled_at).toLocaleDateString('pt-BR', {
+      const dateIso = appointmentDateIso(appointment)
+      const dateObj = dateIso ? new Date(`${dateIso}T12:00:00-03:00`) : new Date(appointment.scheduled_at)
+      const time = appointmentTimeText(appointment)
+      const date = dateObj.toLocaleDateString('pt-BR', {
         day: '2-digit',
         month: '2-digit',
         timeZone: 'America/Sao_Paulo',
@@ -827,9 +854,10 @@ async function loadAppointments(supabase, moduleId, tenantId) {
   return cachedLoad(appointmentsCache, scopeCacheKey(moduleId, tenantId), APPOINTMENTS_CACHE_MS, async () => {
     const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
     const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+    const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price'
     let query = supabase
       .from('appointments')
-      .select('id, service_type, scheduled_at, status, price')
+      .select(selectColumns)
       .eq('module_id', moduleId)
       .gte('scheduled_at', `${today}T00:00:00-03:00`)
       .lte('scheduled_at', `${end}T23:59:59-03:00`)
@@ -849,7 +877,27 @@ async function loadAppointments(supabase, moduleId, tenantId) {
       throw new HttpError(500, 'Unable to load appointment context.')
     }
 
-    return data || []
+    let byServiceDate = []
+    let serviceDateQuery = supabase
+      .from('appointments')
+      .select(selectColumns)
+      .eq('module_id', moduleId)
+      .gte('service_date', today)
+      .lte('service_date', end)
+      .order('service_date')
+      .order('start_time')
+      .limit(40)
+
+    if (tenantId) {
+      serviceDateQuery = serviceDateQuery.eq('tenant_id', tenantId)
+    }
+
+    const serviceDateResult = await serviceDateQuery
+    if (!serviceDateResult.error) {
+      byServiceDate = serviceDateResult.data || []
+    }
+
+    return normalizeAppointmentRows([...(data || []), ...byServiceDate])
   })
 }
 
@@ -1141,7 +1189,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
 
     let appointmentQuery = supabase
       .from('appointments')
-      .select('id,service_type,scheduled_at,status,price')
+      .select('id,service_type,scheduled_at,service_date,start_time,status,price')
       .eq('tenant_id', session.tenant_id)
       .eq('module_id', session.module_id)
 
@@ -1155,7 +1203,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
     if (!AVAILABLE_STATUSES.has(status)) throw new Error('Horario nao esta mais disponivel.')
 
     validatedAppointment = data
-    args.scheduled_at = data.scheduled_at
+    args.scheduled_at = normalizeAppointmentRows([data])[0]?.scheduled_at || data.scheduled_at
     args.service_type = cleanText(data.service_type) || cleanText(args.service_type) || args.order_type
     normalizedItems[0].unit_price = Number(data.price || normalizedItems[0].unit_price || 0)
     normalizedItems[0].name = cleanText(data.service_type) || normalizedItems[0].name

@@ -308,6 +308,35 @@ function clean(value: unknown): string {
   return typeof value === 'string' ? value.trim() : ''
 }
 
+function appointmentDateIso(row: LooseRecord = {}): string {
+  if (row.service_date) return String(row.service_date).slice(0, 10)
+  if (!row.scheduled_at) return ''
+  return new Date(String(row.scheduled_at)).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+}
+
+function appointmentTimeText(row: LooseRecord = {}): string {
+  if (row.start_time) return String(row.start_time).slice(0, 5)
+  if (!row.scheduled_at) return ''
+  return new Date(String(row.scheduled_at)).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo' })
+}
+
+function normalizeAppointmentRows(rows: LooseRecord[] = []): LooseRecord[] {
+  const byId = new Map<string, LooseRecord>()
+  for (const row of rows || []) {
+    if (!row) continue
+    const date = appointmentDateIso(row)
+    const time = appointmentTimeText(row)
+    const scheduledAt = row.scheduled_at || (date && time ? `${date}T${time}:00-03:00` : null)
+    byId.set(String(row.id || `${date}-${time}-${row.service_type}`), {
+      ...row,
+      scheduled_at: scheduledAt,
+      service_date: row.service_date || date || null,
+      start_time: row.start_time || (time ? `${time}:00` : null),
+    })
+  }
+  return [...byId.values()].filter((row) => row.scheduled_at)
+}
+
 function scopeCacheKey(moduleId: string, tenantId: string): string {
   return `${tenantId || ''}:${String(moduleId || '').toLowerCase()}`
 }
@@ -1241,12 +1270,10 @@ function buildAppointmentsContext(appointments: LooseRecord[] | null | undefined
   const lines = appointments
     .slice(0, 30)
     .map((appointment) => {
-      const time = new Date(appointment.scheduled_at).toLocaleTimeString('pt-BR', {
-        hour: '2-digit',
-        minute: '2-digit',
-        timeZone: 'America/Sao_Paulo',
-      })
-      const date = new Date(appointment.scheduled_at).toLocaleDateString('pt-BR', {
+      const dateIso = appointmentDateIso(appointment)
+      const dateObj = dateIso ? new Date(`${dateIso}T12:00:00-03:00`) : new Date(String(appointment.scheduled_at))
+      const time = appointmentTimeText(appointment)
+      const date = dateObj.toLocaleDateString('pt-BR', {
         day: '2-digit',
         month: '2-digit',
         timeZone: 'America/Sao_Paulo',
@@ -1557,7 +1584,7 @@ async function createConfirmedPetshopOrder(
 
     let appointmentQuery = supabase
       .from('appointments')
-      .select('id,service_type,scheduled_at,status,price')
+      .select('id,service_type,scheduled_at,service_date,start_time,status,price')
       .eq('tenant_id', session.tenant_id)
       .eq('module_id', session.module_id)
 
@@ -1569,7 +1596,7 @@ async function createConfirmedPetshopOrder(
     if (!AVAILABLE_STATUSES.has(clean(data.status).toLowerCase())) throw new Error('Horario nao esta mais disponivel.')
 
     validatedAppointment = data as LooseRecord
-    args.scheduled_at = data.scheduled_at
+    args.scheduled_at = normalizeAppointmentRows([data as LooseRecord])[0]?.scheduled_at || data.scheduled_at
     args.service_type = clean(data.service_type) || clean(args.service_type) || args.order_type
     normalizedItems[0].unit_price = Number(data.price || normalizedItems[0].unit_price || 0)
     normalizedItems[0].name = clean(data.service_type) || normalizedItems[0].name
@@ -1988,9 +2015,10 @@ async function loadStoreContext(
       return (data || []) as LooseRecord[]
     }),
     cachedLoad(appointmentsCache, cacheKey, APPOINTMENTS_CACHE_MS, async () => {
+      const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price'
       const { data, error } = await supabase
         .from('appointments')
-        .select('id, service_type, scheduled_at, status, price')
+        .select(selectColumns)
         .eq('tenant_id', session.tenant_id)
         .eq('module_id', session.module_id)
         .gte('scheduled_at', `${today}T00:00:00-03:00`)
@@ -1998,7 +2026,19 @@ async function loadStoreContext(
         .order('scheduled_at')
         .limit(40)
       if (error) return []
-      return (data || []) as LooseRecord[]
+      const byScheduledAt = (data || []) as LooseRecord[]
+      const serviceDateResult = await supabase
+        .from('appointments')
+        .select(selectColumns)
+        .eq('tenant_id', session.tenant_id)
+        .eq('module_id', session.module_id)
+        .gte('service_date', today)
+        .lte('service_date', end)
+        .order('service_date')
+        .order('start_time')
+        .limit(40)
+      const byServiceDate = (serviceDateResult.error ? [] : (serviceDateResult.data || [])) as LooseRecord[]
+      return normalizeAppointmentRows([...byScheduledAt, ...byServiceDate])
     }),
     terms.length > 0 ? searchProductsByTerms(supabase, session, terms) : Promise.resolve([]),
     terms.length > 0 ? loadUpsellProducts(supabase, session) : Promise.resolve([]),

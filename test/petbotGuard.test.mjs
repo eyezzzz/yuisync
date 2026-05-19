@@ -12,6 +12,15 @@ import {
 
 const settings = { deliveryFee: 10 }
 
+function dateOffset(days) {
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+  const [year, month, day] = today.split('-').map(Number)
+  return new Date(Date.UTC(year, month - 1, day + days, 12, 0, 0)).toISOString().slice(0, 10)
+}
+
+const appointmentDate = dateOffset(1)
+const appointmentAt = (time) => `${appointmentDate}T${time}:00-03:00`
+
 const products = [
   {
     id: 'premier-shih-adulto',
@@ -92,14 +101,14 @@ const appointments = [
   {
     id: 'slot-14',
     service_type: 'Banho',
-    scheduled_at: '2026-05-13T14:00:00-03:00',
+    scheduled_at: appointmentAt('14:00'),
     status: 'available',
     price: 70,
   },
   {
     id: 'slot-16',
     service_type: 'Banho e tosa',
-    scheduled_at: '2026-05-13T16:30:00-03:00',
+    scheduled_at: appointmentAt('16:30'),
     status: 'available',
     price: 90,
   },
@@ -118,28 +127,28 @@ const mixedAppointments = [
   {
     id: 'slot-bath-14',
     service_type: 'Banho',
-    scheduled_at: '2026-05-13T14:00:00-03:00',
+    scheduled_at: appointmentAt('14:00'),
     status: 'available',
     price: 70,
   },
   {
     id: 'slot-bath-busy',
     service_type: 'Banho',
-    scheduled_at: '2026-05-13T10:00:00-03:00',
+    scheduled_at: appointmentAt('10:00'),
     status: 'booked',
     price: 70,
   },
   {
     id: 'slot-groom-16',
     service_type: 'Banho e tosa',
-    scheduled_at: '2026-05-13T16:30:00-03:00',
+    scheduled_at: appointmentAt('16:30'),
     status: 'available',
     price: 90,
   },
   {
     id: 'slot-vet-15',
     service_type: 'Consulta veterinária',
-    scheduled_at: '2026-05-13T15:00:00-03:00',
+    scheduled_at: appointmentAt('15:00'),
     status: 'available',
     price: 120,
   },
@@ -150,7 +159,7 @@ const finalFlowAppointments = [
   {
     id: 'slot-vaccine-17',
     service_type: 'Vacina',
-    scheduled_at: '2026-05-13T17:00:00-03:00',
+    scheduled_at: appointmentAt('17:00'),
     status: 'available',
     price: 95,
   },
@@ -326,7 +335,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Ana', 'quero banho para Thor golden', 'sem observacao', '14:00', 'pix', 'sim'],
+    messages: ['oi', 'Ana', 'quero banho para Thor golden', 'sem observacao', 'amanha', 'tarde', '14:00', 'pix', 'sim'],
   },
   {
     id: 'banho-2',
@@ -335,7 +344,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'cartao',
     extra: { appointments: finalFlowAppointments },
-    messages: ['boa tarde', 'Marcos', 'quero banho e tosa para Nina shih tzu, sem perfume', '16:30', 'cartao', 'sim'],
+    messages: ['boa tarde', 'Marcos', 'quero banho e tosa para Nina shih tzu, sem perfume', 'amanha', 'tarde', '16:30', 'cartao', 'sim'],
   },
   {
     id: 'banho-3',
@@ -344,7 +353,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Clara', 'quero agendar', 'banho e tosa', 'Mel poodle', 'ela tem alergia ao perfume', '16:30', 'pix', 'sim'],
+    messages: ['oi', 'Clara', 'quero agendar', 'banho e tosa', 'Mel poodle', 'ela tem alergia ao perfume', 'amanha', 'tarde', '16:30', 'pix', 'sim'],
   },
   {
     id: 'banho-4',
@@ -353,7 +362,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'dinheiro',
     extra: { appointments: finalFlowAppointments },
-    messages: ['ola', 'Rafael', 'quero banho para Rex pinscher bravo', '14:00', 'dinheiro', 'sem troco', 'sim'],
+    messages: ['ola', 'Rafael', 'quero banho para Rex pinscher bravo', 'amanha', 'tarde', '14:00', 'dinheiro', 'sem troco', 'sim'],
   },
   {
     id: 'banho-5',
@@ -362,7 +371,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Bia', 'quero tosa higienica para Toby spitz', 'sem observacao', '16:30', 'pix', 'sim'],
+    messages: ['oi', 'Bia', 'quero tosa higienica para Toby spitz', 'sem observacao', 'amanha', 'tarde', '16:30', 'pix', 'sim'],
   },
   {
     id: 'vet-1',
@@ -371,7 +380,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Paula', 'quero veterinario para Bob cachorro com coceira', '15:00', 'pix', 'sim'],
+    messages: ['oi', 'Paula', 'quero veterinario para Bob cachorro com coceira', 'amanha', 'tarde', '15:00', 'pix', 'sim'],
   },
   {
     id: 'vet-2',
@@ -380,7 +389,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'cartao',
     extra: { appointments: finalFlowAppointments },
-    messages: ['boa tarde', 'Priscila', 'preciso de consulta para Mia gata espirrando', '15:00', 'cartao', 'sim'],
+    messages: ['boa tarde', 'Priscila', 'preciso de consulta para Mia gata espirrando', 'amanha', 'tarde', '15:00', 'cartao', 'sim'],
   },
   {
     id: 'vet-3',
@@ -389,7 +398,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'dinheiro',
     extra: { appointments: finalFlowAppointments },
-    messages: ['ola', 'Fernanda', 'quero vet para Apollo cachorro mancando', '15h', 'dinheiro', 'troco para 100', 'sim'],
+    messages: ['ola', 'Fernanda', 'quero vet para Apollo cachorro mancando', 'amanha', 'tarde', '15h', 'dinheiro', 'troco para 100', 'sim'],
   },
   {
     id: 'vet-4',
@@ -398,7 +407,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Nicole', 'quero vacina para Luna gato', 'vacina anual', '17:00', 'pix', 'sim'],
+    messages: ['oi', 'Nicole', 'quero vacina para Luna gato', 'vacina anual', 'amanha', 'tarde', '17:00', 'pix', 'sim'],
   },
   {
     id: 'vet-5',
@@ -407,7 +416,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'cartao',
     extra: { appointments: finalFlowAppointments },
-    messages: ['bom dia', 'Bruno', 'preciso de veterinario para Simba gato, nao esta comendo', '15:00', 'cartao', 'sim'],
+    messages: ['bom dia', 'Bruno', 'preciso de veterinario para Simba gato, nao esta comendo', 'amanha', 'tarde', '15:00', 'cartao', 'sim'],
   },
 ]
 
@@ -745,6 +754,14 @@ test('banho mostra múltiplos horários reais com preço', () => {
   assert.match(result.reply, /observa/i)
 
   result = turn(context, 'sem observacao')
+  context = result.context
+  assert.match(result.reply, /qual dia/i)
+
+  result = turn(context, 'amanha')
+  context = result.context
+  assert.match(result.reply, /prefer/i)
+
+  result = turn(context, 'tarde')
   assert.match(result.reply, /14:00/)
   assert.match(result.reply, /16:30/)
   assert.match(result.reply, /R\$ 70,00/)
@@ -760,6 +777,8 @@ test('banho entende nome e raça sem vírgula', () => {
   result = turn(context, 'Thor golden')
   context = result.context
   result = turn(context, 'sem observacao')
+  context = result.context
+  result = turn(context, 'amanha de tarde')
   assert.match(result.reply, /14:00/)
   assert.equal(result.state.petName, 'Thor')
   assert.equal(result.state.breed, 'Golden Retriever')
@@ -775,6 +794,8 @@ test('banho extrai nome quando cliente informa pet e porte em frase natural', ()
   result = turn(context, 'quero banho para o Thor cachorro médio')
   context = result.context
   result = turn(context, 'sem observacao')
+  context = result.context
+  result = turn(context, 'amanha de tarde')
   assert.match(result.reply, /14:00/)
   assert.equal(result.state.petName, 'Thor')
   assert.equal(result.state.species, 'dog')
@@ -785,7 +806,7 @@ test('veterinaria extrai nome, especie e sintoma em frase natural', () => {
   const vetAppointments = [{
     id: 'slot-vet',
     service_type: 'Consulta veterinária',
-    scheduled_at: '2026-05-13T15:00:00-03:00',
+    scheduled_at: appointmentAt('15:00'),
     status: 'available',
     price: 120,
   }]
@@ -796,6 +817,8 @@ test('veterinaria extrai nome, especie e sintoma em frase natural', () => {
   context = result.context
 
   result = turn(context, 'quero veterinário para Totó cachorro pequeno com coceira', { appointments: vetAppointments })
+  context = result.context
+  result = turn(context, 'amanha de tarde', { appointments: vetAppointments })
   assert.match(result.reply, /15:00/)
   assert.equal(result.state.petName, 'Totó')
   assert.equal(result.state.species, 'dog')
@@ -811,6 +834,10 @@ test('agenda cheia nao inventa horario e pode acionar humano', () => {
   result = turn(context, 'Thor golden', { appointments: [] })
   context = result.context
   result = turn(context, 'sem observacao', { appointments: [] })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: [] })
+  context = result.context
+  result = turn(context, 'tarde', { appointments: [] })
   context = result.context
 
   assert.equal(result.action, 'sem_horario')
@@ -829,6 +856,8 @@ test('banho e tosa usa agenda certa e salva observacao operacional', () => {
   context = result.context
 
   result = turn(context, 'quero banho e tosa para Thor golden, ele morde e tem nos no pelo', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'amanha de tarde', { appointments: mixedAppointments })
   context = result.context
   assert.match(result.reply, /16:30/)
   assert.match(result.reply, /R\$ 90,00/)
@@ -860,6 +889,8 @@ test('veterinaria com erro de digitacao usa somente agenda veterinaria', () => {
   context = result.context
 
   result = turn(context, 'preciso de vetrinario para Bob cachorro vomitando', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'amanha de tarde', { appointments: mixedAppointments })
   assert.equal(result.state.intent, 'veterinaria')
   assert.match(result.reply, /15:00/)
   assert.match(result.reply, /R\$ 120,00/)
@@ -876,6 +907,8 @@ test('horario de outro servico ou ocupado nao e aceito em banho', () => {
   result = turn(context, 'quero banho para Rex cachorro pequeno', { appointments: mixedAppointments })
   context = result.context
   result = turn(context, 'sem observacao', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'amanha de tarde', { appointments: mixedAppointments })
   context = result.context
   assert.match(result.reply, /14:00/)
   assert.doesNotMatch(result.reply, /10:00/)
