@@ -699,6 +699,29 @@ function parseProductQuantity(message = '') {
   return null
 }
 
+function isBulkProduct(product = {}) {
+  const item = product || {}
+  const haystack = norm([item.name, item.category].join(' '))
+  return /\bgranel\b/.test(haystack) || /\ba granel\b/.test(haystack)
+}
+
+function parseBulkKgQuantity(message = '', product = null) {
+  const lower = norm(message)
+  if (!isBulkProduct(product) && !/\bgranel\b/.test(lower)) return null
+  if (/(saco|pacote|fechado|embalagem)/.test(lower) && !/\bgranel\b/.test(lower)) return null
+  const match = lower.match(/\b(\d{1,2}(?:[,.]\d{1,2})?)\s*(?:kg|quilo|quilos)\b/)
+  const wordMatch = lower.match(/\b(um|uma|dois|duas|tres|três|quatro|cinco)\s*(?:kg|quilo|quilos)\b/)
+  const wordNumbers = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, três: 3, quatro: 4, cinco: 5 }
+  if (!match && !wordMatch) return null
+  const quantity = match ? Number(match[1].replace(',', '.')) : wordNumbers[wordMatch[1]]
+  if (!Number.isFinite(quantity) || quantity <= 0) return null
+  return Math.max(0.1, Math.min(99, quantity))
+}
+
+function parseSelectedProductQuantity(message = '', product = null) {
+  return parseBulkKgQuantity(message, product) || parseProductQuantity(message)
+}
+
 function isCriticalVeterinaryMessage(message = '') {
   const lower = norm(message)
   if (hasAny(lower, CRITICAL_URGENCY_HINTS)) return true
@@ -892,9 +915,11 @@ function applyInterpretedFacts(state, facts = {}) {
   }
 
   const quantity = Number(facts.quantity)
-  if (Number.isFinite(quantity) && quantity > 0 && state.intent === 'produto') {
-    if (state.selectedProduct && state.awaiting !== 'product_choice') state.selectedProduct.quantity = quantity
-    else state.pendingQuantity = quantity
+  const bulkQuantity = isBulkProduct(state.selectedProduct) && Number.isFinite(packageKg) ? packageKg : null
+  const nextQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : bulkQuantity
+  if (Number.isFinite(nextQuantity) && nextQuantity > 0 && state.intent === 'produto') {
+    if (state.selectedProduct && state.awaiting !== 'product_choice') state.selectedProduct.quantity = nextQuantity
+    else state.pendingQuantity = nextQuantity
   }
 
   const serviceType = clean(facts.service_type || facts.serviceType)
@@ -1109,6 +1134,28 @@ function selectedItems(state) {
   return items
 }
 
+function formatQuantity(value = 1) {
+  const number = Number(value || 1)
+  if (!Number.isFinite(number)) return '1'
+  return Number.isInteger(number) ? String(number) : String(number).replace('.', ',')
+}
+
+function formatItemLabel(item) {
+  const quantity = Number(item?.quantity || 1)
+  if (isBulkProduct(item)) return `${formatQuantity(quantity)}kg ${item.name}`
+  if (quantity > 1) return `${formatQuantity(quantity)}x ${item.name}`
+  return item.name
+}
+
+function selectedProductPriceLine(state) {
+  const item = state.selectedProduct
+  const quantity = Number(item?.quantity || 1)
+  const total = Number(item?.unit_price || 0) * quantity
+  if (isBulkProduct(item)) return `${formatQuantity(quantity)}kg de ${item.name} ficam ${money(total)}.`
+  if (quantity > 1) return `${formatQuantity(quantity)}x ${item.name} ficam ${money(total)}.`
+  return `A ${item.name} fica ${money(item.unit_price)}.`
+}
+
 function recalcTotals(state, deliveryFee) {
   const itemsSubtotal = selectedItems(state).reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
   const serviceSubtotal = state.selectedSlot ? Number(state.selectedSlot.price || 0) : 0
@@ -1129,7 +1176,7 @@ function buildPartialSummary(state) {
     `• Pet: ${summarizePet(state)}`,
   ]
   if (state.intent === 'produto') {
-    lines.push(`• Produto: ${state.selectedProduct?.name || 'aguardando'}`)
+    lines.push(`• Produto: ${state.selectedProduct ? formatItemLabel(state.selectedProduct) : 'aguardando'}`)
   } else {
     lines.push(`• Serviço: ${state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')}`)
     if (state.selectedSlot) lines.push(`• Horário: ${formatSlot(state.selectedSlot)}`)
@@ -1150,7 +1197,7 @@ function buildFinalSummary(state) {
   ]
   if (state.intent === 'produto') {
     selectedItems(state).forEach((item) => {
-      lines.push(`• Item: ${item.name} - ${money(Number(item.unit_price || 0) * Number(item.quantity || 1))}`)
+      lines.push(`• Item: ${formatItemLabel(item)} - ${money(Number(item.unit_price || 0) * Number(item.quantity || 1))}`)
     })
     if (state.fulfillment.type === 'entrega') lines.push(`• Taxa de entrega: ${money(state.totals.deliveryFee)}`)
   } else {
@@ -1323,7 +1370,7 @@ function applyMessageFacts(state, message) {
   const fulfillment = detectFulfillment(message)
   if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
 
-  const quantity = parseProductQuantity(message)
+  const quantity = parseSelectedProductQuantity(message, state.selectedProduct)
   if (quantity && state.intent === 'produto') {
     if (state.selectedProduct && state.awaiting !== 'product_choice') {
       state.selectedProduct.quantity = quantity
@@ -1478,6 +1525,15 @@ export function validatePetbotDraft(draft = '', directive = {}) {
   }
   if (action === 'pedir_nome' && (/R\$\s*\d/.test(text) || /(tenho|opcoes|opções|produto)/i.test(text))) {
     problems.push('pulou_nome')
+  }
+  if (action === 'pedir_pagamento' && !/(pix|dinheiro|cartao|cartão)/.test(lower)) {
+    problems.push('pergunta_pagamento_ausente')
+  }
+  if (action === 'pedir_troco' && !/troco/.test(lower)) {
+    problems.push('pergunta_troco_ausente')
+  }
+  if (action === 'pedir_entrega_retirada' && !/(entrega|retirada|retirar|loja)/.test(lower)) {
+    problems.push('pergunta_entrega_retirada_ausente')
   }
   if (action !== 'oferecer_upsell' && /(quer adicionar|posso incluir|incluo|adicionar mais)/.test(lower)) {
     problems.push('upsell_nao_autorizado')
@@ -1712,7 +1768,7 @@ function productFlow(state, message, products, settings) {
   const earlyChosen = chooseProductFromOptions(state, message)
   if (earlyChosen) {
     state.selectedProduct = earlyChosen
-    const quantity = parseProductQuantity(message) || state.pendingQuantity
+    const quantity = parseSelectedProductQuantity(message, earlyChosen) || state.pendingQuantity
     if (quantity) state.selectedProduct.quantity = quantity
     state.pendingQuantity = null
   }
@@ -1741,7 +1797,7 @@ function productFlow(state, message, products, settings) {
   const chosen = !state.selectedProduct ? chooseProductFromOptions(state, message) : null
   if (chosen) {
     state.selectedProduct = chosen
-    const quantity = parseProductQuantity(message) || state.pendingQuantity
+    const quantity = parseSelectedProductQuantity(message, chosen) || state.pendingQuantity
     if (quantity) state.selectedProduct.quantity = quantity
     state.pendingQuantity = null
   }
@@ -1764,7 +1820,7 @@ function productFlow(state, message, products, settings) {
     state.upsell.item = upsell
     if (upsell) {
       state.awaiting = 'upsell'
-      return guardResult(`A ${state.selectedProduct.name} fica ${money(state.selectedProduct.unit_price)}.\n\nPosso incluir ${upsell.name} por ${money(upsell.unit_price)}? Quer adicionar?`, state, { action: 'oferecer_upsell' })
+      return guardResult(`${selectedProductPriceLine(state)}\n\nPosso incluir ${upsell.name} por ${money(upsell.unit_price)}? Quer adicionar?`, state, { action: 'oferecer_upsell' })
     }
     state.upsell.resolved = true
   }
@@ -1786,7 +1842,7 @@ function productFlow(state, message, products, settings) {
   }
 
   if (!state.upsell.resolved) {
-    return guardResult(`A ${state.selectedProduct.name} fica ${money(state.selectedProduct.unit_price)}.\n\nQuer adicionar ${state.upsell.item?.name || 'um complemento'}?`, state, { action: 'oferecer_upsell' })
+    return guardResult(`${selectedProductPriceLine(state)}\n\nQuer adicionar ${state.upsell.item?.name || 'um complemento'}?`, state, { action: 'oferecer_upsell' })
   }
 
   recalcTotals(state, settings.deliveryFee)

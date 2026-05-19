@@ -160,6 +160,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Sua tarefa e extrair fatos estruturados da conversa. Nao responda o cliente.',
         'Nao invente preco, estoque, horario ou produto. Extraia somente sinais da fala, historico e estado.',
         'Pode inferir contexto comum de petshop: "racao" = produto de alimento; "shi tzu", "shih tzu", "shitzu" = cachorro pequeno da raca Shih Tzu; "spitz", "poodle", "pinscher" = cachorro pequeno; "golden", "labrador" = cachorro grande.',
+        'Quando o produto escolhido ou contexto for granel e o cliente disser "2kg", "2 kg" ou "dois quilos", extraia package_kg e quantity como 2.',
         'Se o cliente disser "Robertao, quero uma racao", extraia customer_name "Robertao" e intent "produto".',
         'Interjeicoes como "ue", "uai", "oxe", "opa" nao sao nome.',
         'Retorne apenas JSON valido, sem markdown.',

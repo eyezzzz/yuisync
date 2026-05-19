@@ -105,6 +105,15 @@ const appointments = [
   },
 ]
 
+const granelPremierDog = {
+  id: 'granel-premier-rp',
+  name: 'GRANEL PREMIER FRANGO RAÇAS PEQUENAS ADULTOS KG',
+  category: 'Ração',
+  price: 21.5,
+  stock_quantity: 20,
+  active: true,
+}
+
 const mixedAppointments = [
   {
     id: 'slot-bath-14',
@@ -512,6 +521,102 @@ test('produto preserva quantidade quando cliente escolhe em frase natural', () =
   result = turn(context, 'pode ser a premier')
   assert.equal(result.action, 'oferecer_upsell')
   assert.equal(result.state.selectedProduct.quantity, 2)
+})
+
+test('produto granel entende kg como quantidade e recalcula total', () => {
+  const baseState = {
+    customerName: 'Hugo Souza',
+    nameConfirmed: true,
+    intent: 'produto',
+    productKind: 'food',
+    petName: '',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    size: 'pequeno',
+    ageCategory: 'adulto',
+    selectedProduct: {
+      product_id: granelPremierDog.id,
+      name: granelPremierDog.name,
+      category: granelPremierDog.category,
+      quantity: 1,
+      unit_price: granelPremierDog.price,
+      stock_quantity: granelPremierDog.stock_quantity,
+      upsell: false,
+    },
+    upsell: {
+      offered: true,
+      resolved: false,
+      accepted: false,
+      declined: false,
+      item: {
+        product_id: 'petisco-dental',
+        name: 'Petisco Dental Cães Pequenos',
+        category: 'Petisco',
+        quantity: 1,
+        unit_price: 15,
+        stock_quantity: 10,
+        upsell: true,
+      },
+    },
+    awaiting: 'upsell',
+  }
+  let context = mergePetbotContext({}, baseState)
+
+  let result = turn(context, 'nao, somente a ração', { products: [granelPremierDog, ...products] })
+  context = result.context
+  assert.equal(result.state.selectedProduct.quantity, 1)
+  assert.match(result.reply, /R\$ 21,50/)
+
+  result = turn(context, 'dinheiro, eu quero 2 kg', { products: [granelPremierDog, ...products] })
+  context = result.context
+  assert.equal(result.action, 'pedir_troco')
+  assert.equal(result.state.selectedProduct.quantity, 2)
+  assert.equal(result.state.totals.subtotal, 43)
+
+  result = turn(context, 'troco pra 50', { products: [granelPremierDog, ...products] })
+  assert.equal(result.action, 'pedir_entrega_retirada')
+  assert.match(result.reply, /entrega ou retirada/i)
+  assert.doesNotMatch(result.reply, /vamos prosseguir/i)
+})
+
+test('redraft ruim nao remove pergunta obrigatoria de entrega/retirada', () => {
+  const result = runPetbotGuard({
+    message: 'troco pra 50',
+    session: {
+      id: 'session-1',
+      module_id: 'petshop',
+      tenant_id: 'tenant-1',
+      customer_phone: '123',
+      customer_name: null,
+      context: mergePetbotContext({}, {
+        customerName: 'Hugo Souza',
+        nameConfirmed: true,
+        intent: 'produto',
+        species: 'dog',
+        selectedProduct: {
+          product_id: granelPremierDog.id,
+          name: granelPremierDog.name,
+          category: granelPremierDog.category,
+          quantity: 2,
+          unit_price: granelPremierDog.price,
+          stock_quantity: granelPremierDog.stock_quantity,
+        },
+        upsell: { offered: true, resolved: true, accepted: false, declined: true, item: null },
+        payment: { method: 'dinheiro', changeFor: null, changeAsked: true },
+        partialSummaryShown: true,
+        awaiting: 'change_for',
+      }),
+    },
+    customer: { client: null, phone: '123', isKnown: false },
+    products: [granelPremierDog, ...products],
+    appointments,
+    settings,
+  })
+
+  const rendered = renderGuardedPetbotReply('Entendi. Vamos prosseguir com o pedido!', result.guardDirective)
+  assert.equal(result.action, 'pedir_entrega_retirada')
+  assert.equal(rendered.validation.ok, false)
+  assert.match(rendered.reply, /entrega ou retirada/i)
 })
 
 test('produto envia foto aprovada quando cliente pede imagem', () => {
