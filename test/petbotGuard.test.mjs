@@ -825,7 +825,7 @@ test('veterinaria extrai nome, especie e sintoma em frase natural', () => {
   assert.match(result.state.symptom, /coceira/i)
 })
 
-test('agenda cheia nao inventa horario e pode acionar humano', () => {
+test('agenda vazia usa grade operacional e oferece horario pedido', () => {
   let context = {}
   let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
   context = result.context
@@ -837,15 +837,16 @@ test('agenda cheia nao inventa horario e pode acionar humano', () => {
   context = result.context
   result = turn(context, 'amanha', { appointments: [] })
   context = result.context
-  result = turn(context, 'tarde', { appointments: [] })
+  result = turn(context, '16h', { appointments: [] })
   context = result.context
 
-  assert.equal(result.action, 'sem_horario')
-  assert.match(result.reply, /não achei horário disponível/i)
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.match(result.reply, /16:00/)
+  assert.match(result.reply, /R\$ 60,00/)
 
   result = turn(context, 'sim', { appointments: [] })
-  assert.equal(result.needsHuman, true)
-  assert.equal(result.action, 'handoff_humano')
+  assert.equal(result.state.selectedSlot.virtual, true)
+  assert.match(result.reply, /Pedido em andamento/i)
 })
 
 test('banho e tosa usa agenda certa e salva observacao operacional', () => {

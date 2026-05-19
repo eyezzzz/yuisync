@@ -78,6 +78,7 @@ const DISCOUNT_HINTS = ['desconto', 'abaixa', 'barato', 'mais em conta', 'melhor
 const HUMAN_HINTS = ['atendente', 'humano', 'pessoa', 'equipe', 'gerente', 'falar com alguem', 'falar com alguém', 'me liga', 'ligacao', 'ligação']
 const CRITICAL_URGENCY_HINTS = ['veneno', 'intoxic', 'falta de ar', 'nao respira', 'não respira', 'convuls', 'sangr', 'sangue', 'desmai', 'atropel', 'engasg']
 const IMAGE_HINTS = ['foto', 'imagem', 'img', 'manda foto', 'tem foto', 'ver foto', 'embalagem', 'mostra foto', 'mostrar foto']
+const BUSY_APPOINTMENT_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
 
 const AWAITING_ACTIONS = {
   customer_name: 'pedir_nome',
@@ -1230,6 +1231,17 @@ function serviceMatches(intent, appointment, requestedServiceType = '') {
   return true
 }
 
+function serviceDefaults(state = {}) {
+  const requested = norm(state.serviceType)
+  if (state.intent === 'veterinaria') {
+    if (/vacina/.test(requested)) return { service_type: 'Vacina', price: 90 }
+    return { service_type: 'Consulta veterinária', price: 120 }
+  }
+  if (/banho/.test(requested) && /tosa/.test(requested)) return { service_type: 'Banho e tosa', price: 120 }
+  if (/tosa/.test(requested)) return { service_type: clean(state.serviceType) || 'Tosa', price: 80 }
+  return { service_type: clean(state.serviceType) || 'Banho', price: 60 }
+}
+
 function slotDateIso(slot) {
   if (slot?.service_date) return String(slot.service_date).slice(0, 10)
   if (!slot?.scheduled_at) return ''
@@ -1247,6 +1259,47 @@ function slotScheduledAt(slot) {
   const date = slotDateIso(slot)
   const time = slotTimeText(slot)
   return date && time ? `${date}T${time}:00-03:00` : ''
+}
+
+function slotKey(slot) {
+  return `${slotDateIso(slot)} ${slotTimeText(slot)}`
+}
+
+function buildVirtualSlots(state = {}, appointments = []) {
+  const defaults = serviceDefaults(state)
+  const dates = state.serviceDate && state.serviceDate !== 'any'
+    ? [state.serviceDate]
+    : Array.from({ length: 3 }, (_, index) => addDaysIso(saoPauloTodayIso(), index))
+  const busyKeys = new Set((appointments || [])
+    .filter((appointment) => BUSY_APPOINTMENT_STATUSES.has(norm(appointment?.status)))
+    .map(slotKey)
+    .filter(Boolean))
+  const explicitKeys = new Set(availableAppointments(appointments).map(slotKey).filter(Boolean))
+  const now = Date.now()
+  const hours = Array.from({ length: 10 }, (_, index) => 8 + index)
+  const slots = []
+
+  for (const date of dates) {
+    for (const hour of hours) {
+      const time = `${String(hour).padStart(2, '0')}:00`
+      const key = `${date} ${time}`
+      const scheduledAt = `${date}T${time}:00-03:00`
+      if (new Date(scheduledAt).getTime() <= now + 15 * 60 * 1000) continue
+      if (busyKeys.has(key) || explicitKeys.has(key)) continue
+      slots.push({
+        id: '',
+        virtual: true,
+        service_type: defaults.service_type,
+        scheduled_at: scheduledAt,
+        service_date: date,
+        start_time: `${time}:00`,
+        status: 'available',
+        price: defaults.price,
+      })
+    }
+  }
+
+  return slots
 }
 
 function slotMatchesDate(slot, serviceDate = '') {
@@ -1458,7 +1511,7 @@ function buildOrderArgs(state) {
     order_type: state.intent,
     service_type: state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa'),
     scheduled_at: slotScheduledAt(state.selectedSlot),
-    appointment_id: state.selectedSlot?.id,
+    appointment_id: state.selectedSlot?.virtual ? '' : state.selectedSlot?.id,
     items: [{
       name: state.serviceType || (state.intent === 'veterinaria' ? 'Consulta veterinária' : 'Banho/tosa'),
       quantity: 1,
@@ -1622,6 +1675,7 @@ function compactSlot(slot) {
     scheduled_at: slot.scheduled_at,
     service_date: slot.service_date,
     start_time: slot.start_time,
+    virtual: Boolean(slot.virtual),
     price: Number(slot.price || 0),
     label: formatSlot(slot),
   }
@@ -1851,8 +1905,11 @@ function sendProductImage(state) {
 }
 
 function presentSlots(state, appointments) {
-  const serviceSlots = availableAppointments(appointments)
+  const explicitServiceSlots = availableAppointments(appointments)
     .filter((appointment) => serviceMatches(state.intent, appointment, state.serviceType))
+  const explicitDateSlots = explicitServiceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
+  const virtualSlots = explicitDateSlots.length ? [] : buildVirtualSlots(state, appointments)
+  const serviceSlots = [...explicitServiceSlots, ...virtualSlots]
   const dateSlots = serviceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
   const preferredSlots = dateSlots.filter((slot) => slotMatchesTimePreference(slot, state))
   const chosenSlots = preferredSlots.length ? preferredSlots : dateSlots.length ? dateSlots : serviceSlots
@@ -1863,6 +1920,7 @@ function presentSlots(state, appointments) {
     scheduled_at: slot.scheduled_at,
     service_date: slot.service_date,
     start_time: slot.start_time,
+    virtual: Boolean(slot.virtual),
     price: Number(slot.price || 0),
   }))
   state.awaiting = 'slot_choice'

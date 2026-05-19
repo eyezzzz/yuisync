@@ -20,6 +20,9 @@ alter table public.appointments
   add column if not exists tenant_id uuid references public.tenants(id),
   add column if not exists duration_min integer default 60,
   add column if not exists pet_id uuid,
+  add column if not exists service_date date,
+  add column if not exists start_time time,
+  add column if not exists end_time time,
   add column if not exists source text default 'agenda',
   add column if not exists customer_name text,
   add column if not exists customer_phone text,
@@ -206,8 +209,29 @@ begin
     for update;
 
     if not found then
-      raise exception 'Horario nao encontrado na agenda.';
-    end if;
+      v_appointment_id := null;
+      v_scheduled_for := nullif(p_payload->>'scheduled_at', '')::timestamptz;
+      if v_scheduled_for is null then
+        raise exception 'Horario real da agenda ausente.';
+      end if;
+
+      if exists (
+        select 1
+        from public.appointments
+        where tenant_id = v_tenant_id
+          and module_id = v_module_id
+          and scheduled_at = v_scheduled_for
+          and lower(coalesce(status, '')) in ('agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado')
+      ) then
+        raise exception 'Horario nao esta mais disponivel.';
+      end if;
+
+      v_service_type := coalesce(nullif(v_service_type, ''), v_order_type);
+      v_subtotal := coalesce(nullif((v_items->0->>'unit_price'), '')::numeric, 0);
+      if v_subtotal <= 0 then
+        raise exception 'Servico sem preco valido.';
+      end if;
+    else
     if lower(coalesce(v_appointment.status, '')) not in ('available', 'disponivel', 'disponível', 'livre') then
       raise exception 'Horario nao esta mais disponivel.';
     end if;
@@ -219,12 +243,14 @@ begin
     v_scheduled_for := v_appointment.scheduled_at;
     v_service_type := coalesce(nullif(v_appointment.service_type, ''), v_service_type, v_order_type);
     v_subtotal := v_appointment.price;
+    end if;
+
     v_resolved_items := jsonb_build_array(jsonb_build_object(
       'product_id', null,
       'name', v_service_type,
       'quantity', 1,
-      'unit_price', v_appointment.price,
-      'subtotal', v_appointment.price,
+      'unit_price', v_subtotal,
+      'subtotal', v_subtotal,
       'upsell', false
     ));
   end if;
@@ -304,20 +330,36 @@ begin
     end if;
   end loop;
 
-  if v_order_type <> 'produto' and v_appointment_id is not null then
-    update public.appointments
-    set client_id = v_client_id,
-        service_type = v_service_type,
-        duration_min = coalesce(duration_min, 60),
-        price = v_total,
-        status = 'agendado',
-        source = 'whatsapp',
-        customer_name = v_customer_name,
-        customer_phone = v_customer_phone,
-        description = v_notes,
-        notes = v_notes,
-        updated_at = now()
-    where id = v_appointment_id;
+  if v_order_type <> 'produto' then
+    if v_appointment_id is not null then
+      update public.appointments
+      set client_id = v_client_id,
+          service_type = v_service_type,
+          duration_min = coalesce(duration_min, 60),
+          price = v_total,
+          status = 'agendado',
+          source = 'whatsapp',
+          customer_name = v_customer_name,
+          customer_phone = v_customer_phone,
+          description = v_notes,
+          notes = v_notes,
+          updated_at = now()
+      where id = v_appointment_id;
+    else
+      insert into public.appointments (
+        tenant_id, module_id, client_id, service_type, scheduled_at, service_date, start_time, end_time, duration_min,
+        price, status, source, customer_name, customer_phone, description, notes
+      )
+      values (
+        v_tenant_id, v_module_id, v_client_id, v_service_type, v_scheduled_for,
+        (v_scheduled_for at time zone 'America/Sao_Paulo')::date,
+        (v_scheduled_for at time zone 'America/Sao_Paulo')::time,
+        ((v_scheduled_for + interval '60 minutes') at time zone 'America/Sao_Paulo')::time,
+        60,
+        v_total, 'agendado', 'whatsapp', v_customer_name, v_customer_phone, v_notes, v_notes
+      )
+      returning id into v_appointment_id;
+    end if;
   end if;
 
   v_operational_order_type := case when v_order_type = 'produto' then 'entrega' else 'servico' end;

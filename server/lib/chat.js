@@ -1197,16 +1197,29 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
 
     const { data, error } = await appointmentQuery.limit(1).maybeSingle()
     if (error) throw new Error(`Falha ao validar agenda: ${error.message}`)
-    if (!data) throw new Error('Horario nao encontrado na agenda.')
+    if (!data) {
+      if (appointmentId) throw new Error('Horario nao encontrado na agenda.')
+      const { data: conflicts, error: conflictError } = await supabase
+        .from('appointments')
+        .select('id,status')
+        .eq('tenant_id', session.tenant_id)
+        .eq('module_id', session.module_id)
+        .eq('scheduled_at', scheduledAt)
+        .in('status', [...BUSY_STATUSES])
+        .limit(1)
+      if (conflictError) throw new Error(`Falha ao validar conflito de agenda: ${conflictError.message}`)
+      if ((conflicts || []).length) throw new Error('Horario nao esta mais disponivel.')
+      validatedAppointment = { scheduled_at: scheduledAt, service_type: cleanText(args.service_type), price: Number(normalizedItems[0]?.unit_price || 0) }
+    } else {
+      const status = cleanText(data.status).toLowerCase()
+      if (!AVAILABLE_STATUSES.has(status)) throw new Error('Horario nao esta mais disponivel.')
 
-    const status = cleanText(data.status).toLowerCase()
-    if (!AVAILABLE_STATUSES.has(status)) throw new Error('Horario nao esta mais disponivel.')
-
-    validatedAppointment = data
-    args.scheduled_at = normalizeAppointmentRows([data])[0]?.scheduled_at || data.scheduled_at
-    args.service_type = cleanText(data.service_type) || cleanText(args.service_type) || args.order_type
-    normalizedItems[0].unit_price = Number(data.price || normalizedItems[0].unit_price || 0)
-    normalizedItems[0].name = cleanText(data.service_type) || normalizedItems[0].name
+      validatedAppointment = data
+      args.scheduled_at = normalizeAppointmentRows([data])[0]?.scheduled_at || data.scheduled_at
+      args.service_type = cleanText(data.service_type) || cleanText(args.service_type) || args.order_type
+      normalizedItems[0].unit_price = Number(data.price || normalizedItems[0].unit_price || 0)
+      normalizedItems[0].name = cleanText(data.service_type) || normalizedItems[0].name
+    }
   }
 
   const subtotal = normalizedItems.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
