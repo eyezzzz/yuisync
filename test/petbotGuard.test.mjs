@@ -849,6 +849,57 @@ test('agenda vazia usa grade operacional e oferece horario pedido', () => {
   assert.match(result.reply, /Pedido em andamento/i)
 })
 
+test('agenda operacional aceita preferencia de meia hora', () => {
+  let context = {}
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Ana', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Thor golden', { appointments: [] })
+  context = result.context
+  result = turn(context, 'sem observacao', { appointments: [] })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: [] })
+  context = result.context
+  result = turn(context, '16:30', { appointments: [] })
+  context = result.context
+
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.match(result.reply, /16:30/)
+
+  result = turn(context, 'sim', { appointments: [] })
+  assert.equal(result.state.selectedSlot.virtual, true)
+  assert.match(result.state.selectedSlot.scheduled_at, /16:30/)
+})
+
+test('agenda operacional bloqueia horarios sobrepostos a ocupados', () => {
+  const busyOverlapAppointments = [{
+    id: 'busy-16',
+    service_type: 'Banho',
+    scheduled_at: appointmentAt('16:00'),
+    status: 'booked',
+    price: 70,
+    duration_min: 60,
+  }]
+  let context = {}
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: busyOverlapAppointments })
+  context = result.context
+  result = turn(context, 'Ana', { appointments: busyOverlapAppointments })
+  context = result.context
+  result = turn(context, 'Thor golden', { appointments: busyOverlapAppointments })
+  context = result.context
+  result = turn(context, 'sem observacao', { appointments: busyOverlapAppointments })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: busyOverlapAppointments })
+  context = result.context
+  result = turn(context, '16:30', { appointments: busyOverlapAppointments })
+
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.doesNotMatch(result.reply, /16:00/)
+  assert.doesNotMatch(result.reply, /16:30/)
+  assert.match(result.reply, /17:00/)
+})
+
 test('banho e tosa usa agenda certa e salva observacao operacional', () => {
   let context = {}
   let result = turn(context, 'oi', { appointments: mixedAppointments })

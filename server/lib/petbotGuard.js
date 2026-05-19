@@ -1265,37 +1265,63 @@ function slotKey(slot) {
   return `${slotDateIso(slot)} ${slotTimeText(slot)}`
 }
 
+function slotDurationMs(slot = {}) {
+  const minutes = Number(slot.duration_min || slot.durationMin || 60)
+  return Math.max(15, Number.isFinite(minutes) ? minutes : 60) * 60 * 1000
+}
+
+function slotStartMs(slot = {}) {
+  const scheduledAt = slotScheduledAt(slot)
+  const time = scheduledAt ? new Date(scheduledAt).getTime() : NaN
+  return Number.isFinite(time) ? time : null
+}
+
+function slotsOverlap(left = {}, right = {}) {
+  const leftStart = slotStartMs(left)
+  const rightStart = slotStartMs(right)
+  if (leftStart === null || rightStart === null) return false
+  return leftStart < rightStart + slotDurationMs(right)
+    && rightStart < leftStart + slotDurationMs(left)
+}
+
 function buildVirtualSlots(state = {}, appointments = []) {
   const defaults = serviceDefaults(state)
   const dates = state.serviceDate && state.serviceDate !== 'any'
     ? [state.serviceDate]
     : Array.from({ length: 3 }, (_, index) => addDaysIso(saoPauloTodayIso(), index))
-  const busyKeys = new Set((appointments || [])
+  const busyAppointments = (appointments || [])
     .filter((appointment) => BUSY_APPOINTMENT_STATUSES.has(norm(appointment?.status)))
-    .map(slotKey)
-    .filter(Boolean))
+  const explicitFreeSlots = availableAppointments(appointments)
   const explicitKeys = new Set(availableAppointments(appointments).map(slotKey).filter(Boolean))
   const now = Date.now()
-  const hours = Array.from({ length: 10 }, (_, index) => 8 + index)
+  const times = Array.from({ length: 19 }, (_, index) => {
+    const minutes = 8 * 60 + index * 30
+    const hour = Math.floor(minutes / 60)
+    const minute = minutes % 60
+    return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+  })
   const slots = []
 
   for (const date of dates) {
-    for (const hour of hours) {
-      const time = `${String(hour).padStart(2, '0')}:00`
+    for (const time of times) {
       const key = `${date} ${time}`
       const scheduledAt = `${date}T${time}:00-03:00`
-      if (new Date(scheduledAt).getTime() <= now + 15 * 60 * 1000) continue
-      if (busyKeys.has(key) || explicitKeys.has(key)) continue
-      slots.push({
+      const candidate = {
         id: '',
         virtual: true,
         service_type: defaults.service_type,
         scheduled_at: scheduledAt,
         service_date: date,
         start_time: `${time}:00`,
+        duration_min: 60,
         status: 'available',
         price: defaults.price,
-      })
+      }
+      if (new Date(scheduledAt).getTime() <= now + 15 * 60 * 1000) continue
+      if (explicitKeys.has(key)) continue
+      if (busyAppointments.some((appointment) => slotsOverlap(candidate, appointment))) continue
+      if (explicitFreeSlots.some((slot) => slotsOverlap(candidate, slot))) continue
+      slots.push(candidate)
     }
   }
 
@@ -1319,6 +1345,12 @@ function slotMatchesTimePreference(slot, state = {}) {
   if (preference === 'late_afternoon') return hour >= 16 && hour < 19
   if (preference === 'evening') return hour >= 18 && hour < 22
   return true
+}
+
+function timeTextToMinutes(value = '') {
+  const [hour, minute = '0'] = clean(value).split(':')
+  const total = Number(hour) * 60 + Number(minute)
+  return Number.isFinite(total) ? total : null
 }
 
 function scheduleLabel(state = {}) {
@@ -1512,6 +1544,7 @@ function buildOrderArgs(state) {
     service_type: state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa'),
     scheduled_at: slotScheduledAt(state.selectedSlot),
     appointment_id: state.selectedSlot?.virtual ? '' : state.selectedSlot?.id,
+    duration_min: Number(state.selectedSlot?.duration_min || 60),
     items: [{
       name: state.serviceType || (state.intent === 'veterinaria' ? 'Consulta veterinária' : 'Banho/tosa'),
       quantity: 1,
@@ -1676,6 +1709,7 @@ function compactSlot(slot) {
     service_date: slot.service_date,
     start_time: slot.start_time,
     virtual: Boolean(slot.virtual),
+    duration_min: Number(slot.duration_min || 60),
     price: Number(slot.price || 0),
     label: formatSlot(slot),
   }
@@ -1912,7 +1946,15 @@ function presentSlots(state, appointments) {
   const serviceSlots = [...explicitServiceSlots, ...virtualSlots]
   const dateSlots = serviceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
   const preferredSlots = dateSlots.filter((slot) => slotMatchesTimePreference(slot, state))
-  const chosenSlots = preferredSlots.length ? preferredSlots : dateSlots.length ? dateSlots : serviceSlots
+  const requestedMinutes = state.serviceTimePreference === 'specific' ? timeTextToMinutes(state.servicePreferredTime) : null
+  const nearbyDateSlots = requestedMinutes === null
+    ? dateSlots
+    : [...dateSlots].sort((a, b) => {
+      const distanceA = Math.abs((timeTextToMinutes(slotTimeText(a)) ?? requestedMinutes) - requestedMinutes)
+      const distanceB = Math.abs((timeTextToMinutes(slotTimeText(b)) ?? requestedMinutes) - requestedMinutes)
+      return distanceA - distanceB || String(slotScheduledAt(a)).localeCompare(String(slotScheduledAt(b)))
+    })
+  const chosenSlots = preferredSlots.length ? preferredSlots : nearbyDateSlots.length ? nearbyDateSlots : serviceSlots
   const slots = chosenSlots.slice(0, 3)
   state.slotOptions = slots.map((slot) => ({
     id: clean(slot.id),
@@ -1921,6 +1963,7 @@ function presentSlots(state, appointments) {
     service_date: slot.service_date,
     start_time: slot.start_time,
     virtual: Boolean(slot.virtual),
+    duration_min: Number(slot.duration_min || 60),
     price: Number(slot.price || 0),
   }))
   state.awaiting = 'slot_choice'
@@ -1932,10 +1975,15 @@ function presentSlots(state, appointments) {
 
   const lines = state.slotOptions.map((slot, index) => `${index + 1}. ${formatSlot(slot)}`)
   const requested = scheduleLabel(state)
+  const dateOnly = state.serviceDate && state.serviceDate !== 'any'
+    ? new Date(`${state.serviceDate}T12:00:00-03:00`).toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: '2-digit', timeZone: 'America/Sao_Paulo' })
+    : state.serviceDate === 'any'
+      ? 'os próximos dias'
+      : 'os próximos horários'
   const intro = requested && preferredSlots.length
     ? `Consultei a agenda para ${requested} e tenho:`
     : requested && dateSlots.length
-      ? `Não achei nesse horário exato, mas para ${state.serviceDate === 'any' ? 'os próximos dias' : requested} tenho:`
+      ? `Não achei nesse horário exato, mas para ${dateOnly} tenho:`
       : requested
         ? `Não achei para ${requested}, mas tenho estes próximos horários:`
         : 'Consultei a agenda e tenho:'

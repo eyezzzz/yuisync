@@ -97,6 +97,7 @@ declare
   v_appointment_id uuid;
   v_appointment record;
   v_scheduled_for timestamptz;
+  v_service_duration integer := 60;
   v_service_type text := nullif(trim(p_payload->>'service_type'), '');
   v_notes_input text := nullif(trim(p_payload->>'notes'), '');
   v_notes text;
@@ -196,8 +197,9 @@ begin
     end loop;
   else
     v_appointment_id := nullif(p_payload->>'appointment_id', '')::uuid;
+    v_service_duration := greatest(15, coalesce(nullif(p_payload->>'duration_min', '')::integer, nullif(v_items->0->>'duration_min', '')::integer, 60));
 
-    select id, service_type, scheduled_at, status, price
+    select id, service_type, scheduled_at, status, price, duration_min
       into v_appointment
     from public.appointments
     where tenant_id = v_tenant_id
@@ -220,8 +222,9 @@ begin
         from public.appointments
         where tenant_id = v_tenant_id
           and module_id = v_module_id
-          and scheduled_at = v_scheduled_for
           and lower(coalesce(status, '')) in ('agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado')
+          and scheduled_at < v_scheduled_for + make_interval(mins => v_service_duration)
+          and scheduled_at + make_interval(mins => greatest(15, coalesce(duration_min, 60))) > v_scheduled_for
       ) then
         raise exception 'Horario nao esta mais disponivel.';
       end if;
@@ -232,17 +235,30 @@ begin
         raise exception 'Servico sem preco valido.';
       end if;
     else
-    if lower(coalesce(v_appointment.status, '')) not in ('available', 'disponivel', 'disponível', 'livre') then
-      raise exception 'Horario nao esta mais disponivel.';
-    end if;
-    if coalesce(v_appointment.price, 0) <= 0 then
-      raise exception 'Servico sem preco valido.';
-    end if;
+      if translate(lower(coalesce(v_appointment.status, '')), 'áàâãéêíóôõúç', 'aaaaeeiooouc') not in ('available', 'disponivel', 'livre', 'aberto', 'open') then
+        raise exception 'Horario nao esta mais disponivel.';
+      end if;
+      if coalesce(v_appointment.price, 0) <= 0 then
+        raise exception 'Servico sem preco valido.';
+      end if;
 
-    v_appointment_id := v_appointment.id;
-    v_scheduled_for := v_appointment.scheduled_at;
-    v_service_type := coalesce(nullif(v_appointment.service_type, ''), v_service_type, v_order_type);
-    v_subtotal := v_appointment.price;
+      v_appointment_id := v_appointment.id;
+      v_scheduled_for := v_appointment.scheduled_at;
+      v_service_duration := greatest(15, coalesce(v_appointment.duration_min, v_service_duration, 60));
+      if exists (
+        select 1
+        from public.appointments
+        where tenant_id = v_tenant_id
+          and module_id = v_module_id
+          and id <> v_appointment_id
+          and lower(coalesce(status, '')) in ('agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado')
+          and scheduled_at < v_scheduled_for + make_interval(mins => v_service_duration)
+          and scheduled_at + make_interval(mins => greatest(15, coalesce(duration_min, 60))) > v_scheduled_for
+      ) then
+        raise exception 'Horario nao esta mais disponivel.';
+      end if;
+      v_service_type := coalesce(nullif(v_appointment.service_type, ''), v_service_type, v_order_type);
+      v_subtotal := v_appointment.price;
     end if;
 
     v_resolved_items := jsonb_build_array(jsonb_build_object(
@@ -335,7 +351,7 @@ begin
       update public.appointments
       set client_id = v_client_id,
           service_type = v_service_type,
-          duration_min = coalesce(duration_min, 60),
+          duration_min = coalesce(duration_min, v_service_duration, 60),
           price = v_total,
           status = 'agendado',
           source = 'whatsapp',
@@ -354,8 +370,8 @@ begin
         v_tenant_id, v_module_id, v_client_id, v_service_type, v_scheduled_for,
         (v_scheduled_for at time zone 'America/Sao_Paulo')::date,
         (v_scheduled_for at time zone 'America/Sao_Paulo')::time,
-        ((v_scheduled_for + interval '60 minutes') at time zone 'America/Sao_Paulo')::time,
-        60,
+        ((v_scheduled_for + make_interval(mins => v_service_duration)) at time zone 'America/Sao_Paulo')::time,
+        v_service_duration,
         v_total, 'agendado', 'whatsapp', v_customer_name, v_customer_phone, v_notes, v_notes
       )
       returning id into v_appointment_id;

@@ -337,6 +337,50 @@ function normalizeAppointmentRows(rows: LooseRecord[] = []): LooseRecord[] {
   return [...byId.values()].filter((row) => row.scheduled_at)
 }
 
+function appointmentDurationMs(row: LooseRecord = {}): number {
+  const minutes = Number(row.duration_min || row.durationMin || 60)
+  return Math.max(15, Number.isFinite(minutes) ? minutes : 60) * 60 * 1000
+}
+
+function appointmentStartMs(row: LooseRecord = {}): number | null {
+  const scheduledAt = row.scheduled_at || normalizeAppointmentRows([row])[0]?.scheduled_at
+  const time = scheduledAt ? new Date(String(scheduledAt)).getTime() : NaN
+  return Number.isFinite(time) ? time : null
+}
+
+function appointmentsOverlap(left: LooseRecord = {}, right: LooseRecord = {}): boolean {
+  const leftStart = appointmentStartMs(left)
+  const rightStart = appointmentStartMs(right)
+  if (leftStart === null || rightStart === null) return false
+  return leftStart < rightStart + appointmentDurationMs(right)
+    && rightStart < leftStart + appointmentDurationMs(left)
+}
+
+async function hasBusyAppointmentConflict(
+  supabase: SupabaseClient,
+  session: LooseRecord,
+  scheduledAt: string,
+  durationMin = 60,
+): Promise<boolean> {
+  const dateIso = appointmentDateIso({ scheduled_at: scheduledAt })
+  if (!dateIso) return false
+  const { data, error } = await supabase
+    .from('appointments')
+    .select('id,status,scheduled_at,service_date,start_time,duration_min')
+    .eq('tenant_id', session.tenant_id)
+    .eq('module_id', session.module_id)
+    .gte('scheduled_at', `${dateIso}T00:00:00-03:00`)
+    .lte('scheduled_at', `${dateIso}T23:59:59-03:00`)
+    .limit(100)
+
+  if (error) throw new Error(`Falha ao validar conflito de agenda: ${error.message}`)
+
+  const candidate: LooseRecord = { scheduled_at: scheduledAt, duration_min: durationMin }
+  return normalizeAppointmentRows((data || []) as LooseRecord[])
+    .filter((row) => BUSY_STATUSES.has(clean(row.status).toLowerCase()))
+    .some((row) => appointmentsOverlap(candidate, row))
+}
+
 function scopeCacheKey(moduleId: string, tenantId: string): string {
   return `${tenantId || ''}:${String(moduleId || '').toLowerCase()}`
 }
@@ -1584,7 +1628,7 @@ async function createConfirmedPetshopOrder(
 
     let appointmentQuery = supabase
       .from('appointments')
-      .select('id,service_type,scheduled_at,service_date,start_time,status,price')
+      .select('id,service_type,scheduled_at,service_date,start_time,status,price,duration_min')
       .eq('tenant_id', session.tenant_id)
       .eq('module_id', session.module_id)
 
@@ -1594,17 +1638,12 @@ async function createConfirmedPetshopOrder(
     if (error) throw new Error(`Falha ao validar agenda: ${error.message}`)
     if (!data) {
       if (appointmentId) throw new Error('Horario nao encontrado na agenda.')
-      const { data: conflicts, error: conflictError } = await supabase
-        .from('appointments')
-        .select('id,status')
-        .eq('tenant_id', session.tenant_id)
-        .eq('module_id', session.module_id)
-        .eq('scheduled_at', scheduledAt)
-        .in('status', [...BUSY_STATUSES])
-        .limit(1)
-      if (conflictError) throw new Error(`Falha ao validar conflito de agenda: ${conflictError.message}`)
-      if ((conflicts || []).length) throw new Error('Horario nao esta mais disponivel.')
-      validatedAppointment = { scheduled_at: scheduledAt, service_type: clean(args.service_type), price: Number(normalizedItems[0]?.unit_price || 0) }
+      const firstItem = (normalizedItems[0] || {}) as LooseRecord
+      const durationMin = Number(args.duration_min || firstItem.duration_min || 60)
+      if (await hasBusyAppointmentConflict(supabase, session, scheduledAt, durationMin)) {
+        throw new Error('Horario nao esta mais disponivel.')
+      }
+      validatedAppointment = { scheduled_at: scheduledAt, service_type: clean(args.service_type), price: Number(normalizedItems[0]?.unit_price || 0), duration_min: durationMin }
     } else {
       if (!AVAILABLE_STATUSES.has(clean(data.status).toLowerCase())) throw new Error('Horario nao esta mais disponivel.')
 
@@ -2029,7 +2068,7 @@ async function loadStoreContext(
       return (data || []) as LooseRecord[]
     }),
     cachedLoad(appointmentsCache, cacheKey, APPOINTMENTS_CACHE_MS, async () => {
-      const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price'
+      const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price, duration_min'
       const { data, error } = await supabase
         .from('appointments')
         .select(selectColumns)
