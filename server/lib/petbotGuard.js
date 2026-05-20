@@ -212,6 +212,16 @@ function availableProducts(products = []) {
   return (products || []).filter((product) => product?.active !== false && Number(product?.stock_quantity || 0) > 0)
 }
 
+function hasEnoughStockForState(product = {}, state = {}) {
+  const requestedQuantity = Number(
+    state.selectedProduct?.product_id === clean(product.id || product.product_id)
+      ? state.selectedProduct?.quantity
+      : state.pendingQuantity,
+  )
+  if (!Number.isFinite(requestedQuantity) || requestedQuantity <= 1) return true
+  return Number(product.stock_quantity || 0) >= requestedQuantity
+}
+
 function availableAppointments(appointments = []) {
   const freeStatuses = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
   return (appointments || [])
@@ -866,6 +876,12 @@ function parseSelectedProductQuantity(message = '', product = null) {
   return parseBulkKgQuantity(message, product) || parseProductQuantity(message)
 }
 
+function hasProductQuantitySignal(message = '') {
+  const lower = norm(message)
+  return /\b\d{1,2}(?:[,.]\d{1,2})?\s*(?:kg|quilo|quilos|sacos?|pacotes?|unidades?|unid)\b/.test(lower)
+    || /\b(?:um|uma|dois|duas|tres|três|quatro|cinco)\s*(?:kg|quilo|quilos|sacos?|pacotes?|unidades?)\b/.test(lower)
+}
+
 function shouldTreatKgAsBulkQuantity(message = '', state = {}) {
   const lower = norm(message)
   return state.packagePreference === 'granel'
@@ -1082,7 +1098,10 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
 
   const packagePreference = clean(facts.package_preference || facts.packagePreference)
   const packageKg = Number(facts.package_kg ?? facts.packageKg)
-  if ((packagePreference || Number.isFinite(packageKg)) && state.intent === 'produto') {
+  const hasPackageSignal = Boolean(inferPackagePreference(currentMessage) || requestedPackageKgFromMessage(currentMessage))
+  if ((packagePreference || Number.isFinite(packageKg))
+    && state.intent === 'produto'
+    && (state.awaiting === 'food_preferences' || hasPackageSignal)) {
     const kgFromMessage = requestedPackageKgFromMessage(currentMessage)
     const kgCandidate = Number.isFinite(packageKg) ? packageKg : kgFromMessage
     if (Number.isFinite(kgCandidate) && shouldTreatKgAsBulkQuantity(currentMessage, state)) {
@@ -1102,7 +1121,7 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
   const quantity = Number(facts.quantity)
   const bulkQuantity = isBulkProduct(state.selectedProduct) && Number.isFinite(packageKg) ? packageKg : null
   const nextQuantity = Number.isFinite(quantity) && quantity > 0 ? quantity : bulkQuantity
-  if (Number.isFinite(nextQuantity) && nextQuantity > 0 && state.intent === 'produto') {
+  if (Number.isFinite(nextQuantity) && nextQuantity > 0 && state.intent === 'produto' && hasProductQuantitySignal(currentMessage)) {
     if (state.selectedProduct && state.awaiting !== 'product_choice') state.selectedProduct.quantity = nextQuantity
     else state.pendingQuantity = nextQuantity
   }
@@ -1236,6 +1255,7 @@ function scoreProduct(product, state, message) {
 
 function rankProducts(products, state, message) {
   return availableProducts(products)
+    .filter((product) => hasEnoughStockForState(product, state))
     .map((product) => ({ product, score: scoreProduct(product, state, message) }))
     .sort((a, b) => b.score - a.score || Number(a.product.price || 0) - Number(b.product.price || 0))
 }

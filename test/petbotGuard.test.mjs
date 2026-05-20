@@ -693,6 +693,55 @@ test('produto mantem quantidade granel pendente quando cliente escolhe por numer
   assert.match(result.reply, /Total parcial: R\$ 64,50/i)
 })
 
+test('produto ignora quantidade inventada pela LLM em recusa de upsell', () => {
+  let context = {}
+  let result = turn(context, 'bom dia', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'Denise, quero racao a granel para cachorro pequeno adulto', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'quero 3kg', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, '1', { products: [granelPremierDog, ...products] })
+  context = result.context
+  assert.equal(result.state.selectedProduct.quantity, 3)
+
+  result = turn(context, 'nao', {
+    products: [granelPremierDog, ...products],
+    interpretation: {
+      quantity: 1,
+      package_kg: 1,
+      negation: true,
+    },
+  })
+
+  assert.equal(result.state.selectedProduct.quantity, 3)
+  assert.match(result.reply, /3kg GRANEL PREMIER/i)
+  assert.match(result.reply, /Total parcial: R\$ 64,50/i)
+})
+
+test('produto granel filtra opcao sem estoque suficiente para kg pedido', () => {
+  const lowStockBulk = {
+    id: 'granel-premier-low-stock',
+    name: 'GRANEL PREMIER FRANGO RACAS PEQUENAS ADULTOS KG PROMO',
+    category: 'Racao',
+    price: 9,
+    stock_quantity: 1,
+    active: true,
+  }
+
+  let context = {}
+  let result = turn(context, 'bom dia', { products: [lowStockBulk, granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'Denise, quero racao a granel para cachorro pequeno adulto', { products: [lowStockBulk, granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'quero 3kg', { products: [lowStockBulk, granelPremierDog, ...products] })
+
+  assert.equal(result.action, 'oferecer_produtos')
+  assert.equal(result.state.pendingQuantity, 3)
+  assert.ok(result.state.productOptions.every((product) => product.product_id !== lowStockBulk.id))
+  assert.ok(result.state.productOptions.some((product) => product.product_id === granelPremierDog.id))
+})
+
 test('redraft ruim nao remove pergunta obrigatoria de entrega/retirada', () => {
   const result = runPetbotGuard({
     message: 'troco pra 50',
