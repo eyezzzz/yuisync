@@ -499,6 +499,59 @@ test('cliente conhecido pelo telefone nao precisa informar nome de novo', () => 
   assert.match(result.reply, /marca/i)
 })
 
+test('endereco incompleto ignora bairro e referencia vindos de interpretacao antiga', () => {
+  let context = {}
+  let result = turn(context, 'ola bom dia')
+  context = result.context
+  result = turn(context, 'Hugo, quero racao para shih tzu adulto')
+  context = result.context
+  result = turn(context, 'Premier, qualquer pacote')
+  context = result.context
+  result = turn(context, '1')
+  context = result.context
+  result = turn(context, 'nao')
+  context = result.context
+  result = turn(context, 'pix entrega')
+  context = result.context
+
+  result = turn(JSON.stringify(context), 'Av. Bernardo Mascarenhas, 1327 ap 303b', {
+    interpretation: {
+      delivery_address: 'Av. Bernardo Mascarenhas, 1327 ap 303b',
+      neighborhood: 'ola bom dia',
+      reference: 'quero racao para shih tzu adulto',
+      confidence: 0.9,
+    },
+  })
+
+  assert.equal(result.action, 'pedir_endereco')
+  assert.match(result.reply, /bairro/i)
+  assert.match(result.reply, /ponto de refer/i)
+  assert.doesNotMatch(result.reply, /Resumo do pedido/i)
+  assert.equal(result.state.fulfillment.address, 'Av. Bernardo Mascarenhas, 1327 ap 303b')
+  assert.equal(result.state.fulfillment.neighborhood, '')
+  assert.equal(result.state.fulfillment.reference, '')
+})
+
+test('cliente que segue sem desconto sai do loop e avanca para pagamento', () => {
+  let context = {}
+  let result = turn(context, 'ola')
+  context = result.context
+  result = turn(context, 'Rafael, quero racao Golden para cachorro pequeno adulto saco 15kg')
+  context = result.context
+  result = turn(context, '1')
+  context = result.context
+
+  result = turn(context, 'faz desconto?')
+  context = result.context
+  assert.equal(result.action, 'recusar_desconto')
+  assert.match(result.reply, /Infelizmente/i)
+
+  result = turn(context, 'nao, pode seguir sem desconto')
+  assert.equal(result.action, 'pedir_pagamento')
+  assert.match(result.reply, /Pedido em andamento/i)
+  assert.match(result.reply, /Qual forma prefere/i)
+})
+
 test('produto aceita escolha por marca em frase natural', () => {
   let context = {}
   let result = turn(context, 'Oi, quero ração pra shih tzu adulto')

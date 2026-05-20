@@ -306,7 +306,8 @@ function defaultState() {
 }
 
 export function getPetbotState(context = {}) {
-  const incoming = context?.petbot && typeof context.petbot === 'object' ? context.petbot : {}
+  const parsedContext = parseContextObject(context)
+  const incoming = parsedContext?.petbot && typeof parsedContext.petbot === 'object' ? parsedContext.petbot : {}
   const base = defaultState()
   return {
     ...base,
@@ -322,13 +323,25 @@ export function getPetbotState(context = {}) {
 }
 
 export function mergePetbotContext(context = {}, state) {
+  const parsedContext = parseContextObject(context)
   return {
-    ...(context || {}),
+    ...(parsedContext || {}),
     petbot: {
       ...state,
       version: PETBOT_VERSION,
       updatedAt: new Date().toISOString(),
     },
+  }
+}
+
+function parseContextObject(context = {}) {
+  if (context && typeof context === 'object' && !Array.isArray(context)) return context
+  if (typeof context !== 'string' || !context.trim()) return {}
+  try {
+    const parsed = JSON.parse(context)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
   }
 }
 
@@ -380,7 +393,7 @@ export function snapshotPetbotState(state = {}) {
 }
 
 export function recoverPetbotContextFromHistory(context = {}, session = {}, history = []) {
-  const incoming = context && typeof context === 'object' && !Array.isArray(context) ? context : {}
+  const incoming = parseContextObject(context)
   if (incoming.petbot && typeof incoming.petbot === 'object' && Object.keys(incoming.petbot).length > 0) {
     return incoming
   }
@@ -987,7 +1000,20 @@ function inferPackagePreference(message = '') {
   return null
 }
 
-function applyInterpretedFacts(state, facts = {}) {
+function valueAppearsInMessage(message = '', value = '') {
+  const source = norm(message)
+  const target = norm(value)
+  if (!source || !target) return false
+  return source.includes(target)
+}
+
+function isPlausibleAddressDetail(value = '') {
+  const lower = norm(value)
+  if (!lower || lower.length < 2) return false
+  return !/(^ola$|bom dia|boa tarde|boa noite|racao|ração|premier|golden|shih|tzu|produto|banho|veterin|pix|cartao|cartão|dinheiro|entrega|retirada)/.test(lower)
+}
+
+function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
   if (!facts || typeof facts !== 'object') return
 
   const interpretedName = clean(facts.customer_name || facts.customerName)
@@ -1083,11 +1109,25 @@ function applyInterpretedFacts(state, facts = {}) {
   const fulfillment = detectFulfillment(facts.fulfillment_type || facts.fulfillmentType)
   if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
 
+  const canApplyAddressFacts = state.intent === 'produto'
+    && (state.awaiting === 'delivery_address' || state.fulfillment.type === 'entrega')
   const address = clean(facts.delivery_address || facts.deliveryAddress)
-  if (address && state.intent === 'produto') updateAddressFromMessage(state, address)
-  if (clean(facts.neighborhood)) state.fulfillment.neighborhood = clean(facts.neighborhood)
-  if (clean(facts.city)) state.fulfillment.city = clean(facts.city)
-  if (clean(facts.reference)) state.fulfillment.reference = clean(facts.reference)
+  if (address && canApplyAddressFacts && valueAppearsInMessage(currentMessage, address)) updateAddressFromMessage(state, address)
+
+  const neighborhood = clean(facts.neighborhood)
+  if (canApplyAddressFacts && neighborhood && isPlausibleAddressDetail(neighborhood) && valueAppearsInMessage(currentMessage, neighborhood)) {
+    state.fulfillment.neighborhood = neighborhood
+  }
+
+  const city = clean(facts.city)
+  if (canApplyAddressFacts && city && isPlausibleAddressDetail(city) && valueAppearsInMessage(currentMessage, city)) {
+    state.fulfillment.city = city
+  }
+
+  const reference = clean(facts.reference)
+  if (canApplyAddressFacts && reference && isPlausibleAddressDetail(reference) && valueAppearsInMessage(currentMessage, reference)) {
+    state.fulfillment.reference = reference
+  }
 }
 
 function normalizeBreedLabel(value = '') {
@@ -2218,6 +2258,11 @@ function maybeHandleDiscount(state, products) {
   return `Infelizmente não conseguimos aplicar desconto nesse pedido.\n\nPosso te mostrar uma opção mais econômica: ${option.name} por ${money(option.unit_price)}. Quer seguir com ela?`
 }
 
+function wantsContinueWithoutDiscount(message = '') {
+  const lower = norm(message)
+  return /sem desconto/.test(lower) && /(nao|não|pode|seguir|continua|mesmo produto|esse mesmo)/.test(lower)
+}
+
 function handoffToHuman(state, reply, reason) {
   state.status = 'human_requested'
   state.awaiting = 'human'
@@ -2250,7 +2295,7 @@ export function runPetbotGuard({
     }
   }
 
-  applyInterpretedFacts(state, interpretation)
+  applyInterpretedFacts(state, interpretation, trimmed)
   applyMessageFacts(state, trimmed)
 
   if (interpretation?.wants_human || hasAny(trimmed, HUMAN_HINTS)) {
@@ -2281,7 +2326,10 @@ export function runPetbotGuard({
     return guardResult('Tudo bem, não vou finalizar esse pedido. Se quiser alterar algo, me diga o que prefere.', state, { action: 'cancelar' })
   }
 
-  if (interpretation?.wants_discount || hasAny(trimmed, DISCOUNT_HINTS)) {
+  if (state.intent === 'produto' && state.selectedProduct && wantsContinueWithoutDiscount(trimmed)) {
+    state.upsell.accepted = false
+    state.upsell.resolved = true
+  } else if (interpretation?.wants_discount || hasAny(trimmed, DISCOUNT_HINTS)) {
     return guardResult(maybeHandleDiscount(state, products), state, { action: 'recusar_desconto' })
   }
 
