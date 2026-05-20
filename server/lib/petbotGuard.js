@@ -1719,6 +1719,7 @@ function buildOrderArgs(state) {
         upsell: Boolean(item.upsell),
       })),
       total: state.totals.total,
+      delivery_fee: state.totals.deliveryFee,
       payment_method: state.payment.method,
       change_for: state.payment.changeFor,
       fulfillment_type: state.fulfillment.type,

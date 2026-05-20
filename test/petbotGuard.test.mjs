@@ -9,6 +9,11 @@ import {
   runPetbotGuard,
   snapshotPetbotState,
 } from '../server/lib/petbotGuard.js'
+import {
+  classifyProduct,
+  detectCatalogRequest,
+  rankCatalogProducts,
+} from '../server/lib/petbotCatalog.js'
 
 const settings = { deliveryFee: 10 }
 
@@ -706,6 +711,210 @@ test('produto granel entende meio kg sem trocar categoria', () => {
   assert.equal(result.state.selectedProduct.quantity, 0.5)
   assert.match(result.reply, /0,5kg de GRANEL PREMIER/i)
   assert.doesNotMatch(result.reply, /antipulga|areia/i)
+})
+
+test('catalogo classifica granel e petisco sem misturar categoria', () => {
+  const bulk = classifyProduct(granelPremierDog)
+  const snack = classifyProduct(products.find((product) => product.id === 'petisco-dental'))
+  const request = detectCatalogRequest('quero racao a granel premier para cachorro adulto')
+  const ranked = rankCatalogProducts([products[1], granelPremierDog], {
+    productKind: 'food',
+    species: 'dog',
+    ageCategory: 'adulto',
+    size: 'pequeno',
+    packagePreference: 'granel',
+  }, 'quero racao a granel premier para cachorro adulto')
+
+  assert.equal(bulk.type, 'granel')
+  assert.equal(snack.type, 'petisco')
+  assert.equal(request.type, 'granel')
+  assert.equal(ranked[0].product.id, granelPremierDog.id)
+})
+
+test('catalogo prioriza produto por ean quando cliente informa codigo', () => {
+  const productByCode = {
+    id: 'premier-ean-15kg',
+    name: 'PREMIER FORMULA CAES ADULTO FRANGO RACAS PEQUENAS 15 KG',
+    category: 'Racao',
+    barcode: '7891234567890',
+    price: 304.5,
+    stock_quantity: 2,
+    active: true,
+  }
+  const similarProduct = {
+    id: 'premier-ean-1kg',
+    name: 'PREMIER FORMULA CAES ADULTO FRANGO RACAS PEQUENAS 1 KG',
+    category: 'Racao',
+    barcode: '1111111111111',
+    price: 58.5,
+    stock_quantity: 8,
+    active: true,
+  }
+
+  const ranked = rankCatalogProducts([similarProduct, productByCode], {
+    productKind: 'food',
+    species: 'dog',
+    ageCategory: 'adulto',
+    size: 'pequeno',
+  }, 'quero o codigo 7891234567890')
+
+  assert.equal(ranked[0].product.id, productByCode.id)
+})
+
+test('catalogo usa tokens como formula e embalagem para ordenar racao', () => {
+  const formula15kg = {
+    id: 'premier-formula-rp-15kg',
+    name: 'PREMIER FORMULA CAES ADULTO FRANGO RACAS PEQUENAS 15 KG',
+    category: 'Racao',
+    price: 304.5,
+    stock_quantity: 3,
+    active: true,
+  }
+  const lhasa1kg = {
+    id: 'premier-lhasa-1kg',
+    name: 'PREMIER RACAS ESPECIFICAS CAES ADULTO LHASA APSO 1 KG',
+    category: 'Racao',
+    price: 51.9,
+    stock_quantity: 5,
+    active: true,
+  }
+
+  const ranked = rankCatalogProducts([lhasa1kg, formula15kg], {
+    productKind: 'food',
+    species: 'dog',
+    ageCategory: 'adulto',
+    size: 'pequeno',
+    brand: 'premier',
+    packageKg: 15,
+  }, 'e pra shih tzu, formula saco 15kg')
+
+  assert.equal(ranked[0].product.id, formula15kg.id)
+})
+
+test('catalogo bloqueia alternativa fora de categoria quando pedido e racao', () => {
+  const ranked = rankCatalogProducts([
+    products.find((product) => product.id === 'petisco-dental'),
+    products.find((product) => product.id === 'bravecto-8kg'),
+    products.find((product) => product.id === 'areia-gato'),
+  ], {
+    productKind: 'food',
+    species: 'dog',
+    ageCategory: 'adulto',
+  }, 'quero racao para cachorro adulto')
+
+  assert.equal(ranked.length, 0)
+})
+
+test('produto granel recalcula subtotal quando cliente muda quantidade depois do resumo parcial', () => {
+  let context = {}
+  let result = turn(context, 'bom dia', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'Hugo, quero racao a granel para cachorro pequeno adulto', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'quero 2kg da premier', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'nao', { products: [granelPremierDog, ...products] })
+  context = result.context
+  assert.match(result.reply, /Total parcial: R\$ 43,00/i)
+
+  result = turn(context, 'na verdade quero 4kg', { products: [granelPremierDog, ...products] })
+
+  assert.equal(result.state.selectedProduct.quantity, 4)
+  assert.equal(result.state.totals.subtotal, 86)
+  assert.equal(result.state.totals.total, 86)
+  assert.match(result.reply, /Qual forma prefere/i)
+})
+
+test('produto granel com entrega salva total com quantidade e taxa', () => {
+  const { result } = runConversation([
+    'bom dia',
+    'Hugo, quero racao a granel para cachorro pequeno adulto',
+    'quero 2kg da premier',
+    'nao',
+    'pix',
+    'entrega',
+    'Rua A, 123, Centro, perto da padaria',
+    'sim',
+  ], { products: [granelPremierDog, ...products] })
+
+  assert.equal(result.shouldSaveOrder, true)
+  assert.equal(result.orderArgs.items[0].product_id, granelPremierDog.id)
+  assert.equal(result.orderArgs.items[0].quantity, 2)
+  assert.equal(result.orderArgs.delivery_fee, 10)
+  assert.equal(result.orderArgs.total, 53)
+})
+
+test('confirmacao simples antes do resumo final nao salva pedido', () => {
+  const state = getPetbotState({})
+  state.intent = 'produto'
+  state.customerName = 'Carlos'
+  state.nameConfirmed = true
+  state.species = 'dog'
+  state.size = 'pequeno'
+  state.ageCategory = 'adulto'
+  state.selectedProduct = {
+    product_id: granelPremierDog.id,
+    name: granelPremierDog.name,
+    category: granelPremierDog.category,
+    quantity: 1,
+    unit_price: granelPremierDog.price,
+    stock_quantity: granelPremierDog.stock_quantity,
+  }
+  state.upsell = { offered: true, resolved: true, accepted: false, declined: true, item: null }
+  state.partialSummaryShown = true
+  state.awaiting = 'payment'
+
+  const result = turn({ petbot: state }, 'sim', { products: [granelPremierDog, ...products] })
+
+  assert.notEqual(result.shouldSaveOrder, true)
+  assert.notEqual(result.action, 'confirmar_salvar')
+  assert.match(result.reply, /Qual forma prefere/i)
+})
+
+test('banho pede data antes de consultar agenda', () => {
+  let context = {}
+  let result = turn(context, 'oi', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Ana', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'quero banho para Toby shih tzu', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'sem observacao', { appointments: mixedAppointments })
+
+  assert.equal(result.action, 'pedir_dia_agendamento')
+  assert.equal(result.state.awaiting, 'service_date')
+  assert.match(result.reply, /qual dia/i)
+  assert.doesNotMatch(result.reply, /14:00|16:30|R\$/)
+})
+
+test('veterinaria recusa horario fora da agenda e mostra alternativa real', () => {
+  let context = {}
+  let result = turn(context, 'boa tarde', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Paula', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'preciso de veterinario para Luna gata espirrando', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, '16h', { appointments: mixedAppointments })
+
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.equal(result.state.selectedSlot, null)
+  assert.match(result.reply, /15:00/)
+  assert.doesNotMatch(result.reply, /Pedido em andamento/i)
+})
+
+test('bloqueio de marca sem estoque tambem registra motivo sem_estoque', () => {
+  let context = {}
+  let result = turn(context, 'Oi, tem racao pra shih tzu adulto?')
+  context = result.context
+  result = turn(context, 'Rodrigo')
+  context = result.context
+  result = turn(context, 'quero royal 15kg')
+
+  assert.match(result.state.blockedReasons.join(','), /marca_sem_estoque/)
+  assert.match(result.state.blockedReasons.join(','), /sem_estoque/)
 })
 
 test('produto ignora quantidade inventada pela LLM em recusa de upsell', () => {

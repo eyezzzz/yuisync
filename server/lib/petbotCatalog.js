@@ -73,6 +73,39 @@ const NEGATIVE_RATION_TERMS = [
   'tapete',
 ]
 
+const CATALOG_STOP_WORDS = new Set([
+  'quero',
+  'queria',
+  'pode',
+  'poderia',
+  'tem',
+  'tenho',
+  'uma',
+  'um',
+  'para',
+  'pra',
+  'pro',
+  'meu',
+  'minha',
+  'dele',
+  'dela',
+  'ele',
+  'ela',
+  'de',
+  'da',
+  'do',
+  'das',
+  'dos',
+  'kg',
+  'quilo',
+  'quilos',
+  'saco',
+  'pacote',
+  'fechado',
+  'racao',
+  'comida',
+])
+
 export function normalizeCatalogText(value = '') {
   return String(value ?? '')
     .trim()
@@ -84,6 +117,13 @@ export function normalizeCatalogText(value = '') {
 function hasAny(text, terms) {
   const normalized = normalizeCatalogText(text)
   return terms.some((term) => normalized.includes(normalizeCatalogText(term)))
+}
+
+function catalogTokens(text = '') {
+  return normalizeCatalogText(text)
+    .split(/[^a-z0-9]+/g)
+    .map((token) => token.trim())
+    .filter((token) => token.length >= 3 && !CATALOG_STOP_WORDS.has(token))
 }
 
 function productText(product = {}) {
@@ -242,9 +282,14 @@ function exactPackageScore(metadata, requestedKg) {
 
 function scoreMetadata(metadata, state = {}, message = '') {
   const request = detectCatalogRequest(message, state)
+  const requestText = normalizeCatalogText(message)
   let score = 0
 
   if (request.type && !allowedTypeForRequest(request.type, metadata)) return -999
+  if (metadata.barcode && requestText.includes(normalizeCatalogText(metadata.barcode))) score += 100
+  for (const token of catalogTokens(message)) {
+    if (metadata.searchable.includes(token)) score += token.length >= 5 ? 4 : 2
+  }
   if (state.species && metadata.species && metadata.species !== state.species) score -= 60
   if (state.species && metadata.species === state.species) score += 16
   if (state.ageCategory && metadata.age === state.ageCategory) score += 14
