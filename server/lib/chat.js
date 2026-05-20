@@ -15,6 +15,7 @@ import {
   interpretPetbotMessageWithLlm,
   redraftPetbotReplyWithLlm,
 } from './petbotAi.js'
+import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -556,6 +557,13 @@ function selectRelevantProducts(products, message) {
 
   if (!available.length) return []
 
+  const catalogRequest = detectCatalogRequest(message)
+  const catalogMatched = rankCatalogProducts(available, {}, message)
+    .filter((item) => item.score > 0)
+    .map((item) => item.product)
+  if (catalogMatched.length) return catalogMatched.slice(0, PRODUCT_CONTEXT_LIMIT)
+  if (catalogRequest.type) return []
+
   const matched = searchTerms.length
     ? available
       .map((product) => ({ product, score: rankProduct(product, searchTerms) }))
@@ -843,7 +851,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
-  const selectColumns = 'id, name, category, description, species_target, image_url, price, stock_quantity, active'
+  const selectColumns = 'id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active'
   const loadCatalog = () => cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
     let query = supabase
       .from('products')

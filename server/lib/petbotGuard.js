@@ -1,3 +1,10 @@
+import {
+  classifyProduct,
+  detectCatalogRequest,
+  isCatalogType,
+  rankCatalogProducts,
+} from './petbotCatalog.js'
+
 const DEFAULT_DELIVERY_FEE = 10
 
 const PETBOT_VERSION = 1
@@ -188,6 +195,24 @@ function isoFromBrazilianDate(day, month, year = '') {
 function hasAny(text, terms) {
   const lower = norm(text)
   return terms.some((term) => lower.includes(norm(term)))
+}
+
+function addBlockedReason(state, ...reasons) {
+  const aliases = {
+    estoque_ausente: 'sem_estoque',
+    marca_sem_estoque: 'sem_estoque',
+    embalagem_sem_estoque: 'sem_estoque',
+    estoque_insuficiente_quantidade: 'sem_estoque',
+    sem_horario_real: 'agenda_sem_horario',
+    erro_salvamento: 'salvamento_falhou',
+  }
+  const next = [...(state.blockedReasons || [])]
+  for (const reason of reasons.filter(Boolean)) {
+    next.push(reason)
+    if (aliases[reason]) next.push(aliases[reason])
+  }
+  state.blockedReasons = [...new Set(next)]
+  return state
 }
 
 function buildNamePrompt(message = '') {
@@ -567,11 +592,13 @@ function isLitterRequest(message = '') {
 }
 
 function isFoodProduct(product = {}) {
+  return isCatalogType(product, 'racao')
   const haystack = norm([product.name, product.category, product.description].join(' '))
   return /(racao|ração|granel|alimento|premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree)/.test(haystack)
 }
 
 function isRationProduct(product = {}) {
+  return isCatalogType(product, 'racao')
   const haystack = norm([product.name, product.category, product.description].join(' '))
   if (/(petisco|bifinho|sache|sachê|snack|filezitos|bites|dental|osso|ossinho|shampoo|antipulga|advocate|bravecto|nexgard|simparic|areia|higienica|higiênica)/.test(haystack)) {
     return false
@@ -884,6 +911,7 @@ function parseProductQuantity(message = '') {
 }
 
 function isBulkProduct(product = {}) {
+  return classifyProduct(product).isBulk
   const item = product || {}
   const haystack = norm([item.name, item.category].join(' '))
   return /\bgranel\b/.test(haystack) || /\ba granel\b/.test(haystack)
@@ -893,6 +921,7 @@ function parseBulkKgQuantity(message = '', product = null) {
   const lower = norm(message)
   if (!isBulkProduct(product) && !/\bgranel\b/.test(lower)) return null
   if (/(saco|pacote|fechado|embalagem)/.test(lower) && !/\bgranel\b/.test(lower)) return null
+  if (/\b(meio|meia)\s*(?:kg|quilo|quilos)\b/.test(lower)) return 0.5
   const match = lower.match(/\b(\d{1,2}(?:[,.]\d{1,2})?)\s*(?:kg|quilo|quilos)\b/)
   const wordMatch = lower.match(/\b(um|uma|dois|duas|tres|três|quatro|cinco)\s*(?:kg|quilo|quilos)\b/)
   const wordNumbers = { um: 1, uma: 1, dois: 2, duas: 2, tres: 3, três: 3, quatro: 4, cinco: 5 }
@@ -908,6 +937,7 @@ function parseSelectedProductQuantity(message = '', product = null) {
 
 function hasProductQuantitySignal(message = '') {
   const lower = norm(message)
+  if (/\b(meio|meia)\s*(?:kg|quilo|quilos)\b/.test(lower)) return true
   return /\b\d{1,2}(?:[,.]\d{1,2})?\s*(?:kg|quilo|quilos|sacos?|pacotes?|unidades?|unid)\b/.test(lower)
     || /\b(?:um|uma|dois|duas|tres|três|quatro|cinco)\s*(?:kg|quilo|quilos|sacos?|pacotes?|unidades?)\b/.test(lower)
 }
@@ -1007,10 +1037,14 @@ function missingAddressFields(state) {
 
 function productSnapshot(product, upsell = false) {
   if (!product) return null
+  const catalog = classifyProduct(product)
   return {
     product_id: clean(product.id),
     name: clean(product.name),
     category: clean(product.category),
+    catalog_type: catalog.type,
+    package_kg: catalog.packageKg,
+    is_bulk: Boolean(catalog.isBulk),
     image_url: clean(product.image_url),
     quantity: 1,
     unit_price: Number(product.price || 0),
@@ -1287,6 +1321,12 @@ function scoreProduct(product, state, message) {
 }
 
 function rankProducts(products, state, message) {
+  const catalogRequest = detectCatalogRequest(message, state)
+  const ranked = rankCatalogProducts(products, state, message)
+    .filter((item) => hasEnoughStockForState(item.product, state))
+    .map((item) => ({ product: item.product, score: item.score, metadata: item.metadata }))
+  if (ranked.length) return ranked
+  if (catalogRequest.type) return []
   const foodRequest = isFoodPreferenceContext(message, state)
   const rationRequest = isRationRequest(message, state)
   return availableProducts(products)
@@ -1301,7 +1341,17 @@ function chooseProductFromOptions(state, message) {
   const options = state.productOptions || []
   if (!options.length) return null
   const lower = norm(message)
-  if (options.length === 1 && isAffirmative(message)) return options[0]
+  if (options.length === 1 && isAffirmative(message)) {
+    if (hasProductQuantitySignal(message)) {
+      const optionText = norm([options[0].name, options[0].category].join(' '))
+      const identityTerms = tokenizeForScore(message)
+        .filter((term) => !CHOICE_STOP_WORDS.has(term))
+        .filter((term) => !/^\d+$/.test(term))
+        .filter((term) => !['kg', 'quilo', 'quilos', 'meio', 'meia'].includes(term))
+      if (!identityTerms.some((term) => optionText.includes(term))) return null
+    }
+    return options[0]
+  }
   const ordinal = lower.match(/\b(primeir[ao]|1|segunda|segund[ao]|2|terceir[ao]|3)\b/)
   if (ordinal) {
     if (['primeira', 'primeiro', '1'].includes(ordinal[1])) return options[0]
@@ -1322,7 +1372,7 @@ function selectProductFromChoice(state, product, message) {
   if (Number.isFinite(requestedQuantity)
     && requestedQuantity > 0
     && Number(product.stock_quantity || 0) < requestedQuantity) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'estoque_insuficiente_quantidade'])]
+    addBlockedReason(state, 'estoque_insuficiente_quantidade')
     state.selectedProduct = null
     state.productOptions = []
     return false
@@ -2036,7 +2086,7 @@ function guardResult(reply, state, extra = {}) {
 function ask(reply, state, awaiting, reason) {
   state.awaiting = awaiting
   state.lastQuestion = awaiting
-  if (reason) state.blockedReasons = [...new Set([...(state.blockedReasons || []), reason])]
+  if (reason) addBlockedReason(state, reason)
   return guardResult(reply, state)
 }
 
@@ -2048,19 +2098,19 @@ function presentProducts(state, products, message) {
   state.awaiting = 'product_choice'
 
   if (!state.productOptions.length) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'estoque_ausente'])]
+    addBlockedReason(state, 'estoque_ausente')
     return guardResult('Consultei aqui e não encontrei produto disponível com esses dados. Quer que eu chame alguém da equipe para te ajudar?', state, { action: 'sem_estoque' })
   }
 
   const hasRequestedBrand = Boolean(state.brand)
   const hasBrandMatch = !hasRequestedBrand || state.productOptions.some((product) => norm(product.name).includes(norm(state.brand)))
   if (hasRequestedBrand && !hasBrandMatch) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'marca_sem_estoque'])]
+    addBlockedReason(state, 'marca_sem_estoque')
   }
   const hasRequestedPackage = Boolean(state.packageKg)
   const hasPackageMatch = !hasRequestedPackage || state.productOptions.some((product) => productPackageMatches(product, state.packageKg))
   if (hasRequestedPackage && !hasPackageMatch) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'embalagem_sem_estoque'])]
+    addBlockedReason(state, 'embalagem_sem_estoque')
   }
   const intro = strong.length && hasBrandMatch && hasPackageMatch
     ? 'Consultei o estoque e tenho essas opções:'
@@ -2079,7 +2129,7 @@ function sendProductImage(state) {
   }
 
   if (!imageUrl) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'foto_produto_ausente'])]
+    addBlockedReason(state, 'foto_produto_ausente')
     return guardResult(`Ainda não tenho foto aprovada da ${product.name} no cadastro. Posso seguir com as informações do produto?`, state, { action: 'foto_produto_ausente' })
   }
 
@@ -2124,7 +2174,7 @@ function presentSlots(state, appointments) {
   state.awaiting = 'slot_choice'
 
   if (!state.slotOptions.length) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'sem_horario_real'])]
+    addBlockedReason(state, 'sem_horario_real')
     return guardResult('Consultei a agenda e não achei horário disponível agora. Quer que eu chame a equipe para ver outros horários?', state, { action: 'sem_horario' })
   }
 
@@ -2176,7 +2226,7 @@ function serviceFlow(state, message, appointments, settings) {
 
   if (!state.selectedSlot) return presentSlots(state, appointments)
   if (Number(state.selectedSlot.price || 0) <= 0) {
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'preco_servico_ausente'])]
+    addBlockedReason(state, 'preco_servico_ausente')
     return guardResult('Tenho esse horário, mas o valor não está confirmado no sistema. Vou chamar a equipe para fechar certinho.', state, { needsHuman: true, action: 'handoff_humano' })
   }
 
@@ -2379,7 +2429,7 @@ function wantsContinueWithoutDiscount(message = '') {
 function handoffToHuman(state, reply, reason) {
   state.status = 'human_requested'
   state.awaiting = 'human'
-  state.blockedReasons = [...new Set([...(state.blockedReasons || []), reason])]
+  addBlockedReason(state, reason)
   return guardResult(reply, state, { needsHuman: true, action: 'handoff_humano' })
 }
 
@@ -2435,7 +2485,7 @@ export function runPetbotGuard({
   if (state.finalSummaryShown && !state.saved && (interpretation?.negation || isNegative(trimmed))) {
     state.status = 'cancelado'
     state.awaiting = ''
-    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'confirmacao_recusada'])]
+    addBlockedReason(state, 'confirmacao_recusada')
     return guardResult('Tudo bem, não vou finalizar esse pedido. Se quiser alterar algo, me diga o que prefere.', state, { action: 'cancelar' })
   }
 
@@ -2486,7 +2536,7 @@ export function markPetbotOrderSaved(state, result = {}) {
 export function markPetbotOrderError(state, error) {
   const next = getPetbotState({ petbot: state })
   next.status = 'error'
-  next.blockedReasons = [...new Set([...(next.blockedReasons || []), 'erro_salvamento'])]
+  addBlockedReason(next, 'erro_salvamento')
   next.lastError = error instanceof Error ? error.message : clean(error)
   return next
 }

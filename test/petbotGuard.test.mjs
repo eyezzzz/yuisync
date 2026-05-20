@@ -693,6 +693,21 @@ test('produto mantem quantidade granel pendente quando cliente escolhe por numer
   assert.match(result.reply, /Total parcial: R\$ 64,50/i)
 })
 
+test('produto granel entende meio kg sem trocar categoria', () => {
+  let context = {}
+  let result = turn(context, 'bom dia', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'Denise, quero racao a granel para cachorro pequeno adulto', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'quero meio kg da premier', { products: [granelPremierDog, ...products] })
+
+  assert.equal(result.action, 'oferecer_upsell')
+  assert.equal(result.state.selectedProduct.product_id, granelPremierDog.id)
+  assert.equal(result.state.selectedProduct.quantity, 0.5)
+  assert.match(result.reply, /0,5kg de GRANEL PREMIER/i)
+  assert.doesNotMatch(result.reply, /antipulga|areia/i)
+})
+
 test('produto ignora quantidade inventada pela LLM em recusa de upsell', () => {
   let context = {}
   let result = turn(context, 'bom dia', { products: [granelPremierDog, ...products] })

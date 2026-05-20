@@ -161,7 +161,7 @@ export default function DashboardPage({ setPage }) {
 
   const [critical, setCritical]     = useState([])
   const [stats, setStats]           = useState({ revenue: 0, count: 0, upsells: 0, salesMix: [] })
-  const [chatQuality, setChatQuality] = useState({ avgCsat: null, csatCount: 0, aiResolved: 0, humanResolved: 0, closedCount: 0 })
+  const [chatQuality, setChatQuality] = useState({ avgCsat: null, csatCount: 0, aiResolved: 0, humanResolved: 0, closedCount: 0, blockedReasons: {} })
   const [loading, setLoading]       = useState(true)
   const [showResetModal, setShowResetModal] = useState(false)
   const [isWiping, setIsWiping]     = useState(false)
@@ -226,6 +226,10 @@ export default function DashboardPage({ setPage }) {
         savedHours: AI_HOURS_SAVED_MOCK.savedHours,
         series: AI_HOURS_SAVED_SERIES,
       }
+  const topBlockedReasons = Object.entries(chatQuality.blockedReasons || {})
+    .sort((a, b) => Number(b[1]) - Number(a[1]))
+    .slice(0, 3)
+  const blockedTotal = topBlockedReasons.reduce((sum, [, count]) => sum + Number(count || 0), 0)
 
   const now = new Date()
   const hour = now.getHours()
@@ -312,6 +316,15 @@ export default function DashboardPage({ setPage }) {
             label="Resolucao Chat"
             value={`${chatQuality.aiResolved}/${chatQuality.humanResolved}`}
             sub={`IA / humano em ${chatQuality.closedCount} encerrado${chatQuality.closedCount !== 1 ? 's' : ''}`}
+            onClick={() => setPage('chat')}
+          />
+        </div>
+        <div className="xl:col-span-4 h-full">
+          <KpiCard
+            accent="red" icon={AlertTriangle}
+            label="Alertas PetBot"
+            value={blockedTotal}
+            sub={topBlockedReasons.length ? topBlockedReasons.map(([reason, count]) => `${reason}: ${count}`).join(' • ') : 'Sem bloqueios recentes'}
             onClick={() => setPage('chat')}
           />
         </div>

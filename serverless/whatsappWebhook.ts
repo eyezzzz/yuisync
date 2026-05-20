@@ -17,6 +17,8 @@ import {
   interpretPetbotMessageWithLlm,
   redraftPetbotReplyWithLlm,
 } from '../server/lib/petbotAi.js'
+// @ts-ignore Shared catalog helper is authored as ESM JavaScript for the Node API too.
+import { detectCatalogRequest, rankCatalogProducts } from '../server/lib/petbotCatalog.js'
 
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_MODEL = 'gpt-4o-mini'
@@ -1178,6 +1180,13 @@ function selectRelevantProducts(products: LooseRecord[] | null | undefined, late
 
   if (!available.length) return []
 
+  const catalogRequest = detectCatalogRequest(latestUserMessage)
+  const catalogMatched = rankCatalogProducts(available, {}, latestUserMessage)
+    .filter((item: LooseRecord) => Number(item.score || 0) > 0)
+    .map((item: LooseRecord) => item.product)
+  if (catalogMatched.length) return catalogMatched.slice(0, PRODUCT_CONTEXT_LIMIT)
+  if (catalogRequest.type) return []
+
   const matched = terms.length
     ? available
       .map((product) => ({ product, score: rankProduct(product, terms) }))
@@ -1247,7 +1256,7 @@ async function searchProductsByTerms(
 
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
+    .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active')
     .eq('tenant_id', session.tenant_id)
     .eq('module_id', session.module_id)
     .eq('active', true)
@@ -1265,7 +1274,7 @@ async function loadUpsellProducts(
 ): Promise<LooseRecord[]> {
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
+    .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active')
     .eq('tenant_id', session.tenant_id)
     .eq('module_id', session.module_id)
     .eq('active', true)
@@ -2063,7 +2072,7 @@ async function loadStoreContext(
     terms.length > 0 ? Promise.resolve([]) : cachedLoad(productCatalogCache, cacheKey, PRODUCT_CATALOG_CACHE_MS, async () => {
       const { data, error } = await supabase
         .from('products')
-          .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
+          .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active')
         .eq('tenant_id', session.tenant_id)
         .eq('module_id', session.module_id)
         .eq('active', true)
@@ -2111,7 +2120,7 @@ async function loadStoreContext(
     const catalog = await cachedLoad(productCatalogCache, cacheKey, PRODUCT_CATALOG_CACHE_MS, async () => {
       const { data, error } = await supabase
         .from('products')
-        .select('id, name, category, description, species_target, image_url, price, stock_quantity, active')
+        .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active')
         .eq('tenant_id', session.tenant_id)
         .eq('module_id', session.module_id)
         .eq('active', true)

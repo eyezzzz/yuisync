@@ -207,6 +207,7 @@ export function useAnalytics() {
         aiResolved: 0,
         humanResolved: 0,
         closedCount: 0,
+        blockedReasons: {},
       }
     }
 
@@ -233,21 +234,30 @@ export function useAnalytics() {
           aiResolved: 0,
           humanResolved: 0,
           closedCount: 0,
+          blockedReasons: {},
         }
       }
 
       const messagesResponse = await supabase
         .from('chat_messages')
-        .select('session_id, role')
+        .select('session_id, role, metadata')
         .in('session_id', sessionIds)
 
       if (messagesResponse.error) throw messagesResponse.error
 
       const humanHandled = new Set()
       const assistantHandled = new Set()
+      const blockedReasons = {}
       for (const message of messagesResponse.data || []) {
         if (message.role === 'human_agent') humanHandled.add(message.session_id)
         if (message.role === 'assistant') assistantHandled.add(message.session_id)
+        const reasons = message.metadata?.petbot_guard?.blocked_reasons
+        if (Array.isArray(reasons)) {
+          reasons.forEach((reason) => {
+            const key = String(reason || '').trim()
+            if (key) blockedReasons[key] = (blockedReasons[key] || 0) + 1
+          })
+        }
       }
 
       const closedSessions = sessions.filter((session) => (
@@ -263,6 +273,7 @@ export function useAnalytics() {
         aiResolved: closedSessions.filter((session) => assistantHandled.has(session.id) && !humanHandled.has(session.id)).length,
         humanResolved: closedSessions.filter((session) => humanHandled.has(session.id)).length,
         closedCount: closedSessions.length,
+        blockedReasons,
       }
     } catch (e) {
       console.error(e)
@@ -272,6 +283,7 @@ export function useAnalytics() {
         aiResolved: 0,
         humanResolved: 0,
         closedCount: 0,
+        blockedReasons: {},
       }
     }
   }, [activeModuleId, activeTenantId])
