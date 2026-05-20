@@ -73,6 +73,11 @@ declare
   v_client_id uuid := nullif(p_payload->>'client_id', '')::uuid;
   v_customer_name text := coalesce(nullif(trim(p_payload->>'customer_name'), ''), 'Cliente');
   v_customer_phone text := nullif(trim(p_payload->>'customer_phone'), '');
+  v_pet_id uuid;
+  v_pet_name text := coalesce(nullif(trim(p_payload->>'pet_name'), ''), 'Pet');
+  v_pet_species text := coalesce(nullif(trim(p_payload->>'species'), ''), 'dog');
+  v_pet_breed text := nullif(trim(p_payload->>'breed'), '');
+  v_pet_size text := nullif(trim(p_payload->>'size'), '');
   v_order_type text := coalesce(nullif(trim(p_payload->>'order_type'), ''), 'produto');
   v_payment_method text := nullif(trim(p_payload->>'payment_method'), '');
   v_fulfillment_type text := nullif(trim(p_payload->>'fulfillment_type'), '');
@@ -196,6 +201,44 @@ begin
       ));
     end loop;
   else
+    if v_pet_species not in ('dog', 'cat', 'bird', 'rabbit', 'fish', 'other') then
+      v_pet_species := case
+        when lower(v_pet_species) in ('cachorro', 'cao', 'cão') then 'dog'
+        when lower(v_pet_species) in ('gato', 'gata') then 'cat'
+        else 'other'
+      end;
+    end if;
+
+    select id
+      into v_pet_id
+    from public.pets
+    where module_id = v_module_id
+      and phone = coalesce(v_customer_phone, '')
+      and lower(pet_name) = lower(v_pet_name)
+    order by updated_at desc nulls last, created_at desc nulls last
+    limit 1;
+
+    if v_pet_id is null then
+      insert into public.pets (
+        owner_name, phone, pet_name, species, breed, notes, module_id, updated_at
+      )
+      values (
+        v_customer_name,
+        coalesce(v_customer_phone, 'sem telefone'),
+        v_pet_name,
+        v_pet_species,
+        v_pet_breed,
+        array_to_string(array_remove(array[
+          case when v_pet_size is not null then 'Porte/tamanho: ' || v_pet_size end,
+          case when nullif(trim(p_payload->>'symptom'), '') is not null then 'Sintoma: ' || nullif(trim(p_payload->>'symptom'), '') end,
+          'Cadastro automatico PetBot'
+        ], null), ' | '),
+        v_module_id,
+        now()
+      )
+      returning id into v_pet_id;
+    end if;
+
     v_appointment_id := nullif(p_payload->>'appointment_id', '')::uuid;
     v_service_duration := greatest(15, coalesce(nullif(p_payload->>'duration_min', '')::integer, nullif(v_items->0->>'duration_min', '')::integer, 60));
 
@@ -261,6 +304,17 @@ begin
       v_subtotal := v_appointment.price;
     end if;
 
+    v_service_type := case
+      when lower(coalesce(v_service_type, '')) like '%vacina%' then 'vacina'
+      when v_order_type = 'veterinaria'
+        or lower(coalesce(v_service_type, '')) like '%consulta%'
+        or lower(coalesce(v_service_type, '')) like '%vet%' then 'consulta'
+      when lower(coalesce(v_service_type, '')) like '%banho%' and lower(coalesce(v_service_type, '')) like '%tosa%' then 'banho_e_tosa'
+      when lower(coalesce(v_service_type, '')) like '%tosa%' then 'tosa'
+      when lower(coalesce(v_service_type, '')) like '%banho%' then 'banho'
+      else 'outro'
+    end;
+
     v_resolved_items := jsonb_build_array(jsonb_build_object(
       'product_id', null,
       'name', v_service_type,
@@ -316,22 +370,22 @@ begin
   )
   returning id into v_sale_id;
 
-  for v_item in select * from jsonb_array_elements(v_resolved_items)
-  loop
-    v_product_id := nullif(v_item->>'product_id', '')::uuid;
-    v_quantity := (v_item->>'quantity')::numeric;
-    v_unit_price := (v_item->>'unit_price')::numeric;
-    v_line_subtotal := (v_item->>'subtotal')::numeric;
+  if v_order_type = 'produto' then
+    for v_item in select * from jsonb_array_elements(v_resolved_items)
+    loop
+      v_product_id := nullif(v_item->>'product_id', '')::uuid;
+      v_quantity := (v_item->>'quantity')::numeric;
+      v_unit_price := (v_item->>'unit_price')::numeric;
+      v_line_subtotal := (v_item->>'subtotal')::numeric;
 
-    insert into public.sale_items (
-      tenant_id, sale_id, product_id, quantity, unit_price, subtotal, upsell
-    )
-    values (
-      v_tenant_id, v_sale_id, v_product_id, v_quantity, v_unit_price, v_line_subtotal,
-      coalesce((v_item->>'upsell')::boolean, false)
-    );
+      insert into public.sale_items (
+        tenant_id, sale_id, product_id, quantity, unit_price, subtotal, upsell
+      )
+      values (
+        v_tenant_id, v_sale_id, v_product_id, v_quantity, v_unit_price, v_line_subtotal,
+        coalesce((v_item->>'upsell')::boolean, false)
+      );
 
-    if v_product_id is not null then
       update public.products
       set stock_quantity = stock_quantity - v_quantity,
           updated_at = now()
@@ -343,13 +397,14 @@ begin
       if not found then
         raise exception 'Estoque insuficiente ao baixar produto.';
       end if;
-    end if;
-  end loop;
+    end loop;
+  end if;
 
   if v_order_type <> 'produto' then
     if v_appointment_id is not null then
       update public.appointments
       set client_id = v_client_id,
+          pet_id = v_pet_id,
           service_type = v_service_type,
           duration_min = coalesce(duration_min, v_service_duration, 60),
           price = v_total,
@@ -363,11 +418,11 @@ begin
       where id = v_appointment_id;
     else
       insert into public.appointments (
-        tenant_id, module_id, client_id, service_type, scheduled_at, service_date, start_time, end_time, duration_min,
+        tenant_id, module_id, client_id, pet_id, service_type, scheduled_at, service_date, start_time, end_time, duration_min,
         price, status, source, customer_name, customer_phone, description, notes
       )
       values (
-        v_tenant_id, v_module_id, v_client_id, v_service_type, v_scheduled_for,
+        v_tenant_id, v_module_id, v_client_id, v_pet_id, v_service_type, v_scheduled_for,
         (v_scheduled_for at time zone 'America/Sao_Paulo')::date,
         (v_scheduled_for at time zone 'America/Sao_Paulo')::time,
         ((v_scheduled_for + make_interval(mins => v_service_duration)) at time zone 'America/Sao_Paulo')::time,

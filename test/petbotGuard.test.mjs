@@ -641,6 +641,58 @@ test('produto granel entende kg como quantidade e recalcula total', () => {
   assert.doesNotMatch(result.reply, /vamos prosseguir/i)
 })
 
+test('produto mantem granel quando cliente informa kg como quantidade antes da escolha', () => {
+  const premierClinical2kg = {
+    id: 'premier-clinical-2kg',
+    name: 'PREMIER NUTRICAO CLINICA CAES RENAL 2 KG',
+    category: 'Racao',
+    price: 113,
+    stock_quantity: 5,
+    active: true,
+  }
+  let context = {}
+  let result = turn(context, 'boa tarde', { products: [granelPremierDog, premierClinical2kg, ...products] })
+  context = result.context
+  result = turn(context, 'Renato, quero racao a granel para cachorro pequeno adulto', { products: [granelPremierDog, premierClinical2kg, ...products] })
+  context = result.context
+  assert.equal(result.action, 'oferecer_produtos')
+
+  result = turn(context, 'Premier, quero 2kg', { products: [granelPremierDog, premierClinical2kg, ...products] })
+  context = result.context
+  assert.equal(result.action, 'oferecer_upsell')
+  assert.equal(result.state.selectedProduct.product_id, granelPremierDog.id)
+  assert.equal(result.state.selectedProduct.quantity, 2)
+  assert.match(result.reply, /2kg de GRANEL PREMIER/i)
+  assert.doesNotMatch(result.reply, /CLINICA/i)
+})
+
+test('produto mantem quantidade granel pendente quando cliente escolhe por numero depois', () => {
+  let context = {}
+  let result = turn(context, 'bom dia', { products: [granelPremierDog, ...products] })
+  context = result.context
+  result = turn(context, 'Denise, quero racao a granel para cachorro pequeno adulto', { products: [granelPremierDog, ...products] })
+  context = result.context
+  assert.equal(result.action, 'oferecer_produtos')
+
+  result = turn(context, 'quero 3kg', {
+    products: [granelPremierDog, ...products],
+    interpretation: { package_preference: '3kg' },
+  })
+  context = result.context
+  assert.equal(result.state.pendingQuantity, 3)
+  assert.equal(result.state.packagePreference, 'granel')
+
+  result = turn(context, '1', { products: [granelPremierDog, ...products] })
+  context = result.context
+  assert.equal(result.action, 'oferecer_upsell')
+  assert.equal(result.state.selectedProduct.product_id, granelPremierDog.id)
+  assert.equal(result.state.selectedProduct.quantity, 3)
+  assert.match(result.reply, /3kg de GRANEL PREMIER/i)
+
+  result = turn(context, 'nao', { products: [granelPremierDog, ...products] })
+  assert.match(result.reply, /Total parcial: R\$ 64,50/i)
+})
+
 test('redraft ruim nao remove pergunta obrigatoria de entrega/retirada', () => {
   const result = runPetbotGuard({
     message: 'troco pra 50',
@@ -923,6 +975,78 @@ test('agenda operacional aceita preferencia de meia hora', () => {
   result = turn(context, 'sim', { appointments: [] })
   assert.equal(result.state.selectedSlot.virtual, true)
   assert.match(result.state.selectedSlot.scheduled_at, /16:30/)
+})
+
+test('agenda com unico horario aceita pagamento como escolha implicita', () => {
+  let context = {}
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Roberta', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Toby shih tzu', { appointments: [] })
+  context = result.context
+  result = turn(context, 'sem perfume', { appointments: [] })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: [] })
+  context = result.context
+  result = turn(context, '08:00', { appointments: [] })
+  context = result.context
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.match(result.reply, /08:00/)
+
+  result = turn(context, 'pix', { appointments: [] })
+  assert.equal(result.state.selectedSlot.virtual, true)
+  assert.match(result.state.selectedSlot.scheduled_at, /08:00/)
+  assert.match(result.reply, /Confirma o agendamento/i)
+})
+
+test('agenda ignora horario repetido pela LLM quando cliente responde pagamento', () => {
+  let context = {}
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Roberta', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Toby shih tzu', { appointments: [] })
+  context = result.context
+  result = turn(context, 'sem perfume', { appointments: [] })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: [] })
+  context = result.context
+  result = turn(context, '08:00', { appointments: [] })
+  context = result.context
+
+  result = turn(context, 'pix', {
+    appointments: [],
+    interpretation: {
+      intent: 'banho_tosa',
+      payment_method: 'pix',
+      service_date: appointmentDate,
+      service_time_preference: 'specific',
+      service_preferred_time: '08:00',
+    },
+  })
+
+  assert.equal(result.action, 'resumo_final')
+  assert.match(result.reply, /Confirma o agendamento/i)
+  assert.match(result.state.selectedSlot.scheduled_at, /08:00/)
+})
+
+test('agenda com unico horario aceita confirmacao como escolha implicita', () => {
+  let context = {}
+  let result = turn(context, 'quero veterinario para Totto cachorro pequeno com coceira', { appointments: [] })
+  context = result.context
+  result = turn(context, 'Fernanda', { appointments: [] })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: [] })
+  context = result.context
+  result = turn(context, '10:00', { appointments: [] })
+  context = result.context
+  assert.equal(result.action, 'oferecer_horarios')
+  assert.match(result.reply, /10:00/)
+
+  result = turn(context, 'sim', { appointments: [] })
+  assert.equal(result.state.selectedSlot.virtual, true)
+  assert.match(result.reply, /Pedido em andamento/i)
 })
 
 test('agenda operacional bloqueia horarios sobrepostos a ocupados', () => {

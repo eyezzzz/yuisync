@@ -866,6 +866,13 @@ function parseSelectedProductQuantity(message = '', product = null) {
   return parseBulkKgQuantity(message, product) || parseProductQuantity(message)
 }
 
+function shouldTreatKgAsBulkQuantity(message = '', state = {}) {
+  const lower = norm(message)
+  return state.packagePreference === 'granel'
+    && requestedPackageKgFromMessage(message)
+    && !/(saco|pacote|fechado|embalagem)/.test(lower)
+}
+
 function isCriticalVeterinaryMessage(message = '') {
   const lower = norm(message)
   if (hasAny(lower, CRITICAL_URGENCY_HINTS)) return true
@@ -1013,6 +1020,14 @@ function isPlausibleAddressDetail(value = '') {
   return !/(^ola$|bom dia|boa tarde|boa noite|racao|ração|premier|golden|shih|tzu|produto|banho|veterin|pix|cartao|cartão|dinheiro|entrega|retirada)/.test(lower)
 }
 
+function hasServiceDateSignal(message = '') {
+  return Boolean(parseServiceDatePreference(message))
+}
+
+function hasServiceTimeSignal(message = '') {
+  return Boolean(parseServiceTimePreference(message))
+}
+
 function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
   if (!facts || typeof facts !== 'object') return
 
@@ -1068,10 +1083,20 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
   const packagePreference = clean(facts.package_preference || facts.packagePreference)
   const packageKg = Number(facts.package_kg ?? facts.packageKg)
   if ((packagePreference || Number.isFinite(packageKg)) && state.intent === 'produto') {
-    state.packagePreference = packagePreference || `${packageKg}kg`
-    state.packageKg = Number.isFinite(packageKg) ? packageKg : null
-    state.packagePreferenceAny = false
-    state.packagePreferenceAsked = true
+    const kgFromMessage = requestedPackageKgFromMessage(currentMessage)
+    const kgCandidate = Number.isFinite(packageKg) ? packageKg : kgFromMessage
+    if (Number.isFinite(kgCandidate) && shouldTreatKgAsBulkQuantity(currentMessage, state)) {
+      state.pendingQuantity = kgCandidate
+      state.packagePreference = 'granel'
+      state.packageKg = null
+      state.packagePreferenceAny = false
+      state.packagePreferenceAsked = true
+    } else {
+      state.packagePreference = packagePreference || `${packageKg}kg`
+      state.packageKg = Number.isFinite(packageKg) ? packageKg : null
+      state.packagePreferenceAny = false
+      state.packagePreferenceAsked = true
+    }
   }
 
   const quantity = Number(facts.quantity)
@@ -1092,11 +1117,15 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
   }
 
   const serviceDate = clean(facts.service_date || facts.serviceDate || facts.appointment_date || facts.appointmentDate || facts.preferred_date || facts.preferredDate)
-  if (serviceDate && ['banho_tosa', 'veterinaria'].includes(state.intent)) {
+  if (serviceDate
+    && ['banho_tosa', 'veterinaria'].includes(state.intent)
+    && (state.awaiting === 'service_date' || hasServiceDateSignal(currentMessage))) {
     applyServiceSchedulePreference(state, serviceDate)
   }
   const serviceTimePreference = clean(facts.service_time_preference || facts.serviceTimePreference || facts.time_preference || facts.timePreference || facts.preferred_time || facts.preferredTime)
-  if (serviceTimePreference && ['banho_tosa', 'veterinaria'].includes(state.intent)) {
+  if (serviceTimePreference
+    && ['banho_tosa', 'veterinaria'].includes(state.intent)
+    && (state.awaiting === 'service_time_preference' || hasServiceTimeSignal(currentMessage))) {
     applyServiceSchedulePreference(state, serviceTimePreference)
   }
 
@@ -1169,7 +1198,7 @@ function scoreProduct(product, state, message) {
   const wantsFlea = isFleaRequest(message)
   const wantsLitter = isLitterRequest(message)
   const weightKg = requestedWeightKgFromMessage(message)
-  const packageKg = requestedPackageKgFromMessage(message) || state.packageKg
+  const packageKg = shouldTreatKgAsBulkQuantity(message, state) ? state.packageKg : requestedPackageKgFromMessage(message) || state.packageKg
   const wantsFood = isFoodRequest(message, state) || state.productKind === 'food' || Boolean(packageKg && state.intent === 'produto')
   if (state.species === 'dog' && isCatProductText(haystack)) score -= 45
   if (state.species === 'cat' && isDogProductText(haystack)) score -= 45
@@ -1428,7 +1457,10 @@ function chooseSlotFromOptions(state, message) {
   const options = state.slotOptions || []
   if (!options.length) return null
   const lower = norm(message)
-  if (options.length === 1 && isAffirmative(message)) return options[0]
+  const progressingWithOnlyOption = options.length === 1
+    && (isAffirmative(message) || detectPayment(message) || /confirm|pode|fechar|fecha|ok|beleza|seguir/.test(lower))
+    && !isNegative(message)
+  if (progressingWithOnlyOption) return options[0]
   const ordinal = lower.match(/\b(primeir[ao]|1|segunda|segund[ao]|2|terceir[ao]|3)\b/)
   if (ordinal) {
     if (['primeira', 'primeiro', '1'].includes(ordinal[1])) return options[0]
@@ -1657,10 +1689,18 @@ function applyMessageFacts(state, message) {
 
   const packagePreference = inferPackagePreference(message)
   if (packagePreference) {
-    state.packagePreference = packagePreference.packagePreference
-    state.packageKg = packagePreference.packageKg
-    state.packagePreferenceAny = Boolean(packagePreference.any)
-    state.packagePreferenceAsked = true
+    if (shouldTreatKgAsBulkQuantity(message, state)) {
+      state.pendingQuantity = packagePreference.packageKg
+      state.packagePreference = 'granel'
+      state.packageKg = null
+      state.packagePreferenceAny = false
+      state.packagePreferenceAsked = true
+    } else {
+      state.packagePreference = packagePreference.packagePreference
+      state.packageKg = packagePreference.packageKg
+      state.packagePreferenceAny = Boolean(packagePreference.any)
+      state.packagePreferenceAsked = true
+    }
   } else if (state.awaiting === 'food_preferences' && (hasNoBrandPreference(message) || isNegative(message))) {
     state.packagePreferenceAny = true
     state.packagePreferenceAsked = true

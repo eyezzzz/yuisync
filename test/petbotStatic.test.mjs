@@ -26,6 +26,13 @@ test('pedido PetBot usa RPC transacional no backend local e serverless', () => {
   assert.match(localChat, /createConfirmedPetshopOrderViaRpc/)
   assert.match(webhook, /createConfirmedPetshopOrderViaRpc/)
   assert.match(migration, /create_petbot_order_transaction/)
+  assert.match(migration, /if v_order_type = 'produto' then[\s\S]*insert into public\.sale_items/)
+  assert.match(localChat, /pet_name: cleanText\(args\.pet_name\)/)
+  assert.match(webhook, /pet_name: clean\(args\.pet_name\)/)
+  assert.match(migration, /insert into public\.pets/)
+  assert.match(migration, /pet_id = v_pet_id/)
+  assert.match(migration, /then 'banho_e_tosa'/)
+  assert.match(migration, /then 'consulta'/)
 })
 
 test('resposta do PetBot so e salva depois do estado da sessao persistir', () => {
