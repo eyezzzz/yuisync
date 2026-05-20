@@ -546,6 +546,14 @@ function isFoodRequest(message = '', state = {}) {
   return hasAny([message, state.brand, state.selectedProduct?.name].filter(Boolean).join(' '), FOOD_HINTS)
 }
 
+function isFoodPreferenceContext(message = '', state = {}) {
+  return isFoodRequest(message, state)
+    || state.productKind === 'food'
+    || state.packagePreference === 'granel'
+    || Boolean(state.packageKg)
+    || state.awaiting === 'food_preferences'
+}
+
 function isFleaRequest(message = '') {
   return hasAny(message, FLEA_HINTS)
 }
@@ -556,6 +564,28 @@ function isSpecificNonFoodProductRequest(message = '') {
 
 function isLitterRequest(message = '') {
   return hasAny(message, ['areia', 'higienica', 'higiênica'])
+}
+
+function isFoodProduct(product = {}) {
+  const haystack = norm([product.name, product.category, product.description].join(' '))
+  return /(racao|ração|granel|alimento|premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree)/.test(haystack)
+}
+
+function isRationProduct(product = {}) {
+  const haystack = norm([product.name, product.category, product.description].join(' '))
+  if (/(petisco|bifinho|sache|sachê|snack|filezitos|bites|dental|osso|ossinho|shampoo|antipulga|advocate|bravecto|nexgard|simparic|areia|higienica|higiênica)/.test(haystack)) {
+    return false
+  }
+  return /(racao|ração|granel|alimento)/.test(haystack)
+    || (/(premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree)/.test(haystack)
+      && /\b(kg|adulto|filhote|castrad|racas|raças)\b/.test(haystack))
+}
+
+function isRationRequest(message = '', state = {}) {
+  return hasAny(message, ['racao', 'ração', 'granel', 'alimento'])
+    || state.productKind === 'food'
+    || state.packagePreference === 'granel'
+    || Boolean(state.packageKg)
 }
 
 function hasDogBreedProductText(haystack = '') {
@@ -1098,7 +1128,10 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
 
   const packagePreference = clean(facts.package_preference || facts.packagePreference)
   const packageKg = Number(facts.package_kg ?? facts.packageKg)
-  const hasPackageSignal = Boolean(inferPackagePreference(currentMessage) || requestedPackageKgFromMessage(currentMessage))
+  const hasPackageSignal = Boolean(
+    (inferPackagePreference(currentMessage) || requestedPackageKgFromMessage(currentMessage))
+      && isFoodPreferenceContext(currentMessage, state),
+  )
   if ((packagePreference || Number.isFinite(packageKg))
     && state.intent === 'produto'
     && (state.awaiting === 'food_preferences' || hasPackageSignal)) {
@@ -1254,8 +1287,12 @@ function scoreProduct(product, state, message) {
 }
 
 function rankProducts(products, state, message) {
+  const foodRequest = isFoodPreferenceContext(message, state)
+  const rationRequest = isRationRequest(message, state)
   return availableProducts(products)
     .filter((product) => hasEnoughStockForState(product, state))
+    .filter((product) => !rationRequest || isRationProduct(product))
+    .filter((product) => rationRequest || !foodRequest || isFoodProduct(product))
     .map((product) => ({ product, score: scoreProduct(product, state, message) }))
     .sort((a, b) => b.score - a.score || Number(a.product.price || 0) - Number(b.product.price || 0))
 }
@@ -1276,6 +1313,24 @@ function chooseProductFromOptions(state, message) {
     const terms = tokenizeForScore(message).filter((term) => !CHOICE_STOP_WORDS.has(term))
     return terms.length > 0 && terms.some((term) => name.includes(term) || norm(option.category).includes(term))
   }) || null
+}
+
+function selectProductFromChoice(state, product, message) {
+  if (!product) return false
+  const quantity = parseSelectedProductQuantity(message, product) || state.pendingQuantity
+  const requestedQuantity = Number(quantity || product.quantity || 1)
+  if (Number.isFinite(requestedQuantity)
+    && requestedQuantity > 0
+    && Number(product.stock_quantity || 0) < requestedQuantity) {
+    state.blockedReasons = [...new Set([...(state.blockedReasons || []), 'estoque_insuficiente_quantidade'])]
+    state.selectedProduct = null
+    state.productOptions = []
+    return false
+  }
+  state.selectedProduct = product
+  if (quantity) state.selectedProduct.quantity = quantity
+  state.pendingQuantity = null
+  return true
 }
 
 function pickUpsell(products, state) {
@@ -1707,7 +1762,7 @@ function applyMessageFacts(state, message) {
     state.brandPreferenceAsked = true
   }
 
-  const packagePreference = inferPackagePreference(message)
+  const packagePreference = isFoodPreferenceContext(message, state) ? inferPackagePreference(message) : null
   if (packagePreference) {
     if (shouldTreatKgAsBulkQuantity(message, state)) {
       state.pendingQuantity = packagePreference.packageKg
@@ -2202,10 +2257,9 @@ function productFlow(state, message, products, settings) {
   }
   const earlyChosen = chooseProductFromOptions(state, message)
   if (earlyChosen) {
-    state.selectedProduct = earlyChosen
-    const quantity = parseSelectedProductQuantity(message, earlyChosen) || state.pendingQuantity
-    if (quantity) state.selectedProduct.quantity = quantity
-    state.pendingQuantity = null
+    if (!selectProductFromChoice(state, earlyChosen, message)) {
+      return presentProducts(state, products, message)
+    }
   }
   if (!state.selectedProduct && !(state.productOptions || []).length && !state.ageCategory && isFoodRequest(message, state)) {
     if (state.species === 'cat') {
@@ -2231,10 +2285,9 @@ function productFlow(state, message, products, settings) {
 
   const chosen = !state.selectedProduct ? chooseProductFromOptions(state, message) : null
   if (chosen) {
-    state.selectedProduct = chosen
-    const quantity = parseSelectedProductQuantity(message, chosen) || state.pendingQuantity
-    if (quantity) state.selectedProduct.quantity = quantity
-    state.pendingQuantity = null
+    if (!selectProductFromChoice(state, chosen, message)) {
+      return presentProducts(state, products, message)
+    }
   }
 
   if (wantsProductImage(message)) {

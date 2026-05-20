@@ -742,6 +742,44 @@ test('produto granel filtra opcao sem estoque suficiente para kg pedido', () => 
   assert.ok(result.state.productOptions.some((product) => product.product_id === granelPremierDog.id))
 })
 
+test('produto racao nao troca por medicamento quando granel nao tem kg suficiente', () => {
+  const lowStockBulk = {
+    id: 'granel-gato-low-stock',
+    name: 'GRANEL ORIGENS GATO CASTRADO SALMAO',
+    category: 'Racao gato',
+    price: 16.5,
+    stock_quantity: 1,
+    active: true,
+  }
+  const advocate = {
+    id: 'advocate-gatos',
+    name: 'ADVOCATE GATOS ATE 4KG',
+    category: 'Antipulgas',
+    price: 74,
+    stock_quantity: 20,
+    active: true,
+  }
+  const filezitos = {
+    id: 'filezitos-dog',
+    name: 'FILEZITOS PEDIGREE SABOR CARNE 60 GR',
+    category: 'Petisco',
+    price: 7.9,
+    stock_quantity: 20,
+    active: true,
+  }
+
+  let context = {}
+  let result = turn(context, 'bom dia', { products: [lowStockBulk, advocate, filezitos] })
+  context = result.context
+  result = turn(context, 'Denise, quero racao a granel para gato castrado', { products: [lowStockBulk, advocate, filezitos] })
+  context = result.context
+  result = turn(context, 'quero 3kg', { products: [lowStockBulk, advocate, filezitos] })
+
+  assert.equal(result.action, 'sem_estoque')
+  assert.doesNotMatch(result.reply, /ADVOCATE/i)
+  assert.doesNotMatch(result.reply, /FILEZITOS/i)
+})
+
 test('redraft ruim nao remove pergunta obrigatoria de entrega/retirada', () => {
   const result = runPetbotGuard({
     message: 'troco pra 50',
