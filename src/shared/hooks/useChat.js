@@ -59,6 +59,75 @@ function mergeIncomingMessage(previousMessages, message) {
   return [...previousMessages, incomingMessage]
 }
 
+function playHandoffSound() {
+  if (typeof window === 'undefined') return
+  try {
+    const AudioContext = window.AudioContext || window.webkitAudioContext
+    if (!AudioContext) return
+    const context = new AudioContext()
+    const oscillator = context.createOscillator()
+    const gain = context.createGain()
+    oscillator.type = 'sine'
+    oscillator.frequency.setValueAtTime(880, context.currentTime)
+    gain.gain.setValueAtTime(0.001, context.currentTime)
+    gain.gain.exponentialRampToValueAtTime(0.18, context.currentTime + 0.02)
+    gain.gain.exponentialRampToValueAtTime(0.001, context.currentTime + 0.22)
+    oscillator.connect(gain)
+    gain.connect(context.destination)
+    oscillator.start()
+    oscillator.stop(context.currentTime + 0.24)
+    setTimeout(() => context.close?.(), 400)
+  } catch {
+    // Audio can be blocked by the browser until the first user interaction.
+  }
+}
+
+function normalizeHandoffTarget({ guard = {}, state = {}, reason = '' } = {}) {
+  const rawTarget = String(guard.handoff_target || guard.handoffTarget || state.handoffTarget || '').toLowerCase()
+  const reasonText = String(reason || '').toLowerCase()
+  const intent = String(guard.intent || state.intent || '').toLowerCase()
+  if (rawTarget === 'veterinaria' || reasonText.includes('veterinaria') || intent === 'veterinaria') return 'veterinaria'
+  return 'atendente'
+}
+
+function handoffAlertFromMessage(message, session = {}) {
+  const metadata = message?.metadata || {}
+  const guard = metadata.petbot_guard || {}
+  const state = metadata.petbot_state || {}
+  if (!guard.needs_human && !guard.needs_handoff) return null
+  const reasons = Array.isArray(guard.blocked_reasons) ? guard.blocked_reasons : []
+  const reason = reasons[0] || guard.action || 'handoff'
+  const target = normalizeHandoffTarget({ guard, state, reason })
+  return {
+    id: `msg:${message.id}`,
+    messageId: message.id,
+    sessionId: message.session_id || session.id,
+    customerName: session.customer_name || session.customer_phone || 'Cliente',
+    target,
+    reason,
+    content: message.content || '',
+    createdAt: message.sent_at || new Date().toISOString(),
+  }
+}
+
+function handoffAlertFromSession(session = {}) {
+  const state = session?.context?.petbot || {}
+  const reasons = Array.isArray(state.blockedReasons) ? state.blockedReasons : []
+  const isHandoff = session.status === 'human' && (state.status === 'human_requested' || state.awaiting === 'human' || reasons.length > 0)
+  if (!isHandoff) return null
+  const reason = reasons[0] || state.lastAction || 'handoff'
+  const target = normalizeHandoffTarget({ state, reason })
+  return {
+    id: `session:${session.id}:${session.last_message_at || ''}:${reason}`,
+    sessionId: session.id,
+    customerName: session.customer_name || session.customer_phone || 'Cliente',
+    target,
+    reason,
+    content: '',
+    createdAt: session.last_message_at || new Date().toISOString(),
+  }
+}
+
 export function useChat() {
   const [sessions, setSessions] = useState([])
   const [messages, setMessages] = useState([])
@@ -66,17 +135,34 @@ export function useChat() {
   const [loading, setLoading] = useState(false)
   const [botTyping, setBotTyping] = useState(false)
   const [quickReplies, setQuickReplies] = useState([])
+  const [handoffAlerts, setHandoffAlerts] = useState([])
   const channelRef = useRef(null)
   const msgChannelRef = useRef(null)
   const activeSessionIdRef = useRef(null)
   const pendingClientMessagesRef = useRef(new Map())
   const replyTimerRef = useRef(new Map())
+  const handoffAlertIdsRef = useRef(new Set())
   const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
 
   useEffect(() => {
     activeSessionIdRef.current = activeSession?.id || null
   }, [activeSession?.id])
+
+  const pushHandoffAlert = useCallback((source, session) => {
+    const alert = source?.metadata
+      ? handoffAlertFromMessage(source, session)
+      : handoffAlertFromSession(source)
+    if (!alert?.sessionId || handoffAlertIdsRef.current.has(alert.id)) return
+
+    handoffAlertIdsRef.current.add(alert.id)
+    setHandoffAlerts((prev) => [alert, ...prev].slice(0, 5))
+    playHandoffSound()
+  }, [])
+
+  const dismissHandoffAlert = useCallback((alertId) => {
+    setHandoffAlerts((prev) => prev.filter((alert) => alert.id !== alertId))
+  }, [])
 
   const loadSessions = useCallback(async (statusFilter = '') => {
     if (!activeModuleId) return
@@ -142,12 +228,13 @@ export function useChat() {
         table: 'chat_messages',
         filter: `session_id=eq.${session.id}`,
       }, (payload) => {
+        pushHandoffAlert(payload.new, session)
         setMessages((prev) => mergeIncomingMessage(prev, payload.new))
       })
       .subscribe()
 
     return loadedMessages
-  }, [loadMessages])
+  }, [loadMessages, pushHandoffAlert])
 
   const createSession = useCallback(async ({ customer_phone, customer_name, pet_id, channel = 'whatsapp' }) => {
     if (!activeModuleId) throw new Error('Modulo nao definido')
@@ -308,9 +395,12 @@ export function useChat() {
         schema: 'public',
         table: 'chat_sessions',
         filter: `module_id=eq.${activeModuleId}`,
-      }, () => loadSessions())
+      }, (payload) => {
+        if (payload?.new) pushHandoffAlert(payload.new)
+        loadSessions()
+      })
       .subscribe()
-  }, [activeModuleId, loadSessions])
+  }, [activeModuleId, loadSessions, pushHandoffAlert])
 
   const loadQuickReplies = useCallback(async () => {
     const { data } = await supabase
@@ -332,7 +422,7 @@ export function useChat() {
 
   const statusConfig = (status) => ({
     bot: { cls: 'badge-amber', label: 'Bot', dot: 'bg-amber-400' },
-    human: { cls: 'badge-purple', label: 'Humano', dot: 'bg-violet-400' },
+    human: { cls: 'badge-purple', label: 'Atendente', dot: 'bg-violet-400' },
     waiting: { cls: 'badge-blue', label: 'Aguardando', dot: 'bg-blue-400' },
     closed: { cls: 'badge-gray', label: 'Fechado', dot: 'bg-gray-500' },
   }[status] || { cls: 'badge-gray', label: status, dot: 'bg-gray-500' })
@@ -344,6 +434,7 @@ export function useChat() {
     loading,
     botTyping,
     quickReplies,
+    handoffAlerts,
     loadSessions,
     loadMessages,
     loadQuickReplies,
@@ -357,5 +448,6 @@ export function useChat() {
     subscribeSessionsList,
     setActiveSession,
     statusConfig,
+    dismissHandoffAlert,
   }
 }

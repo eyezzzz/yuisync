@@ -1858,7 +1858,7 @@ test('pedido por humano para o bot e marca atendimento humano', () => {
   assert.equal(result.needsHuman, true)
   assert.equal(result.action, 'handoff_humano')
   assert.equal(result.state.status, 'human_requested')
-  assert.match(result.reply, /equipe/i)
+  assert.match(result.reply, /atendente/i)
 })
 
 test('sintoma veterinario sensivel nao segue venda automatica', () => {

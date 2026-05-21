@@ -7,7 +7,7 @@ import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '..
 const BASE_SELECT = `
   id, name, category, description, price, cost_price, stock_quantity,
   min_stock, species_target, image_url, active, created_at, updated_at, 
-  barcode, upsell_link_id
+  barcode, upsell_link_id, bot_metadata
 `
 const PRODUCT_PAGE_SIZE = 1000
 

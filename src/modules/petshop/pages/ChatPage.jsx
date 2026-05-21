@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import {
   MessageSquare, Plus, Send, Bot, User, Phone,
   UserCheck, ArrowLeft, RefreshCw, X, Check,
-  ChevronRight, Inbox, Zap, Clock
+  ChevronRight, Inbox, Zap, Clock, BellRing
 } from 'lucide-react'
 import { useChat }    from '../../../shared/hooks/useChat'
 import { useAuthCtx } from '../../../context/AuthContext'
@@ -203,13 +203,80 @@ function NewSessionModal({ onClose, onCreate }) {
 }
 
 // ── Página Principal ──────────────────────────────────────────────────────────
+function HandoffAlerts({ alerts, onDismiss, onOpen }) {
+  if (!alerts?.length) return null
+
+  return createPortal(
+    <div className="fixed right-4 top-4 z-[80] flex w-[min(360px,calc(100vw-2rem))] flex-col gap-3">
+      {alerts.map((alert) => {
+        const isVet = alert.target === 'veterinaria'
+        return (
+          <div
+            key={alert.id}
+            className={`rounded-2xl border bg-card/95 p-4 shadow-2xl backdrop-blur-xl ${
+              isVet ? 'border-red-500/25' : 'border-amber-500/25'
+            }`}
+          >
+            <div className="flex items-start gap-3">
+              <div className={`mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl ${
+                isVet ? 'bg-red-500/12 text-red-400' : 'bg-amber-500/12 text-amber-400'
+              }`}>
+                <BellRing size={18} />
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-sm font-black text-text">
+                  {isVet ? 'Veterinaria necessaria' : 'Atendente necessario'}
+                </p>
+                <p className="mt-1 truncate text-xs font-semibold text-muted">
+                  {alert.customerName}
+                </p>
+                {alert.reason && (
+                  <p className="mt-1 text-[11px] uppercase tracking-widest text-muted">
+                    Motivo: {String(alert.reason).replace(/_/g, ' ')}
+                  </p>
+                )}
+              </div>
+              <button
+                type="button"
+                className="text-muted hover:text-text"
+                onClick={() => onDismiss(alert.id)}
+                title="Dispensar"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="mt-3 flex gap-2">
+              <button
+                type="button"
+                className="btn btn-primary btn-sm flex-1 justify-center"
+                onClick={() => onOpen(alert)}
+              >
+                Abrir chat
+              </button>
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                onClick={() => onDismiss(alert.id)}
+              >
+                Dispensar
+              </button>
+            </div>
+          </div>
+        )
+      })}
+    </div>,
+    document.body,
+  )
+}
+
 export default function ChatPage() {
   const {
     sessions, messages, activeSession, botTyping, quickReplies,
+    handoffAlerts,
     loadSessions, loadMessages, loadQuickReplies, openSession, createSession,
     sendClientMessage, sendHumanMessage,
     takeOver, returnToBot, closeSession,
-    subscribeSessionsList, setActiveSession, statusConfig,
+    subscribeSessionsList, setActiveSession, statusConfig, dismissHandoffAlert,
   } = useChat()
   const auth = useAuthCtx()
   const { activeModule } = useModuleCtx()
@@ -236,6 +303,17 @@ export default function ChatPage() {
 
   const handleOpenSession = async (session) => {
     await openSession(session)
+    setMobileView('chat')
+  }
+
+  const handleOpenHandoffAlert = async (alert) => {
+    const session = sessions.find((item) => item.id === alert.sessionId) || {
+      id: alert.sessionId,
+      customer_name: alert.customerName,
+      status: 'human',
+    }
+    await openSession(session)
+    dismissHandoffAlert(alert.id)
     setMobileView('chat')
   }
 
@@ -314,7 +392,7 @@ export default function ChatPage() {
           {[
             { label:`${openCount} Abertos`, value:'', cls:''  }, // Removed hardcoded amber
             { label:`${botCount} Bot`,      value:'bot',   cls:'badge-amber'  },
-            { label:`${humanCount} Humano`, value:'human', cls:'badge-purple'},
+            { label:`${humanCount} Atendente`, value:'human', cls:'badge-purple'},
           ].map(f => (
             <button key={f.value}
               onClick={() => setStatusFilter(v => v === f.value ? '' : f.value)}
@@ -338,7 +416,7 @@ export default function ChatPage() {
             <select className="inp py-1.5 text-xs" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
               <option value="">Todas as conversas</option>
               <option value="bot">🤖 Bot</option>
-              <option value="human">👤 Humano</option>
+              <option value="human">👤 Atendente</option>
               <option value="waiting">⏳ Aguardando</option>
               <option value="closed">✓ Fechadas</option>
             </select>
@@ -389,7 +467,7 @@ export default function ChatPage() {
                 <div className="bg-card border border-[var(--border)] rounded-xl p-4 text-center">
                   <UserCheck size={20} className="text-violet-400 mx-auto mb-1"/>
                   <p className="font-display font-bold text-2xl text-text">{humanCount}</p>
-                  <p className="text-xs text-muted">Com humano</p>
+                  <p className="text-xs text-muted">Com atendente</p>
                 </div>
                 <div className="bg-card border border-[var(--border)] rounded-xl p-4 text-center">
                   <Zap size={20} className="text-amber-400 mx-auto mb-1"/>
@@ -557,6 +635,11 @@ export default function ChatPage() {
           onCreate={createSession}
         />
       )}
+      <HandoffAlerts
+        alerts={handoffAlerts}
+        onDismiss={dismissHandoffAlert}
+        onOpen={handleOpenHandoffAlert}
+      />
     </div>
   )
 }

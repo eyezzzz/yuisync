@@ -83,7 +83,7 @@ const SERVICE_HINTS = ['banho', 'banh', 'tosa', 'tosar', 'higien', 'agendar', 'a
 const VET_HINTS = ['vet', 'vetrinario', 'veternario', 'veterinario', 'veterinária', 'veterinaria', 'consulta', 'vacina', 'clinica', 'clínica', 'medico', 'médico']
 const URGENCY_HINTS = ['vomit', 'sangr', 'veneno', 'intoxic', 'convuls', 'falta de ar', 'apatico', 'apático', 'nao come', 'não come']
 const DISCOUNT_HINTS = ['desconto', 'abaixa', 'barato', 'mais em conta', 'melhor preco', 'melhor preço']
-const HUMAN_HINTS = ['atendente', 'humano', 'pessoa', 'equipe', 'gerente', 'falar com alguem', 'falar com alguém', 'me liga', 'ligacao', 'ligação']
+const HUMAN_HINTS = ['atendente', 'humano', 'pessoa', 'equipe', 'gerente', 'falar com alguem', 'falar com alguém', 'falar com veterinaria', 'falar com veterinária', 'me liga', 'ligacao', 'ligação']
 const CRITICAL_URGENCY_HINTS = ['veneno', 'intoxic', 'falta de ar', 'nao respira', 'não respira', 'convuls', 'sangr', 'sangue', 'desmai', 'atropel', 'engasg']
 const IMAGE_HINTS = ['foto', 'imagem', 'img', 'manda foto', 'tem foto', 'ver foto', 'embalagem', 'mostra foto', 'mostrar foto']
 const BUSY_APPOINTMENT_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
@@ -2288,7 +2288,7 @@ function presentProducts(state, products, message) {
 
   if (!state.productOptions.length) {
     addBlockedReason(state, 'estoque_ausente')
-    return guardResult('Consultei aqui e não encontrei produto disponível com esses dados. Quer que eu chame alguém da equipe para te ajudar?', state, { action: 'sem_estoque' })
+    return guardResult('Consultei aqui e não encontrei produto disponível com esses dados. Quer que eu chame um atendente para te ajudar?', state, { action: 'sem_estoque' })
   }
 
   const hasRequestedBrand = Boolean(state.brand)
@@ -2363,7 +2363,8 @@ function presentSlots(state, appointments) {
 
   if (!state.slotOptions.length) {
     addBlockedReason(state, 'sem_horario_real')
-    return guardResult('Consultei a agenda e não achei horário disponível agora. Quer que eu chame a equipe para ver outros horários?', state, { action: 'sem_horario' })
+    const target = state.intent === 'veterinaria' ? 'a veterinária' : 'um atendente'
+    return guardResult(`Consultei a agenda e não achei horário disponível agora. Quer que eu chame ${target} para ver outros horários?`, state, { action: 'sem_horario' })
   }
 
   const lines = state.slotOptions.map((slot, index) => `${index + 1}. ${formatSlot(slot)}`)
@@ -2388,7 +2389,7 @@ function serviceFlow(state, message, appointments, settings) {
     return ask('É banho, tosa ou banho e tosa?', state, 'service_type', 'tipo_servico_pendente')
   }
   if (state.intent === 'banho_tosa' && state.species === 'cat') {
-    return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar a equipe para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_humano')
+    return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar um atendente para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_atendente')
   }
   if (!state.petName) {
     return ask('Perfeito. Qual o nome do pet?', state, 'pet_name', 'pet_nome_pendente')
@@ -2397,7 +2398,7 @@ function serviceFlow(state, message, appointments, settings) {
     return ask('Ele é cachorro ou gato?', state, 'species', 'especie_pendente')
   }
   if (state.intent === 'banho_tosa' && state.species === 'cat') {
-    return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar a equipe para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_humano')
+    return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar um atendente para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_atendente')
   }
   if (state.intent === 'banho_tosa' && !state.size && !state.breed) {
     return ask('Qual o porte ou raça dele?', state, 'service_pet_details', 'porte_pendente')
@@ -2424,7 +2425,12 @@ function serviceFlow(state, message, appointments, settings) {
   if (!state.selectedSlot) return presentSlots(state, appointments)
   if (Number(state.selectedSlot.price || 0) <= 0) {
     addBlockedReason(state, 'preco_servico_ausente')
-    return guardResult('Tenho esse horário, mas o valor não está confirmado no sistema. Vou chamar a equipe para fechar certinho.', state, { needsHuman: true, action: 'handoff_humano' })
+    const target = state.intent === 'veterinaria' ? 'a veterinária' : 'um atendente'
+    return guardResult(`Tenho esse horário, mas o valor não está confirmado no sistema. Vou chamar ${target} para fechar certinho.`, state, {
+      needsHuman: true,
+      action: 'handoff_humano',
+      handoffTarget: state.intent === 'veterinaria' ? 'veterinaria' : 'atendente',
+    })
   }
 
   state.serviceType = state.selectedSlot.service_type || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')
@@ -2655,7 +2661,10 @@ function handoffToHuman(state, reply, reason) {
   state.status = 'human_requested'
   state.awaiting = 'human'
   addBlockedReason(state, reason)
-  return guardResult(reply, state, { needsHuman: true, action: 'handoff_humano' })
+  const handoffTarget = state.intent === 'veterinaria' || String(reason || '').includes('veterinaria')
+    ? 'veterinaria'
+    : 'atendente'
+  return guardResult(reply, state, { needsHuman: true, action: 'handoff_humano', handoffTarget })
 }
 
 export function runPetbotGuard({
@@ -2690,17 +2699,19 @@ export function runPetbotGuard({
   applyMessageFacts(state, trimmed)
 
   if (interpretation?.wants_human || hasAny(trimmed, HUMAN_HINTS)) {
-    return handoffToHuman(state, 'Claro. Vou chamar a equipe para continuar com você por aqui.', 'humano_solicitado')
+    const target = state.intent === 'veterinaria' ? 'a veterinária' : 'um atendente'
+    return handoffToHuman(state, `Claro. Vou chamar ${target} para continuar com você por aqui.`, 'atendente_solicitado')
   }
 
   if (isCriticalVeterinaryMessage(trimmed)) {
     state.intent = 'veterinaria'
     state.symptom ||= trimmed.slice(0, 120)
-    return handoffToHuman(state, 'Entendi. Esse caso precisa de atenção rápida da equipe. Vou chamar um atendente para te orientar com cuidado.', 'veterinaria_sensivel')
+    return handoffToHuman(state, 'Entendi. Esse caso precisa de atenção rápida. Vou chamar a veterinária para te orientar com cuidado.', 'veterinaria_sensivel')
   }
 
   if (isAffirmative(trimmed) && ['sem_estoque', 'sem_horario'].includes(state.lastAction)) {
-    return handoffToHuman(state, 'Perfeito. Vou chamar a equipe para verificar isso certinho com você.', state.lastAction)
+    const target = state.intent === 'veterinaria' ? 'a veterinária' : 'um atendente'
+    return handoffToHuman(state, `Perfeito. Vou chamar ${target} para verificar isso certinho com você.`, state.lastAction)
   }
 
   if (state.finalSummaryShown && !state.saved && (interpretation?.confirmation || isAffirmative(trimmed))) {

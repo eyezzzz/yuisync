@@ -945,7 +945,7 @@ async function resolveWhatsappMediaText(env: WebhookEnv, event: WhatsappEvent) {
     const cleanDescription = description.replace('VETERINARY_IMAGE_REQUIRES_HUMAN', '').trim()
     return {
       text: requiresHuman
-        ? `quero falar com humano. Imagem veterinaria sensivel: ${cleanDescription || 'imagem recebida'}`
+        ? `quero falar com veterinaria. Imagem veterinaria sensivel: ${cleanDescription || 'imagem recebida'}`
         : [caption, `Imagem recebida: ${cleanDescription}`].filter(Boolean).join('\n'),
       metadata: {
         media_processed: true,
@@ -1343,7 +1343,7 @@ function buildAppointmentsContext(appointments: LooseRecord[] | null | undefined
     })
 
   if (!lines.some((line) => line.includes('DISPONIVEL'))) {
-    lines.push('Nao ha horario explicitamente disponivel no contexto. Ofereca consultar outros horarios com a equipe.')
+    lines.push('Nao ha horario explicitamente disponivel no contexto. Ofereca consultar outros horarios com um atendente ou, se for caso veterinario, com a veterinaria.')
   }
 
   return lines.join('\n').slice(0, 3000)
@@ -2257,12 +2257,12 @@ function buildSystemPrompt(context: StoreContext): string {
     'Responda em portugues do Brasil, com tom cordial, claro e objetivo.',
     'Use somente os dados confirmados no contexto operacional abaixo.',
     'Nunca invente preco, estoque, horario, disponibilidade, endereco, politica comercial ou procedimento veterinario.',
-    'Se o cliente pedir algo fora do contexto, peca os dados necessarios ou encaminhe para atendimento humano.',
+    'Se o cliente pedir algo fora do contexto, peca os dados necessarios ou encaminhe para um atendente; em caso veterinario sensivel, para a veterinaria.',
     'Para agendamentos, nao confirme disponibilidade sem haver horario confirmado no contexto de agenda.',
     'Nunca aplique desconto. Se pedirem desconto, responda gentilmente: "Infelizmente nao conseguimos aplicar desconto nesse pedido."',
     'Mantenha respostas curtas e naturais para conversa de WhatsApp.',
     'Seu foco e vender, mas sem pressionar: se o cliente recusar o upsell, continue o pedido normalmente.',
-    'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar a equipe.',
+    'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar um atendente; em caso veterinario, a veterinaria.',
     'Se o cliente ainda nao tem nome confirmado, peca o nome antes de qualquer triagem ou oferta, inclusive em saudacao simples.',
     '',
     'Fluxo obrigatorio:',
@@ -2270,7 +2270,7 @@ function buildSystemPrompt(context: StoreContext): string {
     'Servico: nome, intencao, dados minimos, horario real, resumo, transporte do pet quando banho/tosa, confirmar, salvar agendamento e avaliacao 0-10. Nao peca forma de pagamento para banho/tosa ou veterinaria no chat.',
     'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
     'Dados minimos produto: cliente, especie e idade/categoria quando relevante (adulto, filhote, castrado, senior). Se o cliente informar uma raca ou tamanho do dia a dia (ex.: Shih Tzu, Yorkshire, Poodle, Lhasa, Spitz, Bulldog, Golden, Labrador, Pinscher, porte pequeno/medio/grande), trate isso como categoria/porte suficiente e nao peca peso. Pergunte peso apenas para produtos que dependem tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento.',
-    'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca, acabamento quando for tosa e horario real disponivel. Para gato em banho/tosa, chame humano.',
+    'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca, acabamento quando for tosa e horario real disponivel. Para gato em banho/tosa, chame um atendente.',
     'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
     'Nunca assuma especie. Se o cliente nao disse cachorro/gato, pergunte. Nao diga "e cachorro, certo?".',
     'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
@@ -2666,7 +2666,8 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
     } catch (error) {
       state = markPetbotOrderError(state, error)
-      reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar a equipe para resolver isso antes de finalizar.'
+      reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar um atendente para resolver isso antes de finalizar.'
+      guard = { ...guard, needsHuman: true, action: 'salvamento_falhou', handoffTarget: 'atendente' } as any
       console.warn('PetBot guarded order save failed', error)
     }
   }
@@ -2736,6 +2737,8 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       action: guard.action,
       blocked_reasons: state?.blockedReasons || [],
       needs_human: Boolean(guard.needsHuman),
+      needs_handoff: Boolean(guard.needsHuman),
+      handoff_target: (guard as any).handoffTarget || (guard.intent === 'veterinaria' ? 'veterinaria' : 'atendente'),
       allow_llm_redraft: Boolean(guard.guardDirective?.allowLlmRedraft),
       llm_interpretation: llmInterpretation,
       llm_redraft_used: Boolean(redraftResult?.used),

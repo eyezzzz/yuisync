@@ -21,6 +21,23 @@ const BASE_CATEGORIES = [
 ]
 const SPECIES         = ['dog','cat','bird','rabbit','fish','all']
 const SPECIES_LABELS = { dog:'Cão', cat:'Gato', bird:'Ave', rabbit:'Coelho', fish:'Peixe', all:'Todos' }
+const BOT_PRODUCT_TYPES = ['racao','granel','sache','petisco','antipulgas','areia','higiene','medicamento','brinquedo','acessorio','servico','outro']
+const BOT_PRODUCT_TYPE_LABELS = {
+  racao: 'Racao',
+  granel: 'Granel',
+  sache: 'Sache',
+  petisco: 'Petisco',
+  antipulgas: 'Antipulgas',
+  areia: 'Areia',
+  higiene: 'Higiene',
+  medicamento: 'Medicamento',
+  brinquedo: 'Brinquedo',
+  acessorio: 'Acessorio',
+  servico: 'Servico',
+  outro: 'Outro',
+}
+const BOT_AGES = ['', 'filhote', 'adulto', 'senior', 'castrado']
+const BOT_SIZES = ['', 'pequeno', 'medio', 'grande', 'mini', 'gigante']
 
 const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
 
@@ -47,9 +64,68 @@ const emptyForm = {
   name: '', barcode: '', category: 'Ração', description: '', price: '',
   cost_price: '', stock_quantity: '', min_stock: 1,
   species_target: 'all', image_url: '', active: true,
+  bot_product_type: '',
+  bot_species: '',
+  bot_age: '',
+  bot_size: '',
+  bot_brand: '',
+  bot_breed: '',
+  bot_package_kg: '',
+  bot_is_bulk: false,
 }
 
 // ── Product Modal ─────────────────────────────────────────────────────────────
+function metadataToForm(product) {
+  const metadata = product?.bot_metadata || {}
+  return {
+    bot_product_type: metadata.product_type || '',
+    bot_species: metadata.species || '',
+    bot_age: metadata.age || '',
+    bot_size: metadata.size || '',
+    bot_brand: metadata.brand || '',
+    bot_breed: Array.isArray(metadata.breed) ? metadata.breed.join(', ') : metadata.breed || '',
+    bot_package_kg: metadata.package_kg || '',
+    bot_is_bulk: Boolean(metadata.is_bulk),
+  }
+}
+
+function inferBotProductType(form) {
+  const text = normalize([form.name, form.category, form.description].filter(Boolean).join(' '))
+  if (/granel|a granel/.test(text)) return 'granel'
+  if (/banho|tosa|consulta|vacina|exame|ultrassom|cirurg/.test(text)) return 'servico'
+  if (/areia|higienica/.test(text)) return 'areia'
+  if (/sache/.test(text)) return 'sache'
+  if (/petisco|bifinho|ossinho|dental|snack/.test(text)) return 'petisco'
+  if (/antipulga|pulga|carrapato|bravecto|nexgard|simparic|frontline/.test(text)) return 'antipulgas'
+  if (/shampoo|condicionador|perfume|higiene|tapete|banheira/.test(text)) return 'higiene'
+  if (/brinquedo|brinq|bolinha|mordedor|pelucia/.test(text)) return 'brinquedo'
+  if (/medicamento|remedio|vermifugo|suplemento/.test(text)) return 'medicamento'
+  if (/coleira|guia|peitoral|comedouro|bebedouro|caixa|transporte|arranhador|cama|focinheira/.test(text)) return 'acessorio'
+  if (/racao|racoes|premier|royal canin|formula natural|golden|pedigree|whiskas|special dog|special cat|gran plus|quatree/.test(text)) return 'racao'
+  return 'outro'
+}
+
+function buildBotMetadata(form, product) {
+  const current = product?.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
+  const breed = String(form.bot_breed || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+
+  return {
+    ...current,
+    product_type: form.bot_product_type || (current.product_type && current.product_type !== 'outro' ? current.product_type : inferBotProductType(form)),
+    species: form.bot_species || current.species || form.species_target || 'all',
+    age: form.bot_age || null,
+    size: form.bot_size || null,
+    brand: form.bot_brand ? String(form.bot_brand).trim().toLowerCase() : current.brand || null,
+    breed,
+    package_kg: form.bot_package_kg ? Number(form.bot_package_kg) : null,
+    is_bulk: Boolean(form.bot_is_bulk),
+    source: 'dashboard_manual',
+  }
+}
+
 function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate, onUpdate }) {
   const isEdit = !!product?.id
   const [form, setForm] = useState(isEdit ? {
@@ -65,6 +141,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
     species_target: product.species_target || 'all',
     upsell_link_id: product.upsell_product?.id || '',
     active:         product.active ?? true,
+    ...metadataToForm(product),
   } : { ...emptyForm, upsell_link_id: '' })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
@@ -93,6 +170,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
         species_target: form.species_target,
         upsell_link_id: form.upsell_link_id || null,
         active:         form.active,
+        bot_metadata:   buildBotMetadata(form, product),
       }
       isEdit ? await onUpdate(product.id, payload) : await onCreate(payload)
       onClose()
@@ -273,6 +351,70 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
               <select className="inp" value={form.species_target} onChange={e => set('species_target', e.target.value)}>
                 {SPECIES.map(s => <option key={s} value={s}>{SPECIES_LABELS[s]}</option>)}
               </select>
+            </div>
+
+            <div className="col-span-2 rounded-2xl border border-[var(--border)] bg-white/[0.03] p-4">
+              <div className="mb-3 flex items-center justify-between gap-3">
+                <div>
+                  <p className="text-sm font-black text-text">Classificacao do PetBot</p>
+                  <p className="text-xs text-muted">Ajuda o bot a filtrar por racao, especie, idade, porte, raca e embalagem.</p>
+                </div>
+                <span className="badge badge-gray text-[10px]">IA</span>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="inp-label">Tipo</label>
+                  <select className="inp" value={form.bot_product_type} onChange={e => set('bot_product_type', e.target.value)}>
+                    <option value="">Inferir automaticamente</option>
+                    {BOT_PRODUCT_TYPES.map((type) => (
+                      <option key={type} value={type}>{BOT_PRODUCT_TYPE_LABELS[type]}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="inp-label">Especie</label>
+                  <select className="inp" value={form.bot_species} onChange={e => set('bot_species', e.target.value)}>
+                    <option value="">Usar especie alvo</option>
+                    {SPECIES.map((species) => <option key={species} value={species}>{SPECIES_LABELS[species]}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="inp-label">Idade/fase</label>
+                  <select className="inp" value={form.bot_age} onChange={e => set('bot_age', e.target.value)}>
+                    {BOT_AGES.map((age) => <option key={age || 'empty'} value={age}>{age || 'Nao especificado'}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="inp-label">Porte</label>
+                  <select className="inp" value={form.bot_size} onChange={e => set('bot_size', e.target.value)}>
+                    {BOT_SIZES.map((size) => <option key={size || 'empty'} value={size}>{size || 'Nao especificado'}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="inp-label">Marca</label>
+                  <input className="inp" placeholder="premier, royal canin..."
+                    value={form.bot_brand} onChange={e => set('bot_brand', e.target.value)}/>
+                </div>
+                <div>
+                  <label className="inp-label">Embalagem kg</label>
+                  <input className="inp" type="number" min="0" step="0.1" placeholder="1, 2.5, 15..."
+                    value={form.bot_package_kg} onChange={e => set('bot_package_kg', e.target.value)}/>
+                </div>
+                <div className="col-span-2">
+                  <label className="inp-label">Racas relacionadas</label>
+                  <input className="inp" placeholder="shih tzu, spitz alemao, lhasa apso"
+                    value={form.bot_breed} onChange={e => set('bot_breed', e.target.value)}/>
+                </div>
+                <label className="col-span-2 flex items-center gap-3 cursor-pointer group">
+                  <input
+                    type="checkbox"
+                    checked={form.bot_is_bulk}
+                    onChange={(event) => set('bot_is_bulk', event.target.checked)}
+                    className="h-4 w-4"
+                  />
+                  <span className="text-sm font-semibold text-text/80 group-hover:text-text transition-colors">Produto vendido a granel por kg</span>
+                </label>
+              </div>
             </div>
 
             <div>
@@ -665,10 +807,22 @@ export default function EstoquePage() {
   const filtered = useMemo(() => (products || []).filter(p => {
     // Filtro de Busca (Nome ou Categoria)
     const q = normalize(search)
+    const metadata = p.bot_metadata && typeof p.bot_metadata === 'object' ? p.bot_metadata : {}
+    const metadataText = [
+      metadata.product_type,
+      metadata.species,
+      metadata.age,
+      metadata.size,
+      metadata.brand,
+      Array.isArray(metadata.breed) ? metadata.breed.join(' ') : metadata.breed,
+      metadata.package_kg ? `${metadata.package_kg}kg` : '',
+      metadata.is_bulk ? 'granel' : '',
+    ].filter(Boolean).join(' ')
     const matchQ = !search || 
                   normalize(p.name).includes(q) || 
                   normalize(p.category).includes(q) ||
-                  normalize(p.barcode).includes(q)
+                  normalize(p.barcode).includes(q) ||
+                  normalize(metadataText).includes(q)
     
     // Filtro de Categoria (Smarth Match - ignora acentos/case)
     const matchC = !catFilter || normalize(p.category) === normalize(catFilter)
@@ -907,6 +1061,15 @@ export default function EstoquePage() {
                   const margin = p.cost_price
                     ? (((p.price - p.cost_price) / p.price) * 100).toFixed(0)
                     : null
+                  const metadata = p.bot_metadata && typeof p.bot_metadata === 'object' ? p.bot_metadata : {}
+                  const botTags = [
+                    BOT_PRODUCT_TYPE_LABELS[metadata.product_type] || metadata.product_type,
+                    metadata.brand,
+                    metadata.age,
+                    metadata.size,
+                    metadata.package_kg ? `${metadata.package_kg}kg` : '',
+                    metadata.is_bulk ? 'granel' : '',
+                  ].filter(Boolean)
                   return (
                     <tr key={p.id} className={!p.active ? 'opacity-50' : ''}>
                       <td>
@@ -920,6 +1083,11 @@ export default function EstoquePage() {
                           </div>
                           <div className="min-w-0">
                             <p className="font-semibold text-text truncate" title={p.name}>{formatProductName(p.name)}</p>
+                            {botTags.length > 0 && (
+                              <p className="text-[10px] text-muted mt-1 truncate" title={botTags.join(' / ')}>
+                                PetBot: {botTags.join(' / ')}
+                              </p>
+                            )}
                             {p.upsell_product && (
                               <p className="text-[10px] text-amber-400 mt-1 flex items-center gap-1 min-w-0">
                                 <ArrowUpRight size={10} className="flex-shrink-0"/> <span className="truncate">{formatProductName(p.upsell_product.name)}</span>
