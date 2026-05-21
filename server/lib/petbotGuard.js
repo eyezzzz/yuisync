@@ -6,6 +6,7 @@ import {
 } from './petbotCatalog.js'
 
 const DEFAULT_DELIVERY_FEE = 10
+const DEFAULT_PET_TRANSPORT_FEE = 20
 
 const PETBOT_VERSION = 1
 
@@ -94,6 +95,7 @@ const AWAITING_ACTIONS = {
   pet_category: 'pedir_categoria_pet',
   service_pet_details: 'pedir_categoria_pet',
   service_type: 'pedir_tipo_servico',
+  grooming_detail: 'pedir_acabamento_tosa',
   service_notes: 'pedir_observacao_servico',
   service_date: 'pedir_dia_agendamento',
   service_time_preference: 'pedir_preferencia_horario',
@@ -106,6 +108,8 @@ const AWAITING_ACTIONS = {
   change_for: 'pedir_troco',
   fulfillment: 'pedir_entrega_retirada',
   delivery_address: 'pedir_endereco',
+  service_transport: 'perguntar_transporte_pet',
+  service_transport_address: 'pedir_endereco_transporte_pet',
   food_preferences: 'pedir_preferencia_racao',
   rating: 'pedir_avaliacao',
   human: 'handoff_humano',
@@ -117,6 +121,7 @@ const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
   'pedir_especie',
   'pedir_categoria_pet',
   'pedir_tipo_servico',
+  'pedir_acabamento_tosa',
   'pedir_observacao_servico',
   'pedir_dia_agendamento',
   'pedir_preferencia_horario',
@@ -126,6 +131,8 @@ const LLM_REDRAFT_ALLOWED_ACTIONS = new Set([
   'pedir_troco',
   'pedir_entrega_retirada',
   'pedir_endereco',
+  'perguntar_transporte_pet',
+  'pedir_endereco_transporte_pet',
   'pedir_preferencia_racao',
   'oferecer_upsell',
   'recusar_desconto',
@@ -283,10 +290,24 @@ function defaultFulfillment() {
   }
 }
 
+function defaultServiceTransport() {
+  return {
+    offered: false,
+    accepted: false,
+    declined: false,
+    fee: 0,
+    address: '',
+    neighborhood: '',
+    city: '',
+    reference: '',
+  }
+}
+
 function defaultTotals() {
   return {
     subtotal: 0,
     deliveryFee: 0,
+    serviceTransportFee: 0,
     total: 0,
   }
 }
@@ -318,11 +339,13 @@ function defaultState() {
     selectedSlot: null,
     slotOptions: [],
     serviceType: '',
+    serviceGroomingDetail: '',
     serviceNotes: '',
     serviceNotesAsked: false,
     serviceDate: '',
     serviceTimePreference: '',
     servicePreferredTime: '',
+    serviceTransport: defaultServiceTransport(),
     upsell: defaultUpsell(),
     payment: defaultPayment(),
     fulfillment: defaultFulfillment(),
@@ -350,6 +373,7 @@ export function getPetbotState(context = {}) {
     upsell: { ...base.upsell, ...(incoming.upsell || {}) },
     payment: { ...base.payment, ...(incoming.payment || {}) },
     fulfillment: { ...base.fulfillment, ...(incoming.fulfillment || {}) },
+    serviceTransport: { ...base.serviceTransport, ...(incoming.serviceTransport || {}) },
     totals: { ...base.totals, ...(incoming.totals || {}) },
     blockedReasons: Array.isArray(incoming.blockedReasons) ? incoming.blockedReasons : [],
     productOptions: Array.isArray(incoming.productOptions) ? incoming.productOptions : [],
@@ -406,6 +430,7 @@ export function snapshotPetbotState(state = {}) {
     packagePreferenceAsked: Boolean(next.packagePreferenceAsked),
     pendingQuantity: next.pendingQuantity,
     serviceType: next.serviceType,
+    serviceGroomingDetail: next.serviceGroomingDetail,
     serviceNotes: next.serviceNotes,
     serviceNotesAsked: Boolean(next.serviceNotesAsked),
     serviceDate: next.serviceDate,
@@ -418,6 +443,7 @@ export function snapshotPetbotState(state = {}) {
     upsell: next.upsell,
     payment: next.payment,
     fulfillment: next.fulfillment,
+    serviceTransport: next.serviceTransport,
     totals: next.totals,
     finalSummaryShown: Boolean(next.finalSummaryShown),
     saved: Boolean(next.saved),
@@ -464,6 +490,8 @@ export function recoverPetbotContextFromHistory(context = {}, session = {}, hist
     || state.selectedProduct
     || state.selectedSlot
     || state.serviceDate
+    || state.serviceGroomingDetail
+    || state.serviceTransport?.accepted
     || state.payment.method
     || state.fulfillment.type
 
@@ -486,9 +514,11 @@ export function buildPetbotSearchText(message = '', context = {}) {
     state.packageKg ? `${state.packageKg}kg` : '',
     state.serviceType,
     state.serviceNotes,
+    state.serviceGroomingDetail,
     state.serviceDate,
     state.serviceTimePreference,
     state.servicePreferredTime,
+    state.serviceTransport?.address,
     state.selectedProduct?.name,
     ...(state.productOptions || []).slice(0, 3).map((item) => item.name),
   ].filter(Boolean).join(' ')
@@ -733,6 +763,14 @@ function isPlausiblePetName(value = '') {
     'grande',
     'adulto',
     'filhote',
+    'semana',
+    'amanha',
+    'amanhã',
+    'hoje',
+    'quinta',
+    'sexta',
+    'sabado',
+    'sábado',
   ].includes(lower)) return false
   if ([...DOG_BREEDS.keys()].some((breed) => norm(breed).split(/\s+/).includes(lower))) return false
   return true
@@ -805,6 +843,34 @@ function extractServiceNotes(message = '', state = {}) {
   return ''
 }
 
+function serviceNeedsGroomingDetail(state = {}) {
+  return state.intent === 'banho_tosa' && /tosa|higien/.test(norm(state.serviceType))
+}
+
+function detectGroomingDetail(message = '', state = {}) {
+  const text = clean(message)
+  const lower = norm(text)
+  if (!text) return ''
+
+  const machine = lower.match(/\b(?:maquina|maquinha|lamina|lâmina|pente)?\s*([1357])\b/)
+  if (machine && (state.awaiting === 'grooming_detail' || /(maquina|maquinha|lamina|lâmina|pente|tosa)/.test(lower))) {
+    return `MÃ¡quina ${machine[1]}`
+  }
+  if (/(foto|imagem|referencia|referÃªncia|igual a foto|vou mandar)/.test(lower)) {
+    return 'Foto/referÃªncia do cliente'
+  }
+  if (state.awaiting === 'grooming_detail' && text.length >= 2 && !detectPayment(text) && !detectFulfillment(text)) {
+    return text.slice(0, 120)
+  }
+  return ''
+}
+
+function isUpsellCompatibilityObjection(message = '') {
+  const lower = norm(message)
+  return /(mas|so que|porém|porem|nao|não)/.test(lower)
+    && /(filhote|adulto|gato|cachorro|castrado|senior|errado|nao serve|não serve)/.test(lower)
+}
+
 const WEEKDAY_INDEXES = [
   ['domingo', 0],
   ['segunda', 1],
@@ -839,9 +905,13 @@ function parseServiceDatePreference(message = '') {
 
   const today = saoPauloTodayIso()
   const todayWeekday = new Date(`${today}T12:00:00-03:00`).getDay()
+  const wantsNextWeek = /(semana que vem|proxima semana|próxima semana)/.test(lower)
   for (const [label, target] of WEEKDAY_INDEXES) {
     if (!new RegExp(`\\b${label}\\b`).test(lower)) continue
-    const delta = (target - todayWeekday + 7) % 7
+    const rawDelta = (target - todayWeekday + 7) % 7
+    const delta = wantsNextWeek || /que vem|proxim[ao]|próxim[ao]/.test(lower)
+      ? rawDelta + (rawDelta === 0 ? 7 : 0)
+      : rawDelta
     return addDaysIso(today, delta)
   }
   return ''
@@ -854,6 +924,9 @@ function parseServiceTimePreference(message = '', awaiting = '') {
     return { period: 'any', exact: '' }
   }
   if (awaiting === 'service_time_preference' && isNegative(message)) return { period: 'any', exact: '' }
+  if (/(quais horarios|quais horários|horarios tem|horários tem|tem horario|tem horário)/.test(lower)) {
+    return { period: 'any', exact: '' }
+  }
 
   const exactMatches = [...lower.matchAll(/\b(?:as|às|pelas|por volta de|perto de|umas)?\s*([01]?\d|2[0-3])(?:\s*(?:h|horas?)|:([0-5]\d))\b/g)]
   const exactMatch = exactMatches.find((match) => {
@@ -964,11 +1037,13 @@ function resetOrderProgressForIntentChange(state, nextIntent) {
   state.selectedSlot = null
   state.slotOptions = []
   state.serviceType = ''
+  state.serviceGroomingDetail = ''
   state.serviceNotes = ''
   state.serviceNotesAsked = false
   state.serviceDate = ''
   state.serviceTimePreference = ''
   state.servicePreferredTime = ''
+  state.serviceTransport = defaultServiceTransport()
   state.upsell = defaultUpsell()
   state.payment = defaultPayment()
   state.fulfillment = defaultFulfillment()
@@ -1032,6 +1107,50 @@ function missingAddressFields(state) {
   if (!address || !/\d/.test(address)) missing.push('rua e número')
   if (!clean(state.fulfillment.neighborhood)) missing.push('bairro')
   if (!clean(state.fulfillment.reference)) missing.push('ponto de referência')
+  return missing
+}
+
+function updateServiceTransportAddressFromMessage(state, message = '') {
+  const text = clean(message)
+  const lower = norm(text)
+  if (!text) return
+  state.serviceTransport ||= defaultServiceTransport()
+
+  const looksLikeStreet = /(rua|avenida|av\.|av |alameda|travessa|praÃ§a|praca|rodovia|estrada)/i.test(text)
+  if (looksLikeStreet || (state.awaiting === 'service_transport_address' && !state.serviceTransport.address)) {
+    state.serviceTransport.address = text
+  }
+
+  if (state.awaiting === 'service_transport_address' && state.serviceTransport.address && !looksLikeStreet) {
+    const parts = text.split(',').map(clean).filter(Boolean)
+    if (!state.serviceTransport.neighborhood && parts[0]) {
+      state.serviceTransport.neighborhood = parts[0].replace(/^bairro\s+/i, '')
+    }
+    if (!state.serviceTransport.reference && parts.length >= 2) {
+      state.serviceTransport.reference = parts.slice(1).join(', ')
+    }
+  }
+
+  const bairroMatch = text.match(/bairro\s+([^,.-]+)/i)
+  if (bairroMatch) state.serviceTransport.neighborhood = clean(bairroMatch[1])
+  if (!state.serviceTransport.neighborhood && text.split(',').length >= 3) {
+    state.serviceTransport.neighborhood = clean(text.split(',')[2])
+  }
+
+  const refMatch = text.match(/(?:referencia|referÃªncia|perto|proximo|prÃ³ximo|ao lado|em frente)\s*(?:de|da|do|ao|a)?\s*([^,.]+)/i)
+  if (refMatch) state.serviceTransport.reference = clean(refMatch[0])
+
+  if (!state.serviceTransport.reference && (lower.includes('perto') || lower.includes('lado') || lower.includes('frente'))) {
+    state.serviceTransport.reference = text
+  }
+}
+
+function missingServiceTransportAddressFields(state) {
+  const missing = []
+  const address = clean(state.serviceTransport?.address)
+  if (!address || !/\d/.test(address)) missing.push('rua e nÃºmero')
+  if (!clean(state.serviceTransport?.neighborhood)) missing.push('bairro')
+  if (!clean(state.serviceTransport?.reference)) missing.push('ponto de referÃªncia')
   return missing
 }
 
@@ -1202,6 +1321,11 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
     state.serviceNotesAsked = true
   }
 
+  const groomingDetail = clean(facts.service_grooming_detail || facts.serviceGroomingDetail)
+  if (groomingDetail && state.intent === 'banho_tosa') {
+    state.serviceGroomingDetail = groomingDetail.slice(0, 120)
+  }
+
   const serviceDate = clean(facts.service_date || facts.serviceDate || facts.appointment_date || facts.appointmentDate || facts.preferred_date || facts.preferredDate)
   if (serviceDate
     && ['banho_tosa', 'veterinaria'].includes(state.intent)
@@ -1219,7 +1343,7 @@ function applyInterpretedFacts(state, facts = {}, currentMessage = '') {
   if (symptom && state.intent === 'veterinaria') state.symptom = symptom.slice(0, 160)
 
   const payment = detectPayment(facts.payment_method || facts.payment)
-  if (payment) state.payment.method = payment
+  if (payment && state.intent === 'produto') state.payment.method = payment
 
   const fulfillment = detectFulfillment(facts.fulfillment_type || facts.fulfillmentType)
   if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
@@ -1383,10 +1507,25 @@ function selectProductFromChoice(state, product, message) {
   return true
 }
 
+function isCompatibleUpsell(product = {}, state = {}) {
+  const haystack = norm([product.name, product.category, product.description].join(' '))
+  if (state.species === 'dog' && isCatProductText(haystack)) return false
+  if (state.species === 'cat' && isDogProductText(haystack)) return false
+  if (state.ageCategory === 'filhote') {
+    if (/(adulto|adult|castrad|senior|idoso)/.test(haystack)) return false
+    if (/(sache|sachê|petisco|bifinho|snack)/.test(haystack) && !/(filhote|puppy|junior)/.test(haystack)) return false
+  }
+  if (state.ageCategory === 'adulto' && /(filhote|puppy|junior)/.test(haystack)) return false
+  if (state.ageCategory === 'castrado' && /(filhote|puppy|junior)/.test(haystack)) return false
+  return true
+}
+
 function pickUpsell(products, state) {
   const selectedId = state.selectedProduct?.product_id
   const lowerSpecies = state.species
-  const candidates = availableProducts(products).filter((product) => clean(product.id) !== selectedId)
+  const candidates = availableProducts(products)
+    .filter((product) => clean(product.id) !== selectedId)
+    .filter((product) => isCompatibleUpsell(product, state))
   const scored = candidates.map((product) => {
     const haystack = norm([product.name, product.category].join(' '))
     let score = 0
@@ -1639,15 +1778,22 @@ function selectedProductPriceLine(state) {
   return `A ${item.name} fica ${money(item.unit_price)}.`
 }
 
-function recalcTotals(state, deliveryFee) {
+function recalcTotals(state, deliveryFee, petTransportFee = DEFAULT_PET_TRANSPORT_FEE) {
   const itemsSubtotal = selectedItems(state).reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
   const serviceSubtotal = state.selectedSlot ? Number(state.selectedSlot.price || 0) : 0
   const subtotal = state.intent === 'produto' ? itemsSubtotal : serviceSubtotal
-  const fee = state.intent === 'produto' && state.fulfillment.type === 'entrega' ? Number(deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
+  const delivery = state.intent === 'produto' && state.fulfillment.type === 'entrega' ? Number(deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
+  const transport = state.intent === 'banho_tosa' && state.serviceTransport?.accepted
+    ? Number(state.serviceTransport.fee || petTransportFee || DEFAULT_PET_TRANSPORT_FEE)
+    : 0
+  if (state.intent === 'banho_tosa' && state.serviceTransport?.accepted) {
+    state.serviceTransport.fee = transport
+  }
   state.totals = {
     subtotal,
-    deliveryFee: fee,
-    total: subtotal + fee,
+    deliveryFee: delivery,
+    serviceTransportFee: transport,
+    total: subtotal + delivery + transport,
   }
   return state
 }
@@ -1663,11 +1809,17 @@ function buildPartialSummary(state) {
   } else {
     lines.push(`• Serviço: ${state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')}`)
     if (state.selectedSlot) lines.push(`• Horário: ${formatSlot(state.selectedSlot)}`)
+    if (state.serviceGroomingDetail) lines.push(`• Acabamento: ${state.serviceGroomingDetail}`)
     if (state.serviceNotes) lines.push(`• Observação: ${state.serviceNotes}`)
+    if (state.serviceTransport?.accepted) {
+      lines.push(`• Transporte: sim (${money(state.totals.serviceTransportFee || state.serviceTransport.fee)})`)
+    } else if (state.serviceTransport?.declined) {
+      lines.push('• Transporte: não')
+    }
   }
   lines.push(`• Extra: ${state.upsell.accepted && state.upsell.item ? state.upsell.item.name : 'não adicionado'}`)
   lines.push(`• Total parcial: ${money(state.totals.subtotal)}`)
-  lines.push(`• Pagamento: ${state.payment.method || 'aguardando'}`)
+  if (state.intent === 'produto') lines.push(`• Pagamento: ${state.payment.method || 'aguardando'}`)
   lines.push(`• Entrega/retirada: ${state.intent === 'produto' ? state.fulfillment.type || 'aguardando' : 'serviço agendado'}`)
   return lines.join('\n')
 }
@@ -1686,11 +1838,18 @@ function buildFinalSummary(state) {
   } else {
     lines.push(`• Serviço: ${state.serviceType || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')}`)
     if (state.selectedSlot) lines.push(`• Horário: ${formatSlot(state.selectedSlot)}`)
+    if (state.serviceGroomingDetail) lines.push(`• Acabamento: ${state.serviceGroomingDetail}`)
     if (state.serviceNotes) lines.push(`• Observação: ${state.serviceNotes}`)
+    if (state.serviceTransport?.accepted) {
+      lines.push(`• Transporte: ${money(state.totals.serviceTransportFee || state.serviceTransport.fee)}`)
+      lines.push(`• Buscar em: ${state.serviceTransport.address} - ${state.serviceTransport.neighborhood}${state.serviceTransport.reference ? ` (${state.serviceTransport.reference})` : ''}`)
+    } else if (state.intent === 'banho_tosa') {
+      lines.push('• Transporte: não')
+    }
   }
   lines.push(`• Total: ${money(state.totals.total)}`)
-  lines.push(`• Pagamento: ${state.payment.method}${state.payment.method === 'dinheiro' && state.payment.changeFor ? `, troco para ${money(state.payment.changeFor)}` : ''}`)
   if (state.intent === 'produto') {
+    lines.push(`• Pagamento: ${state.payment.method}${state.payment.method === 'dinheiro' && state.payment.changeFor ? `, troco para ${money(state.payment.changeFor)}` : ''}`)
     if (state.fulfillment.type === 'entrega') {
       lines.push(`• Entrega: ${state.fulfillment.address} - ${state.fulfillment.neighborhood}${state.fulfillment.reference ? ` (${state.fulfillment.reference})` : ''}`)
     } else {
@@ -1750,12 +1909,20 @@ function buildOrderArgs(state) {
       upsell: false,
     }],
     total: state.totals.total,
-    payment_method: state.payment.method,
-    change_for: state.payment.changeFor,
+    payment_method: '',
+    change_for: null,
     fulfillment_type: 'servico',
+    service_transport_fee: state.serviceTransport?.accepted ? Number(state.totals.serviceTransportFee || state.serviceTransport.fee || 0) : 0,
+    service_transport_address: state.serviceTransport?.accepted ? state.serviceTransport.address : '',
+    service_transport_neighborhood: state.serviceTransport?.accepted ? state.serviceTransport.neighborhood : '',
+    service_transport_city: state.serviceTransport?.accepted ? state.serviceTransport.city : '',
+    service_transport_reference: state.serviceTransport?.accepted ? state.serviceTransport.reference : '',
+    service_grooming_detail: state.serviceGroomingDetail,
     notes: [
       state.symptom ? `Sintoma: ${state.symptom}` : null,
+      state.serviceGroomingDetail ? `Acabamento: ${state.serviceGroomingDetail}` : null,
       state.serviceNotes ? `Observação: ${state.serviceNotes}` : null,
+      state.serviceTransport?.accepted ? `Transporte pet: ${money(state.totals.serviceTransportFee || state.serviceTransport.fee)} - ${state.serviceTransport.address} - ${state.serviceTransport.neighborhood}${state.serviceTransport.reference ? ` (${state.serviceTransport.reference})` : ''}` : null,
       `PetBot guard v${PETBOT_VERSION}`,
     ].filter(Boolean).join(' | '),
   }
@@ -1845,6 +2012,10 @@ function applyMessageFacts(state, message) {
   }
 
   if (state.intent === 'banho_tosa') {
+    const groomingDetail = detectGroomingDetail(message, state)
+    if (groomingDetail && serviceNeedsGroomingDetail(state)) {
+      state.serviceGroomingDetail = groomingDetail
+    }
     if (hasNoServiceNotes(message) && state.awaiting === 'service_notes') {
       state.serviceNotes = ''
       state.serviceNotesAsked = true
@@ -1860,10 +2031,22 @@ function applyMessageFacts(state, message) {
   applyServiceSchedulePreference(state, message)
 
   const payment = detectPayment(message)
-  if (payment) state.payment.method = payment
+  if (payment && state.intent === 'produto') state.payment.method = payment
 
   const fulfillment = detectFulfillment(message)
   if (fulfillment && state.intent === 'produto') state.fulfillment.type = fulfillment
+
+  if (state.intent === 'banho_tosa' && state.awaiting === 'service_transport') {
+    state.serviceTransport ||= defaultServiceTransport()
+    state.serviceTransport.offered = true
+    if (isAffirmative(message)) {
+      state.serviceTransport.accepted = true
+      state.serviceTransport.declined = false
+    } else if (isNegative(message)) {
+      state.serviceTransport.accepted = false
+      state.serviceTransport.declined = true
+    }
+  }
 
   const quantity = parseSelectedProductQuantity(message, state.selectedProduct)
   if (quantity && state.intent === 'produto') {
@@ -1880,6 +2063,9 @@ function applyMessageFacts(state, message) {
   }
 
   updateAddressFromMessage(state, message)
+  if (state.intent === 'banho_tosa' && state.serviceTransport?.accepted) {
+    updateServiceTransportAddressFromMessage(state, message)
+  }
   return state
 }
 
@@ -1941,6 +2127,7 @@ function buildAllowedData(state) {
     package_preference_any: Boolean(state.packagePreferenceAny),
     pending_quantity: state.pendingQuantity,
     service_type: state.serviceType,
+    service_grooming_detail: state.serviceGroomingDetail,
     service_notes: state.serviceNotes,
     service_date: state.serviceDate,
     service_time_preference: state.serviceTimePreference,
@@ -1957,6 +2144,7 @@ function buildAllowedData(state) {
     },
     payment: { ...state.payment },
     fulfillment: { ...state.fulfillment },
+    service_transport: { ...state.serviceTransport },
     totals: { ...state.totals },
   }
 }
@@ -2040,7 +2228,7 @@ export function validatePetbotDraft(draft = '', directive = {}) {
   if (action !== 'oferecer_upsell' && /(quer adicionar|posso incluir|incluo|adicionar mais)/.test(lower)) {
     problems.push('upsell_nao_autorizado')
   }
-  if (!['pedir_endereco', 'resumo_final', 'aguardar_confirmacao'].includes(action) && /(rua|avenida|bairro|ponto de referencia|ponto de referência)/.test(lower)) {
+  if (!['pedir_endereco', 'pedir_endereco_transporte_pet', 'resumo_final', 'aguardar_confirmacao'].includes(action) && /(rua|avenida|bairro|ponto de referencia|ponto de referência)/.test(lower)) {
     problems.push('endereco_nao_autorizado')
   }
   if (directive.allowLlmRedraft && text.split('\n').length > 7) {
@@ -2148,8 +2336,7 @@ function presentSlots(state, appointments) {
   const explicitServiceSlots = availableAppointments(appointments)
     .filter((appointment) => serviceMatches(state.intent, appointment, state.serviceType))
   const explicitDateSlots = explicitServiceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
-  const virtualSlots = explicitDateSlots.length ? [] : buildVirtualSlots(state, appointments)
-  const serviceSlots = [...explicitServiceSlots, ...virtualSlots]
+  const serviceSlots = explicitServiceSlots
   const dateSlots = serviceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
   const preferredSlots = dateSlots.filter((slot) => slotMatchesTimePreference(slot, state))
   const requestedMinutes = state.serviceTimePreference === 'specific' ? timeTextToMinutes(state.servicePreferredTime) : null
@@ -2200,17 +2387,26 @@ function serviceFlow(state, message, appointments, settings) {
   if (state.intent === 'banho_tosa' && !state.serviceType) {
     return ask('É banho, tosa ou banho e tosa?', state, 'service_type', 'tipo_servico_pendente')
   }
+  if (state.intent === 'banho_tosa' && state.species === 'cat') {
+    return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar a equipe para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_humano')
+  }
   if (!state.petName) {
     return ask('Perfeito. Qual o nome do pet?', state, 'pet_name', 'pet_nome_pendente')
   }
   if (!state.species) {
     return ask('Ele é cachorro ou gato?', state, 'species', 'especie_pendente')
   }
+  if (state.intent === 'banho_tosa' && state.species === 'cat') {
+    return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar a equipe para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_humano')
+  }
   if (state.intent === 'banho_tosa' && !state.size && !state.breed) {
     return ask('Qual o porte ou raça dele?', state, 'service_pet_details', 'porte_pendente')
   }
   if (state.intent === 'veterinaria' && !state.symptom) {
     return ask('Qual é o problema principal dele?', state, 'symptom', 'sintoma_pendente')
+  }
+  if (serviceNeedsGroomingDetail(state) && !state.serviceGroomingDetail) {
+    return ask('Como você quer a tosa? Pode me dizer máquina 1, 3, 5 ou 7, ou enviar uma foto de referência.', state, 'grooming_detail', 'acabamento_tosa_pendente')
   }
   if (state.intent === 'banho_tosa' && !state.serviceNotesAsked && !state.serviceNotes) {
     return ask('Alguma observação para banho/tosa? Ex: alergia, nós no pelo, bravo ou sem perfume. Se não tiver, me fala "sem observação".', state, 'service_notes', 'observacao_servico_pendente')
@@ -2233,19 +2429,47 @@ function serviceFlow(state, message, appointments, settings) {
 
   state.serviceType = state.selectedSlot.service_type || (state.intent === 'veterinaria' ? 'veterinária' : 'banho/tosa')
   state.upsell.resolved = true
-  recalcTotals(state, settings.deliveryFee)
+  recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
+
+  if (state.intent === 'banho_tosa' && !state.serviceTransport?.offered) {
+    state.partialSummaryShown = true
+    state.serviceTransport ||= defaultServiceTransport()
+    state.serviceTransport.offered = true
+    state.serviceTransport.fee = Number(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)
+    recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
+    return ask(`${buildPartialSummary(state)}\n\nQuer que a gente busque o pet? O transporte fica ${money(state.serviceTransport.fee)}.`, state, 'service_transport', 'transporte_pet_pendente')
+  }
+
+  if (state.intent === 'banho_tosa' && state.serviceTransport?.offered && !state.serviceTransport.accepted && !state.serviceTransport.declined) {
+    return ask(`Quer que a gente busque o pet? O transporte fica ${money(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)}.`, state, 'service_transport', 'transporte_pet_pendente')
+  }
+
+  if (state.intent === 'banho_tosa' && state.serviceTransport?.accepted) {
+    const missing = missingServiceTransportAddressFields(state)
+    if (missing.length) {
+      state.serviceTransport.fee = Number(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)
+      recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
+      return ask(`Perfeito. Para buscar o pet, me passa ${missing.join(', ')}.`, state, 'service_transport_address', 'endereco_transporte_incompleto')
+    }
+  }
 
   if (!state.partialSummaryShown) {
     state.partialSummaryShown = true
-    if (!state.payment.method) {
-      return ask(`${buildPartialSummary(state)}\n\nQual forma prefere? pix, dinheiro ou cartão?`, state, 'payment', 'pagamento_pendente')
-    }
   }
   return checkoutFlow(state, settings)
 }
 
 function checkoutFlow(state, settings) {
-  recalcTotals(state, settings.deliveryFee)
+  recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
+
+  if (state.intent !== 'produto') {
+    if (!state.finalSummaryShown) {
+      state.finalSummaryShown = true
+      state.status = 'resumo_final'
+      return guardResult(buildFinalSummary(state), state, { action: 'resumo_final' })
+    }
+    return guardResult('Só preciso da sua confirmação para finalizar.', state, { action: 'aguardar_confirmacao' })
+  }
 
   if (!state.payment.method) {
     return ask('Qual forma prefere? pix, dinheiro ou cartão?', state, 'payment', 'pagamento_pendente')
@@ -2365,7 +2589,7 @@ function productFlow(state, message, products, settings) {
   }
 
   if (state.awaiting === 'upsell') {
-    if (isNegative(message)) {
+    if (isNegative(message) || isUpsellCompatibilityObjection(message)) {
       state.upsell.declined = true
       state.upsell.accepted = false
       state.upsell.resolved = true
@@ -2384,7 +2608,7 @@ function productFlow(state, message, products, settings) {
     return guardResult(`${selectedProductPriceLine(state)}\n\nQuer adicionar ${state.upsell.item?.name || 'um complemento'}?`, state, { action: 'oferecer_upsell' })
   }
 
-  recalcTotals(state, settings.deliveryFee)
+  recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
 
   if (!state.partialSummaryShown) {
     state.partialSummaryShown = true
@@ -2448,6 +2672,9 @@ export function runPetbotGuard({
   const state = hydrateFromCustomer(getPetbotState(context), session, customer)
   state.blockedReasons = []
   state.totals.deliveryFee = Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE)
+  state.totals.serviceTransportFee = state.serviceTransport?.accepted
+    ? Number(state.serviceTransport.fee || settings.petTransportFee || DEFAULT_PET_TRANSPORT_FEE)
+    : 0
 
   if (state.status === 'awaiting_rating') {
     const rating = trimmed.match(/^(10|[0-9])$/)
@@ -2477,7 +2704,7 @@ export function runPetbotGuard({
   }
 
   if (state.finalSummaryShown && !state.saved && (interpretation?.confirmation || isAffirmative(trimmed))) {
-    recalcTotals(state, settings.deliveryFee)
+    recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
     state.status = 'confirmando'
     state.confirmationKey = `${state.intent}:${state.customerName}:${state.totals.total}:${state.selectedProduct?.product_id || state.selectedSlot?.id || ''}`
     return guardResult('Perfeito, vou registrar agora.', state, { shouldSaveOrder: true, orderArgs: buildOrderArgs(state), action: 'confirmar_salvar' })
@@ -2508,6 +2735,9 @@ export function runPetbotGuard({
   if (!state.intent) {
     if (/taxa|entrega|delivery/i.test(trimmed)) {
       return guardResult(`Temos entrega sim. A taxa configurada é ${money(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE)}.\n\nVocê quer produto, banho/tosa ou veterinária?`, state)
+    }
+    if (state.species && /(atendimento|atender|cuidar|ver meu|minha gata|meu gato)/i.test(trimmed)) {
+      return ask(`Perfeito, ${state.customerName}. Seria veterinária, banho ou outro atendimento?`, state, 'intent', 'intencao_servico_ambigua')
     }
     return ask(`Perfeito, ${state.customerName}. Você precisa de produto, banho/tosa ou veterinária?`, state, 'intent', 'intencao_pendente')
   }

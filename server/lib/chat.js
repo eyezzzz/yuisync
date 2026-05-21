@@ -171,7 +171,7 @@ const PETBOT_TOOLS = [
       description: 'Registra venda, ordem operacional e/ou agendamento somente depois do cliente confirmar o resumo final.',
       parameters: {
         type: 'object',
-        required: ['customer_name', 'order_type', 'items', 'total', 'payment_method', 'fulfillment_type'],
+        required: ['customer_name', 'order_type', 'items', 'total'],
         additionalProperties: false,
         properties: {
           customer_name: { type: 'string' },
@@ -741,6 +741,7 @@ function buildSystemPrompt({
   storeNeighborhood,
   storeCity,
   deliveryFee,
+  petTransportFee,
   customerContext,
   stockContext,
   appointmentsContext,
@@ -768,21 +769,22 @@ function buildSystemPrompt({
     'Se o cliente ainda nao tem nome confirmado, peca o nome antes de qualquer triagem ou oferta, inclusive em saudacao simples.',
     '',
     'Fluxo obrigatorio:',
-    '1. Saudacao + nome; 2. Intencao; 3. dados minimos do pet; 4. opcoes/horarios reais; 5. valor antes de confirmar; 6. um upsell; 7. resumo parcial; 8. pagamento; 9. troco se dinheiro; 10. entrega/retirada; 11. endereco se entrega; 12. resumo final; 13. confirmar separacao/agendamento; 14. avaliacao 0-10.',
+    'Produto: nome, intencao, dados minimos, opcoes reais, preco, um upsell compativel, resumo parcial, pagamento, entrega/retirada, endereco se entrega, resumo final, confirmar, salvar e avaliacao 0-10.',
+    'Servico: nome, intencao, dados minimos, horario real, resumo, transporte do pet quando banho/tosa, confirmar, salvar agendamento e avaliacao 0-10. Nao peca forma de pagamento para banho/tosa ou veterinaria no chat.',
     'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
     'Dados minimos produto: cliente, especie e idade/categoria quando relevante (adulto, filhote, castrado, senior). Se o cliente informar uma raca ou tamanho do dia a dia (ex.: Shih Tzu, Yorkshire, Poodle, Lhasa, Spitz, Bulldog, Golden, Labrador, Pinscher, porte pequeno/medio/grande), trate isso como categoria/porte suficiente e nao peca peso. Pergunte peso apenas para produtos que dependem tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento.',
-    'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca e horario real disponivel.',
+    'Dados minimos banho/tosa: cliente, nome do pet, especie, porte/raca, acabamento quando for tosa e horario real disponivel. Para gato em banho/tosa, chame humano.',
     'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
     'Nunca assuma especie. Se o cliente nao disse cachorro/gato, pergunte. Nao diga "e cachorro, certo?".',
     'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
     'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
     'Ao vender racao por marca/raca/tamanho, priorize produtos cujo nome contenha a marca, a raca/tamanho e adulto/filhote/castrado informado. So diga que nao tem estoque se nenhum item do contexto operacional corresponder.',
     'Depois do cliente confirmar o resumo final, use a ferramenta create_confirmed_petshop_order antes de responder a avaliacao.',
-    'Ao chamar create_confirmed_petshop_order, envie product_id quando houver ID no estoque, nome do item, quantidade, preco unitario, fulfillment_type, pagamento e delivery_address completo quando for entrega.',
+    'Ao chamar create_confirmed_petshop_order para produto, envie product_id quando houver ID no estoque, nome do item, quantidade, preco unitario, fulfillment_type, pagamento e delivery_address completo quando for entrega. Para servico, envie appointment_id/scheduled_at e nao exija pagamento.',
     'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmacao final quando o resumo final ja foi exibido.',
     'Depois de responder "Pedido confirmado", se o cliente enviar uma nota de 0 a 10, nao registre pedido de novo; apenas agradeca a avaliacao.',
-    'Faca uma pergunta operacional por vez: primeiro pagamento, depois entrega/retirada, depois endereco se for entrega.',
-    'Se o cliente responder pagamento e entrega juntos, aceite os dois e siga para endereco.',
+    'Faca uma pergunta operacional por vez. Produto: primeiro pagamento, depois entrega/retirada, depois endereco se for entrega. Servico: depois do horario, pergunte transporte do pet quando banho/tosa.',
+    'Se o cliente responder pagamento e entrega juntos em produto, aceite os dois e siga para endereco.',
     'Entrega: informe explicitamente a taxa configurada antes do resumo final. Some a taxa ao total final. Nunca deixe a taxa de entrega fora do total.',
     'Endereco de entrega minimo: rua/avenida, numero, bairro e ponto de referencia. Se faltar bairro ou referencia, peca o dado faltante antes de confirmar.',
     '',
@@ -794,6 +796,7 @@ function buildSystemPrompt({
     `Telefone da loja: ${storePhone || 'Nao informado'}`,
     `Endereco: ${storeLocation}`,
     `Taxa de entrega: R$ ${Number(deliveryFee ?? DEFAULT_DELIVERY_FEE).toFixed(2)}`,
+    `Transporte do pet banho/tosa: R$ ${Number(petTransportFee ?? 20).toFixed(2)}`,
     '',
     'Cliente atual:',
     customerContext || 'Cliente nao carregado.',
@@ -811,7 +814,7 @@ function buildSystemPrompt({
     'Formato do resumo parcial:',
     '**Pedido em andamento:**\n• Cliente: [NOME]\n• Pet: [NOME/ESPECIE/PORTE]\n• [PRODUTO/SERVICO]: [DETALHE]\n• Extra: [UPSELL OU "nao adicionado"]\n• Total parcial: R$ [VALOR]\n• Pagamento: aguardando\n• Entrega/retirada: aguardando',
     '',
-    'Pagamento: pergunte exatamente "Qual forma prefere? pix, dinheiro ou cartão?"',
+    'Pagamento: apenas para produto, pergunte exatamente "Qual forma prefere? pix, dinheiro ou cartão?"',
     'Entrega/retirada: pergunte exatamente "Será entrega ou retirada na loja?"',
     'Se for entrega, antes do resumo final diga: "A taxa de entrega é R$ [TAXA]. O total com entrega fica R$ [TOTAL]."',
     'Resumo final de entrega deve mostrar subtotal, taxa de entrega e total final. Termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
@@ -823,14 +826,23 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
   return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
       .from('settings')
-      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee')
       .eq('module_id', moduleId)
 
     if (tenantId) {
       query = query.eq('tenant_id', tenantId)
     }
 
-    const { data, error } = await query.maybeSingle()
+    let result = await query.maybeSingle()
+    if (result.error && /pet_transport_fee/i.test(String(result.error.message || ''))) {
+      let fallbackQuery = supabase
+        .from('settings')
+        .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
+        .eq('module_id', moduleId)
+      if (tenantId) fallbackQuery = fallbackQuery.eq('tenant_id', tenantId)
+      result = await fallbackQuery.maybeSingle()
+    }
+    const { data, error } = result
     if (error) {
       if (tenantId && isMissingTenantColumnError(error)) {
         throw new HttpError(500, 'Tenant isolation is not enabled in settings table.')
@@ -846,6 +858,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
       storeCity: data?.store_city || '',
       botPrompt: data?.bot_prompt || '',
       deliveryFee: Number(data?.delivery_fee ?? DEFAULT_DELIVERY_FEE),
+      petTransportFee: Number(data?.pet_transport_fee ?? 20),
     }
   })
 }
@@ -1165,7 +1178,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   const items = Array.isArray(args.items) ? args.items : []
   if (!items.length) throw new Error('Pedido sem itens para registrar.')
 
-  if (!['pix', 'dinheiro', 'cartao'].includes(args.payment_method)) {
+  if (args.order_type === 'produto' && !['pix', 'dinheiro', 'cartao'].includes(args.payment_method)) {
     throw new Error('Forma de pagamento ausente ou invalida.')
   }
 
@@ -1467,6 +1480,12 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     delivery_city: cleanText(args.delivery_city),
     delivery_reference: cleanText(args.delivery_reference),
     delivery_fee: Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE),
+    service_transport_fee: Number(args.service_transport_fee || 0),
+    service_transport_address: cleanText(args.service_transport_address),
+    service_transport_neighborhood: cleanText(args.service_transport_neighborhood),
+    service_transport_city: cleanText(args.service_transport_city),
+    service_transport_reference: cleanText(args.service_transport_reference),
+    service_grooming_detail: cleanText(args.service_grooming_detail),
     expected_total: Number(args.total || 0),
     appointment_id: cleanText(args.appointment_id),
     scheduled_at: cleanText(args.scheduled_at),
@@ -1492,7 +1511,7 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
   const customer = await ensureCustomerProfile(supabase, session, args)
   const payload = buildPetbotOrderTransactionPayload(session, customer, settings, args)
   if (!payload.items.length) throw new Error('Pedido sem itens para registrar.')
-  if (!['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)) {
+  if (payload.order_type === 'produto' && !['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)) {
     throw new Error('Forma de pagamento ausente ou invalida.')
   }
 

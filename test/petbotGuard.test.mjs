@@ -15,7 +15,7 @@ import {
   rankCatalogProducts,
 } from '../server/lib/petbotCatalog.js'
 
-const settings = { deliveryFee: 10 }
+const settings = { deliveryFee: 10, petTransportFee: 20 }
 
 function dateOffset(days) {
   const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
@@ -208,12 +208,13 @@ function assertConversationSaved(scenario) {
   assert.equal(result.shouldSaveOrder, true, scenario.name)
   assert.equal(result.action, 'confirmar_salvar')
   assert.equal(result.orderArgs.order_type, scenario.orderType)
-  assert.equal(result.orderArgs.payment_method, scenario.payment)
   assert.equal(Number(result.orderArgs.total) > 0, true)
   if (scenario.orderType === 'produto') {
+    assert.equal(result.orderArgs.payment_method, scenario.payment)
     assert.ok(result.orderArgs.items?.[0]?.product_id, scenario.name)
     if (scenario.fulfillment) assert.equal(result.orderArgs.fulfillment_type, scenario.fulfillment)
   } else {
+    assert.equal(result.orderArgs.payment_method, '')
     assert.ok(result.orderArgs.appointment_id, scenario.name)
     assert.ok(result.orderArgs.scheduled_at, scenario.name)
   }
@@ -340,7 +341,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Ana', 'quero banho para Thor golden', 'sem observacao', 'amanha', 'tarde', '14:00', 'pix', 'sim'],
+    messages: ['oi', 'Ana', 'quero banho para Thor golden', 'sem observacao', 'amanha', 'tarde', '14:00', 'nao', 'sim'],
   },
   {
     id: 'banho-2',
@@ -349,7 +350,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'cartao',
     extra: { appointments: finalFlowAppointments },
-    messages: ['boa tarde', 'Marcos', 'quero banho e tosa para Nina shih tzu, sem perfume', 'amanha', 'tarde', '16:30', 'cartao', 'sim'],
+    messages: ['boa tarde', 'Marcos', 'quero banho e tosa para Nina shih tzu', 'maquina 5', 'sem perfume', 'amanha', 'tarde', '16:30', 'nao', 'sim'],
   },
   {
     id: 'banho-3',
@@ -358,7 +359,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Clara', 'quero agendar', 'banho e tosa', 'Mel poodle', 'ela tem alergia ao perfume', 'amanha', 'tarde', '16:30', 'pix', 'sim'],
+    messages: ['oi', 'Clara', 'quero agendar', 'banho e tosa', 'Mel poodle', 'maquina 3', 'ela tem alergia ao perfume', 'amanha', 'tarde', '16:30', 'nao', 'sim'],
   },
   {
     id: 'banho-4',
@@ -367,7 +368,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'dinheiro',
     extra: { appointments: finalFlowAppointments },
-    messages: ['ola', 'Rafael', 'quero banho para Rex pinscher bravo', 'amanha', 'tarde', '14:00', 'dinheiro', 'sem troco', 'sim'],
+    messages: ['ola', 'Rafael', 'quero banho para Rex pinscher bravo', 'amanha', 'tarde', '14:00', 'nao', 'sim'],
   },
   {
     id: 'banho-5',
@@ -376,7 +377,7 @@ const finalFlowScenarios = [
     orderType: 'banho_tosa',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Bia', 'quero tosa higienica para Toby spitz', 'sem observacao', 'amanha', 'tarde', '16:30', 'pix', 'sim'],
+    messages: ['oi', 'Bia', 'quero tosa higienica para Toby spitz', 'maquina 7', 'sem observacao', 'amanha', 'tarde', '16:30', 'nao', 'sim'],
   },
   {
     id: 'vet-1',
@@ -385,7 +386,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Paula', 'quero veterinario para Bob cachorro com coceira', 'amanha', 'tarde', '15:00', 'pix', 'sim'],
+    messages: ['oi', 'Paula', 'quero veterinario para Bob cachorro com coceira', 'amanha', 'tarde', '15:00', 'sim'],
   },
   {
     id: 'vet-2',
@@ -394,7 +395,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'cartao',
     extra: { appointments: finalFlowAppointments },
-    messages: ['boa tarde', 'Priscila', 'preciso de consulta para Mia gata espirrando', 'amanha', 'tarde', '15:00', 'cartao', 'sim'],
+    messages: ['boa tarde', 'Priscila', 'preciso de consulta para Mia gata espirrando', 'amanha', 'tarde', '15:00', 'sim'],
   },
   {
     id: 'vet-3',
@@ -403,7 +404,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'dinheiro',
     extra: { appointments: finalFlowAppointments },
-    messages: ['ola', 'Fernanda', 'quero vet para Apollo cachorro mancando', 'amanha', 'tarde', '15h', 'dinheiro', 'troco para 100', 'sim'],
+    messages: ['ola', 'Fernanda', 'quero vet para Apollo cachorro mancando', 'amanha', 'tarde', '15h', 'sim'],
   },
   {
     id: 'vet-4',
@@ -412,7 +413,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'pix',
     extra: { appointments: finalFlowAppointments },
-    messages: ['oi', 'Nicole', 'quero vacina para Luna gato', 'vacina anual', 'amanha', 'tarde', '17:00', 'pix', 'sim'],
+    messages: ['oi', 'Nicole', 'quero vacina para Luna gato', 'vacina anual', 'amanha', 'tarde', '17:00', 'sim'],
   },
   {
     id: 'vet-5',
@@ -421,7 +422,7 @@ const finalFlowScenarios = [
     orderType: 'veterinaria',
     payment: 'cartao',
     extra: { appointments: finalFlowAppointments },
-    messages: ['bom dia', 'Bruno', 'preciso de veterinario para Simba gato, nao esta comendo', 'amanha', 'tarde', '15:00', 'cartao', 'sim'],
+    messages: ['bom dia', 'Bruno', 'preciso de veterinario para Simba gato, nao esta comendo', 'amanha', 'tarde', '15:00', 'sim'],
   },
 ]
 
@@ -1241,7 +1242,7 @@ test('veterinaria extrai nome, especie e sintoma em frase natural', () => {
   assert.match(result.state.symptom, /coceira/i)
 })
 
-test('agenda vazia usa grade operacional e oferece horario pedido', () => {
+test('agenda vazia nao cria horario virtual em producao', () => {
   let context = {}
   let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
   context = result.context
@@ -1254,138 +1255,173 @@ test('agenda vazia usa grade operacional e oferece horario pedido', () => {
   result = turn(context, 'amanha', { appointments: [] })
   context = result.context
   result = turn(context, '16h', { appointments: [] })
-  context = result.context
 
-  assert.equal(result.action, 'oferecer_horarios')
-  assert.match(result.reply, /16:00/)
-  assert.match(result.reply, /R\$ 60,00/)
-
-  result = turn(context, 'sim', { appointments: [] })
-  assert.equal(result.state.selectedSlot.virtual, true)
-  assert.match(result.reply, /Pedido em andamento/i)
+  assert.equal(result.action, 'sem_horario')
+  assert.match(result.reply, /não achei horário disponível|nao achei horario disponivel/i)
+  assert.equal(result.state.selectedSlot, null)
 })
 
-test('agenda operacional aceita preferencia de meia hora', () => {
+test('banho nao aceita pagamento como resposta ao transporte', () => {
   let context = {}
-  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'Ana', { appointments: [] })
+  result = turn(context, 'Roberta', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'Thor golden', { appointments: [] })
+  result = turn(context, 'Toby shih tzu', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'sem observacao', { appointments: [] })
+  result = turn(context, 'sem perfume', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'amanha', { appointments: [] })
+  result = turn(context, 'amanha', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, '16:30', { appointments: [] })
+  result = turn(context, '14:00', { appointments: mixedAppointments })
   context = result.context
+  result = turn(context, '1', { appointments: mixedAppointments })
+  context = result.context
+  assert.equal(result.action, 'perguntar_transporte_pet')
 
-  assert.equal(result.action, 'oferecer_horarios')
-  assert.match(result.reply, /16:30/)
-
-  result = turn(context, 'sim', { appointments: [] })
-  assert.equal(result.state.selectedSlot.virtual, true)
-  assert.match(result.state.selectedSlot.scheduled_at, /16:30/)
+  result = turn(context, 'pix', { appointments: mixedAppointments })
+  assert.equal(result.action, 'perguntar_transporte_pet')
+  assert.match(result.reply, /transporte/i)
 })
 
-test('agenda com unico horario aceita pagamento como escolha implicita', () => {
+test('banho com transporte aceito soma taxa e salva endereco de busca', () => {
   let context = {}
-  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'Roberta', { appointments: [] })
+  result = turn(context, 'Roberta', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'Toby shih tzu', { appointments: [] })
+  result = turn(context, 'Toby shih tzu', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'sem perfume', { appointments: [] })
+  result = turn(context, 'sem perfume', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'amanha', { appointments: [] })
+  result = turn(context, 'amanha', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, '08:00', { appointments: [] })
+  result = turn(context, '14:00', { appointments: mixedAppointments })
   context = result.context
-  assert.equal(result.action, 'oferecer_horarios')
-  assert.match(result.reply, /08:00/)
+  result = turn(context, '1', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'sim', { appointments: mixedAppointments })
+  context = result.context
+  assert.equal(result.action, 'pedir_endereco_transporte_pet')
 
-  result = turn(context, 'pix', { appointments: [] })
-  assert.equal(result.state.selectedSlot.virtual, true)
-  assert.match(result.state.selectedSlot.scheduled_at, /08:00/)
+  result = turn(context, 'Av. Bernardo Mascarenhas, 1327 ap 303b', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Bairro Fabrica, perto da padaria', { appointments: mixedAppointments })
+  context = result.context
+  assert.equal(result.action, 'resumo_final')
+  assert.match(result.reply, /Transporte: R\$ 20,00/i)
+  assert.equal(result.state.totals.total, 90)
+
+  result = turn(context, 'sim', { appointments: mixedAppointments })
+  assert.equal(result.shouldSaveOrder, true)
+  assert.equal(result.orderArgs.service_transport_fee, 20)
+  assert.match(result.orderArgs.service_transport_address, /Bernardo Mascarenhas/i)
+})
+
+test('veterinaria salva sem pagamento depois do horario real', () => {
+  let context = {}
+  let result = turn(context, 'quero veterinario para Totto cachorro pequeno com coceira', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Fernanda', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, '15:00', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, '1', { appointments: mixedAppointments })
+  context = result.context
+  assert.equal(result.action, 'resumo_final')
   assert.match(result.reply, /Confirma o agendamento/i)
+  assert.doesNotMatch(result.reply, /pagamento/i)
+
+  result = turn(context, 'sim', { appointments: mixedAppointments })
+  assert.equal(result.shouldSaveOrder, true)
+  assert.equal(result.orderArgs.payment_method, '')
 })
 
-test('agenda ignora horario repetido pela LLM quando cliente responde pagamento', () => {
+test('banho ou tosa para gato chama humano', () => {
   let context = {}
-  let result = turn(context, 'quero banho pro meu cachorro', { appointments: [] })
+  let result = turn(context, 'quero banho para minha gata persa')
   context = result.context
-  result = turn(context, 'Roberta', { appointments: [] })
-  context = result.context
-  result = turn(context, 'Toby shih tzu', { appointments: [] })
-  context = result.context
-  result = turn(context, 'sem perfume', { appointments: [] })
-  context = result.context
-  result = turn(context, 'amanha', { appointments: [] })
-  context = result.context
-  result = turn(context, '08:00', { appointments: [] })
-  context = result.context
+  result = turn(context, 'Clara')
+  assert.equal(result.action, 'handoff_humano')
+  assert.equal(result.needsHuman, true)
+  assert.match(result.reply, /gato|gata|equipe/i)
+})
 
-  result = turn(context, 'pix', {
-    appointments: [],
-    interpretation: {
-      intent: 'banho_tosa',
-      payment_method: 'pix',
-      service_date: appointmentDate,
-      service_time_preference: 'specific',
-      service_preferred_time: '08:00',
+test('gato filhote nao recebe upsell adulto', () => {
+  const kittenProducts = [
+    {
+      id: 'special-cat-kitten',
+      name: 'SPECIAL CAT ULTRA GATO FILHOTE SALMAO 10,1 KG',
+      category: 'Ração gato',
+      price: 162.9,
+      stock_quantity: 3,
+      active: true,
+    },
+    {
+      id: 'kitekat-adulto',
+      name: 'KITEKAT CAT SACHE ADULTO CARNE 70 G',
+      category: 'Sachê gato',
+      price: 2.99,
+      stock_quantity: 20,
+      active: true,
+    },
+  ]
+  let context = {}
+  let result = turn(context, 'oi', { products: kittenProducts })
+  context = result.context
+  result = turn(context, 'Denilson, quero ração para gato filhote', { products: kittenProducts })
+  context = result.context
+  result = turn(context, 'sem preferencia de marca, qualquer pacote', { products: kittenProducts })
+  context = result.context
+  result = turn(context, '1', { products: kittenProducts })
+
+  assert.notEqual(result.action, 'oferecer_upsell')
+  assert.doesNotMatch(result.reply, /KITEKAT/i)
+  assert.match(result.reply, /Pagamento|pix|dinheiro|cartão|cartao/i)
+})
+
+test('contestacao de upsell incompativel vira recusa sem insistir', () => {
+  const state = getPetbotState({
+    petbot: {
+      customerName: 'Denilson',
+      nameConfirmed: true,
+      intent: 'produto',
+      species: 'cat',
+      ageCategory: 'filhote',
+      selectedProduct: {
+        product_id: 'special-cat-kitten',
+        name: 'SPECIAL CAT ULTRA GATO FILHOTE SALMAO 10,1 KG',
+        category: 'Ração gato',
+        quantity: 1,
+        unit_price: 162.9,
+        stock_quantity: 3,
+      },
+      upsell: {
+        offered: true,
+        resolved: false,
+        accepted: false,
+        declined: false,
+        item: {
+          product_id: 'kitekat-adulto',
+          name: 'KITEKAT CAT SACHE ADULTO CARNE 70 G',
+          category: 'Sachê gato',
+          quantity: 1,
+          unit_price: 2.99,
+          stock_quantity: 20,
+          upsell: true,
+        },
+      },
+      awaiting: 'upsell',
     },
   })
 
-  assert.equal(result.action, 'resumo_final')
-  assert.match(result.reply, /Confirma o agendamento/i)
-  assert.match(result.state.selectedSlot.scheduled_at, /08:00/)
-})
-
-test('agenda com unico horario aceita confirmacao como escolha implicita', () => {
-  let context = {}
-  let result = turn(context, 'quero veterinario para Totto cachorro pequeno com coceira', { appointments: [] })
-  context = result.context
-  result = turn(context, 'Fernanda', { appointments: [] })
-  context = result.context
-  result = turn(context, 'amanha', { appointments: [] })
-  context = result.context
-  result = turn(context, '10:00', { appointments: [] })
-  context = result.context
-  assert.equal(result.action, 'oferecer_horarios')
-  assert.match(result.reply, /10:00/)
-
-  result = turn(context, 'sim', { appointments: [] })
-  assert.equal(result.state.selectedSlot.virtual, true)
+  const result = turn({ petbot: state }, 'mas meu gato é filhote, esse sachê é adulto')
+  assert.equal(result.state.upsell.declined, true)
+  assert.equal(result.state.upsell.resolved, true)
   assert.match(result.reply, /Pedido em andamento/i)
-})
-
-test('agenda operacional bloqueia horarios sobrepostos a ocupados', () => {
-  const busyOverlapAppointments = [{
-    id: 'busy-16',
-    service_type: 'Banho',
-    scheduled_at: appointmentAt('16:00'),
-    status: 'booked',
-    price: 70,
-    duration_min: 60,
-  }]
-  let context = {}
-  let result = turn(context, 'quero banho pro meu cachorro', { appointments: busyOverlapAppointments })
-  context = result.context
-  result = turn(context, 'Ana', { appointments: busyOverlapAppointments })
-  context = result.context
-  result = turn(context, 'Thor golden', { appointments: busyOverlapAppointments })
-  context = result.context
-  result = turn(context, 'sem observacao', { appointments: busyOverlapAppointments })
-  context = result.context
-  result = turn(context, 'amanha', { appointments: busyOverlapAppointments })
-  context = result.context
-  result = turn(context, '16:30', { appointments: busyOverlapAppointments })
-
-  assert.equal(result.action, 'oferecer_horarios')
-  assert.doesNotMatch(result.reply, /16:00/)
-  assert.doesNotMatch(result.reply, /16:30/)
-  assert.match(result.reply, /17:00/)
+  assert.doesNotMatch(result.reply, /Quer adicionar/i)
 })
 
 test('banho e tosa usa agenda certa e salva observacao operacional', () => {
@@ -1396,6 +1432,8 @@ test('banho e tosa usa agenda certa e salva observacao operacional', () => {
   context = result.context
 
   result = turn(context, 'quero banho e tosa para Thor golden, ele morde e tem nos no pelo', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'maquina 5', { appointments: mixedAppointments })
   context = result.context
   result = turn(context, 'amanha de tarde', { appointments: mixedAppointments })
   context = result.context
@@ -1410,7 +1448,7 @@ test('banho e tosa usa agenda certa e salva observacao operacional', () => {
   assert.match(result.reply, /Observa/i)
   assert.match(result.reply, /morde/i)
 
-  result = turn(context, 'pix', { appointments: mixedAppointments })
+  result = turn(context, 'nao', { appointments: mixedAppointments })
   context = result.context
   assert.match(result.reply, /Confirma o agendamento/i)
 

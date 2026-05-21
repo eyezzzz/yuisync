@@ -32,6 +32,7 @@ const INITIAL_FORM = {
   fiscal_notes: '',
   bot_prompt: DEFAULT_PETBOT_PROMPT,
   delivery_fee: '10.00',
+  pet_transport_fee: '20.00',
   issuer_legal_name: '',
   issuer_trade_name: '',
   issuer_cnpj: '',
@@ -58,9 +59,9 @@ function isFiscalSchemaError(error) {
   )
 }
 
-function isDeliveryFeeSchemaError(error) {
+function isFeeSchemaError(error) {
   const msg = String(error?.message || '').toLowerCase()
-  return msg.includes('delivery_fee') && (
+  return (msg.includes('delivery_fee') || msg.includes('pet_transport_fee')) && (
     msg.includes('schema cache')
     || msg.includes('column')
     || msg.includes('does not exist')
@@ -165,6 +166,7 @@ export default function SettingsPage() {
           fiscal_id: data.fiscal_id || '',
           bot_prompt: data.bot_prompt || DEFAULT_PETBOT_PROMPT,
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
+          pet_transport_fee: data.pet_transport_fee != null ? String(data.pet_transport_fee) : '20.00',
         }
       }
 
@@ -251,9 +253,10 @@ export default function SettingsPage() {
 
         const conflict = includeTenant ? 'tenant_id,module_id' : 'module_id'
         const firstTry = await supabase.from('settings').upsert(row, { onConflict: conflict })
-        if (firstTry.error && isDeliveryFeeSchemaError(firstTry.error)) {
+        if (firstTry.error && isFeeSchemaError(firstTry.error)) {
           const fallbackRow = { ...row }
           delete fallbackRow.delivery_fee
+          delete fallbackRow.pet_transport_fee
           return supabase.from('settings').upsert(fallbackRow, { onConflict: conflict })
         }
         return firstTry
@@ -695,6 +698,19 @@ export default function SettingsPage() {
                     disabled={!canEdit}
                     value={form.delivery_fee}
                     onChange={(event) => setForm((prev) => ({ ...prev, delivery_fee: event.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="inp-label">Transporte do pet</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    className="inp"
+                    placeholder="20.00"
+                    disabled={!canEdit}
+                    value={form.pet_transport_fee}
+                    onChange={(event) => setForm((prev) => ({ ...prev, pet_transport_fee: event.target.value }))}
                   />
                 </div>
               </div>

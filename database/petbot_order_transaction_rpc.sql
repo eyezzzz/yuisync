@@ -29,6 +29,9 @@ alter table public.appointments
   add column if not exists description text,
   add column if not exists updated_at timestamptz not null default now();
 
+alter table public.settings
+  add column if not exists pet_transport_fee numeric(10,2) not null default 20.00;
+
 create table if not exists public.service_delivery_orders (
   id uuid primary key default uuid_generate_v4(),
   tenant_id uuid references public.tenants(id),
@@ -86,6 +89,12 @@ declare
   v_delivery_city text := nullif(trim(p_payload->>'delivery_city'), '');
   v_delivery_reference text := nullif(trim(p_payload->>'delivery_reference'), '');
   v_delivery_fee numeric := coalesce(nullif(p_payload->>'delivery_fee', '')::numeric, 10);
+  v_service_transport_fee numeric := coalesce(nullif(p_payload->>'service_transport_fee', '')::numeric, 0);
+  v_service_transport_address text := nullif(trim(p_payload->>'service_transport_address'), '');
+  v_service_transport_neighborhood text := nullif(trim(p_payload->>'service_transport_neighborhood'), '');
+  v_service_transport_city text := nullif(trim(p_payload->>'service_transport_city'), '');
+  v_service_transport_reference text := nullif(trim(p_payload->>'service_transport_reference'), '');
+  v_service_grooming_detail text := nullif(trim(p_payload->>'service_grooming_detail'), '');
   v_expected_total numeric := nullif(p_payload->>'expected_total', '')::numeric;
   v_items jsonb := coalesce(p_payload->'items', '[]'::jsonb);
   v_resolved_items jsonb := '[]'::jsonb;
@@ -142,7 +151,7 @@ begin
     raise exception 'Cliente ausente para registrar pedido.';
   end if;
 
-  if v_payment_method not in ('pix', 'dinheiro', 'cartao') then
+  if v_order_type = 'produto' and v_payment_method not in ('pix', 'dinheiro', 'cartao') then
     raise exception 'Forma de pagamento ausente ou invalida.';
   end if;
 
@@ -315,6 +324,12 @@ begin
       else 'outro'
     end;
 
+    if v_service_transport_fee > 0
+      and (v_service_transport_address is null or v_service_transport_address !~ '[0-9]' or v_service_transport_neighborhood is null or v_service_transport_reference is null)
+    then
+      raise exception 'Endereco do transporte do pet incompleto.';
+    end if;
+
     v_resolved_items := jsonb_build_array(jsonb_build_object(
       'product_id', null,
       'name', v_service_type,
@@ -325,7 +340,9 @@ begin
     ));
   end if;
 
-  v_total := v_subtotal + case when v_order_type = 'produto' and v_fulfillment_type = 'entrega' then v_delivery_fee else 0 end;
+  v_total := v_subtotal
+    + case when v_order_type = 'produto' and v_fulfillment_type = 'entrega' then v_delivery_fee else 0 end
+    + case when v_order_type <> 'produto' then v_service_transport_fee else 0 end;
 
   if v_expected_total is not null and abs(v_total - v_expected_total) > 0.01 then
     raise exception 'Total divergente. Esperado %, recalculado %.', v_expected_total, v_total;
@@ -347,10 +364,14 @@ begin
     'Sessao: ' || v_session_id::text,
     case when v_item_summary is not null then 'Itens: ' || v_item_summary end,
     case when v_fulfillment_type = 'entrega' then 'Endereco: ' || concat_ws(' - ', v_delivery_address, v_delivery_neighborhood, v_delivery_city) end,
+    case when v_service_grooming_detail is not null then 'Acabamento: ' || v_service_grooming_detail end,
+    case when v_service_transport_fee > 0 then 'Transporte pet: R$ ' || to_char(v_service_transport_fee, 'FM999999990.00') end,
+    case when v_service_transport_fee > 0 then 'Buscar pet em: ' || concat_ws(' - ', v_service_transport_address, v_service_transport_neighborhood, v_service_transport_city) end,
     v_notes_input,
     case when v_fulfillment_type = 'retirada' then 'Retirada na loja' end,
     case when v_fulfillment_type = 'entrega' then 'Taxa de entrega: R$ ' || to_char(v_delivery_fee, 'FM999999990.00') end,
     case when v_delivery_reference is not null then 'Referencia: ' || v_delivery_reference end,
+    case when v_service_transport_reference is not null then 'Referencia transporte: ' || v_service_transport_reference end,
     case when coalesce(nullif(p_payload->>'change_for', '')::numeric, 0) > 0 then 'Troco para R$ ' || to_char(nullif(p_payload->>'change_for', '')::numeric, 'FM999999990.00') end
   ], null), ' | ');
 
@@ -407,7 +428,7 @@ begin
           pet_id = v_pet_id,
           service_type = v_service_type,
           duration_min = coalesce(duration_min, v_service_duration, 60),
-          price = v_total,
+          price = v_subtotal,
           status = 'agendado',
           source = 'whatsapp',
           customer_name = v_customer_name,
@@ -427,7 +448,7 @@ begin
         (v_scheduled_for at time zone 'America/Sao_Paulo')::time,
         ((v_scheduled_for + make_interval(mins => v_service_duration)) at time zone 'America/Sao_Paulo')::time,
         v_service_duration,
-        v_total, 'agendado', 'whatsapp', v_customer_name, v_customer_phone, v_notes, v_notes
+        v_subtotal, 'agendado', 'whatsapp', v_customer_name, v_customer_phone, v_notes, v_notes
       )
       returning id into v_appointment_id;
     end if;
@@ -445,9 +466,9 @@ begin
       order_type = v_operational_order_type,
       status = v_operational_status,
       scheduled_for = v_scheduled_for,
-      delivery_address = case when v_fulfillment_type = 'entrega' then v_delivery_address else null end,
-      delivery_neighborhood = case when v_fulfillment_type = 'entrega' then v_delivery_neighborhood else null end,
-      delivery_city = case when v_fulfillment_type = 'entrega' then v_delivery_city else null end,
+      delivery_address = case when v_fulfillment_type = 'entrega' then v_delivery_address when v_service_transport_fee > 0 then v_service_transport_address else null end,
+      delivery_neighborhood = case when v_fulfillment_type = 'entrega' then v_delivery_neighborhood when v_service_transport_fee > 0 then v_service_transport_neighborhood else null end,
+      delivery_city = case when v_fulfillment_type = 'entrega' then v_delivery_city when v_service_transport_fee > 0 then v_service_transport_city else null end,
       contact_phone = v_customer_phone,
       notes = v_notes,
       updated_at = now()
@@ -462,9 +483,9 @@ begin
     values (
       v_tenant_id, v_module_id, v_sale_id, v_client_id, v_session_id, 'whatsapp', v_operational_order_type, v_operational_status,
       v_scheduled_for,
-      case when v_fulfillment_type = 'entrega' then v_delivery_address else null end,
-      case when v_fulfillment_type = 'entrega' then v_delivery_neighborhood else null end,
-      case when v_fulfillment_type = 'entrega' then v_delivery_city else null end,
+      case when v_fulfillment_type = 'entrega' then v_delivery_address when v_service_transport_fee > 0 then v_service_transport_address else null end,
+      case when v_fulfillment_type = 'entrega' then v_delivery_neighborhood when v_service_transport_fee > 0 then v_service_transport_neighborhood else null end,
+      case when v_fulfillment_type = 'entrega' then v_delivery_city when v_service_transport_fee > 0 then v_service_transport_city else null end,
       v_customer_phone, v_notes, now()
     )
     returning id into v_order_id;
