@@ -47,6 +47,9 @@ const mapPetToClient = (p, moduleId) => ({
   }
 })
 
+const sanitizeSearch = (value = '') =>
+  String(value || '').replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim()
+
 export function useClients() {
   const [clients, setClients]   = useState([])
   const [loading, setLoading]   = useState(false)
@@ -64,7 +67,16 @@ export function useClients() {
           .order('name')
 
         q = applyTenantFilter(q, activeTenantId, includeTenant)
-        if (search) q = q.or(`name.ilike.%${search}%,phone.ilike.%${search}%`)
+        const term = sanitizeSearch(search)
+        if (term) {
+          q = q.or([
+            `name.ilike.%${term}%`,
+            `phone.ilike.%${term}%`,
+            `email.ilike.%${term}%`,
+            `details->>pet_name.ilike.%${term}%`,
+            `details->>breed.ilike.%${term}%`,
+          ].join(','))
+        }
         return q
       })
 

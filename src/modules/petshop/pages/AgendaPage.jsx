@@ -18,7 +18,6 @@ import {
   getServiceGroupFromCode,
   serviceIcon,
   serviceLabel as lookupServiceLabel,
-  serviceOptionsForGroup as getServiceOptionsForGroup,
 } from '../lib/petshopTeam'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -41,6 +40,7 @@ const asAgendaServices = (services = DEFAULT_PETSHOP_SERVICES) =>
     duration: Number(service.default_duration_min ?? service.duration ?? 60),
     icon: serviceIcon(service),
     group_type: service.group_type || getServiceGroupFromCode(service.code || service.value),
+    active: service.active !== false,
   }))
 
 const SERVICES = asAgendaServices(DEFAULT_PETSHOP_SERVICES)
@@ -53,6 +53,14 @@ const AGENDA_TABS = [
 const normalizeServiceType = (type = '') =>
   String(type || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 
+const compactText = (value = '') => normalizeServiceType(value).trim()
+const safeLower = (value = '') => compactText(value)
+const serviceText = (service = {}) =>
+  compactText(`${service.value || ''} ${service.label || ''} ${service.group_type || ''}`)
+
+const isVeterinaryService = (service) => /vet|consulta|vacina|clinica|medico|exame|cirurg/.test(serviceText(service))
+const isGroomingService = (service) => /banho|tosa|escov|higien|groom|perfume|hidrat/.test(serviceText(service))
+
 const getAppointmentServiceGroup = (type = '', services = SERVICES) => {
   const matched = (services || SERVICES).find((service) => service.value === type)
   if (matched?.group_type) return matched.group_type
@@ -61,8 +69,20 @@ const getAppointmentServiceGroup = (type = '', services = SERVICES) => {
   return 'banho_tosa'
 }
 
+const serviceFitsAgendaGroup = (service, group, services = SERVICES) => {
+  if (!service || service.active === false) return false
+  if (service.value === 'outro') return group === 'outro'
+  const declaredGroup = service.group_type || getAppointmentServiceGroup(service.value, services)
+  const vet = isVeterinaryService(service)
+  const grooming = isGroomingService(service)
+
+  if (group === 'veterinaria') return !grooming && (declaredGroup === 'veterinaria' || vet)
+  if (group === 'banho_tosa') return !vet && (declaredGroup === 'banho_tosa' || grooming)
+  return declaredGroup === group
+}
+
 const serviceOptionsForGroup = (group, services = SERVICES) =>
-  (services || SERVICES).filter((service) => service.value === 'outro' || getAppointmentServiceGroup(service.value, services) === group)
+  (services || SERVICES).filter((service) => serviceFitsAgendaGroup(service, group, services))
 
 const serviceLabelFallbackLegacy = (type = '') =>
   SERVICES.find((service) => service.value === type)?.label || String(type || 'Serviço')
@@ -233,17 +253,26 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [] }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [], onSearchClients }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = isoDate(now)
   const defaultTime = `${String(now.getHours()+1).padStart(2,'0')}:00`
   const serviceGroup = isEdit ? getAppointmentServiceGroup(appt?.service_type, services) : (appt?.serviceGroup || 'banho_tosa')
   const serviceOptions = serviceOptionsForGroup(serviceGroup, services)
-  const defaultService = serviceOptions[0] || SERVICES[0]
+  const fallbackService = SERVICES.find((service) => serviceFitsAgendaGroup(service, serviceGroup, SERVICES))
+  const defaultService = serviceOptions[0] || fallbackService || SERVICES.find((service) => service.value === 'outro') || SERVICES[0]
+  const serviceGroupLabel = serviceGroup === 'veterinaria' ? 'Atendimento veterinario' : 'Servico de banho/tosa'
+  const staffOptions = (staff || []).filter((person) => {
+    const staffType = person?.staff_type || 'funcionario'
+    if (serviceGroup === 'veterinaria') return ['veterinaria', 'gerente', 'funcionario'].includes(staffType)
+    if (serviceGroup === 'banho_tosa') return ['banho_tosa', 'gerente', 'funcionario'].includes(staffType)
+    return ['gerente', 'funcionario'].includes(staffType)
+  })
 
   const [form, setForm] = useState(isEdit ? {
     pet_id:       appt.pets?.id || '',
+    pet_search:   '',
     service_type: appt.service_type,
     date:         appt.scheduled_at?.slice(0,10) || defaultDate,
     time:         appt.scheduled_at ? fmtTime(appt.scheduled_at).replace('h',':') : defaultTime,
@@ -253,13 +282,38 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     notes:        appt.notes || '',
     groomer_id:    appt.groomer_id || '',
   } : {
-    pet_id: '', service_type: defaultService.value, date: defaultDate, time: defaultTime,
+    pet_id: '', pet_search: '', service_type: defaultService.value, date: defaultDate, time: defaultTime,
     duration_min: defaultService.duration || 60, price: defaultService.price, status: 'agendado', notes: '', groomer_id: '',
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const petSearch = form.pet_search || ''
+  const filteredPets = useMemo(() => {
+    const q = safeLower(petSearch)
+    return (pets || []).filter((p) => {
+      if (!q) return true
+      const haystack = safeLower([
+        p.pet_name,
+        p.owner_name,
+        p.phone,
+        p.email,
+        p.breed,
+        p.species,
+      ].filter(Boolean).join(' '))
+      return haystack.includes(q)
+    })
+  }, [pets, petSearch])
+
+  useEffect(() => {
+    if (!onSearchClients) return undefined
+    const q = petSearch.trim()
+    const timer = setTimeout(() => {
+      if (q.length >= 2 || q.length === 0) onSearchClients(q)
+    }, 250)
+    return () => clearTimeout(timer)
+  }, [petSearch, onSearchClients])
 
   const handleServiceChange = (svc) => {
     const s = (services || SERVICES).find(x => x.value === svc)
@@ -271,7 +325,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   }
 
   async function handleSubmit() {
-    if (!form.pet_id)       return setErr('Selecione um pet')
+    if (!form.pet_id)       return setErr('Selecione um cliente/pet')
     if (!form.date)         return setErr('Informe a data')
     if (!form.time)         return setErr('Informe o horário')
     setSaving(true); setErr('')
@@ -306,36 +360,58 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
           <div className="space-y-6">
             {/* Pet com Busca */}
             <div className="bg-card border border-[var(--border)] rounded-2xl p-5 space-y-4">
-              <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar Paciente</label>
+              <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar cliente</label>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div className="relative">
                   <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
                   <input 
                      className="inp pl-9 py-2 text-xs" 
-                     placeholder="Buscar por nome..."
+                     placeholder="Buscar cliente, pet ou telefone..."
+                     value={form.pet_search}
                      onChange={(e) => set('pet_search', e.target.value)}
                   />
                 </div>
                 <select className="inp py-2 text-xs" value={form.pet_id} onChange={e => set('pet_id', e.target.value)}>
-                  <option value="">Lista de Pets...</option>
-                  {pets
-                    .filter(p => {
-                      const q = (form.pet_search || '').toLowerCase();
-                      return p.pet_name.toLowerCase().includes(q) || p.owner_name.toLowerCase().includes(q);
-                    })
-                    .map(p => (
-                      <option key={p.id} value={p.id}>
-                        {p.pet_name} ({p.owner_name})
-                      </option>
-                    ))
-                  }
+                  <option value="">Lista de clientes...</option>
+                  {filteredPets.map(p => (
+                    <option key={p.id} value={p.id}>
+                      {p.owner_name || 'Cliente'}{p.pet_name ? ` - ${p.pet_name}` : ''}
+                    </option>
+                  ))}
                 </select>
+              </div>
+              <div className="rounded-xl border border-[var(--border2)] bg-surface/60 overflow-hidden">
+                {filteredPets.slice(0, 6).map((p) => {
+                  const active = form.pet_id === p.id
+                  return (
+                    <button
+                      type="button"
+                      key={p.id}
+                      onClick={() => set('pet_id', p.id)}
+                      className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 border-b border-[var(--border2)] last:border-b-0 transition-colors ${
+                        active ? 'bg-amber-500/15 text-text' : 'hover:bg-white/5 text-muted'
+                      }`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block text-xs font-bold text-text truncate">{p.owner_name || 'Cliente sem nome'}</span>
+                        <span className="block text-[11px] truncate">
+                          {[p.pet_name, p.breed || p.species, p.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
+                        </span>
+                      </span>
+                      {active && <Check size={14} className="text-amber-400 flex-shrink-0"/>}
+                    </button>
+                  )
+                })}
+                {filteredPets.length === 0 && (
+                  <p className="px-3 py-3 text-xs text-muted">Nenhum cliente encontrado com essa busca.</p>
+                )}
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               {/* Serviço */}
               <div>
+                <label className="inp-label">{serviceGroupLabel}</label>
                 <select className="inp" value={form.service_type} onChange={e => handleServiceChange(e.target.value)}>
                   {isEdit && form.service_type && !serviceOptions.some(s => s.value === form.service_type) && (
                     <option value={form.service_type}>{serviceLabelFallback(form.service_type, services)}</option>
@@ -356,7 +432,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                 <label className="inp-label">Responsavel pelo servico</label>
                 <select className="inp" value={form.groomer_id} onChange={e => set('groomer_id', e.target.value)}>
                   <option value="">Sem responsavel</option>
-                  {staff.map((person) => (
+                  {staffOptions.map((person) => (
                     <option key={person.id} value={person.id}>{person.full_name || person.email}</option>
                   ))}
                 </select>
@@ -517,11 +593,11 @@ export default function AgendaPage() {
     loadPets()
     loadPetshopServices().then((items) => setAgendaServices(asAgendaServices(items))).catch((err) => console.warn('Falha ao carregar servicos:', err))
     loadAssignableStaff().then(setStaff).catch((err) => console.warn('Falha ao carregar equipe:', err))
-  }, [])
+  }, [loadPets, loadPetshopServices, loadAssignableStaff])
 
   useEffect(() => {
     load({ date: isoDate(selectedDate), status: filterStatus || undefined })
-  }, [selectedDate, filterStatus])
+  }, [selectedDate, filterStatus, load])
 
   const tabbedAppointments = appointments.filter((appointment) =>
     getAppointmentServiceGroup(appointment.service_type, agendaServices) === activeAgendaTab
@@ -776,10 +852,11 @@ export default function AgendaPage() {
       {/* Modals */}
       {modal !== null && (
         <ApptModal
-          appt={modal?.id ? modal : null}
+          appt={modal?.id ? modal : modal}
           pets={pets}
           services={agendaServices}
           staff={staff}
+          onSearchClients={loadPets}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}
