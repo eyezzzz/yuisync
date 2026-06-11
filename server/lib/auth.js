@@ -7,7 +7,7 @@ const MODULE_ROLE_MAP = {
 const DEFAULT_EMPLOYEE_MODULE = 'petshop'
 const DEFAULT_EMPLOYEE_ROLE = 'funcionario_pet'
 
-const STAFF_TYPES = ['funcionario', 'banho_tosa', 'veterinaria', 'motodog']
+const STAFF_TYPES = ['funcionario', 'banho_tosa', 'veterinaria', 'motodog', 'vendedor_caixa', 'gerente']
 
 const GLOBAL_ADMIN_PERMISSIONS = {
   petshop: 'admin_pet',

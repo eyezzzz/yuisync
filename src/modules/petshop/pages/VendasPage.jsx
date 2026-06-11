@@ -9,6 +9,7 @@ import { useProducts } from '../../../shared/hooks/useProducts'
 import { useSales }    from '../../../shared/hooks/useSales'
 import { useClients }     from '../../../shared/hooks/useClients'
 import { useAuthCtx }  from '../../../context/AuthContext'
+import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency, todayISO } from '../../../lib/supabase'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, resolveCategoryMeta } from '../../../shared/lib/productCategories'
@@ -358,6 +359,7 @@ export default function VendasPage() {
   const { products, loading: prodLoading, load: loadProducts, error: prodError } = useProducts()
   const { sales, load: loadSales, createSale, issueSaleFiscal, getDailyStats }  = useSales()
   const { clients: pets, load: loadPets }                                = useClients()
+  const { loadSalesStaff } = usePetshopAdvanced()
   const auth = useAuthCtx()
 
   const [cart, setCart]         = useState(() => {
@@ -376,6 +378,8 @@ export default function VendasPage() {
   const [fulfillmentType, setFulfillmentType] = useState('balcao')
   const [paymentBreakdownEnabled, setPaymentBreakdownEnabled] = useState(false)
   const [paymentBreakdown, setPaymentBreakdown] = useState(DEFAULT_PAYMENT_SPLITS)
+  const [sellers, setSellers] = useState([])
+  const [sellerId, setSellerId] = useState(auth?.profile?.id || '')
   const [saving, setSaving]     = useState(false)
   const [err, setErr]           = useState('')
   const [successSale, setSuccessSale] = useState(null)
@@ -390,6 +394,10 @@ export default function VendasPage() {
     loadPets()
     loadSales({ date: todayISO() })
     getDailyStats().then(setDailyStats)
+    loadSalesStaff().then((items) => {
+      setSellers(items || [])
+      if (!sellerId && auth?.profile?.id) setSellerId(auth.profile.id)
+    }).catch((err) => console.warn('Falha ao carregar vendedores:', err))
   }, [loadProducts, loadPets, loadSales, getDailyStats])
 
   useEffect(() => {
@@ -604,7 +612,7 @@ export default function VendasPage() {
         pet_id:          petId || null,
         payment_method:  paymentBreakdownEnabled ? 'multiplo' : payment,
         discount:        Number(discount) || 0,
-        employee_id:     auth?.profile?.id,
+        employee_id:     sellerId || auth?.profile?.id,
         source:          saleSource,
         fulfillment_type: saleSource === 'whatsapp' ? fulfillmentType : 'balcao',
         payment_splits:  paymentSplits,
@@ -953,6 +961,17 @@ export default function VendasPage() {
                     )}
                   </div>
                 )}
+              </div>
+              <div className="space-y-2">
+                <p className="text-[10px] font-black uppercase tracking-widest text-muted">Vendedor / caixa</p>
+                <select className="inp text-xs" value={sellerId} onChange={(event) => setSellerId(event.target.value)}>
+                  <option value={auth?.profile?.id || ''}>{auth?.profile?.full_name || auth?.profile?.email || 'Usuario atual'}</option>
+                  {sellers
+                    .filter((seller) => seller.id !== auth?.profile?.id)
+                    .map((seller) => (
+                      <option key={seller.id} value={seller.id}>{seller.full_name || seller.email}</option>
+                    ))}
+                </select>
               </div>
               <div className="space-y-2">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted">Origem da venda</p>

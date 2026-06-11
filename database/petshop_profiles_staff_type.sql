@@ -24,7 +24,7 @@ begin
 
   alter table public.profiles
     add constraint profiles_staff_type_check
-    check (staff_type in ('funcionario', 'banho_tosa', 'veterinaria', 'motodog'));
+    check (staff_type in ('funcionario', 'banho_tosa', 'veterinaria', 'motodog', 'vendedor_caixa', 'gerente'));
 exception
   when duplicate_object then
     null;

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useMemo, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Calendar, Plus, Search, ChevronLeft, ChevronRight,
@@ -10,10 +10,20 @@ import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { useClients }         from '../../../shared/hooks/useClients'
 import { useAuthCtx }      from '../../../context/AuthContext'
 import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
+import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
+import {
+  DEFAULT_PETSHOP_SERVICES,
+  SERVICE_GROUPS,
+  findService,
+  getServiceGroupFromCode,
+  serviceIcon,
+  serviceLabel as lookupServiceLabel,
+  serviceOptionsForGroup as getServiceOptionsForGroup,
+} from '../lib/petshopTeam'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const SERVICES = [
+const LEGACY_SERVICES = [
   { value: 'banho',        label: 'Banho',          price: 60,  icon: Droplets     },
   { value: 'tosa',         label: 'Tosa',           price: 80,  icon: Scissors     },
   { value: 'banho_e_tosa', label: 'Banho & Tosa',   price: 120, icon: Scissors     },
@@ -23,6 +33,18 @@ const SERVICES = [
   { value: 'outro',        label: 'Outro',          price: 0,   icon: PawPrint     },
 ]
 
+const asAgendaServices = (services = DEFAULT_PETSHOP_SERVICES) =>
+  (services?.length ? services : DEFAULT_PETSHOP_SERVICES).map((service) => ({
+    value: service.code || service.value,
+    label: service.name || service.label,
+    price: Number(service.default_price ?? service.price ?? 0),
+    duration: Number(service.default_duration_min ?? service.duration ?? 60),
+    icon: serviceIcon(service),
+    group_type: service.group_type || getServiceGroupFromCode(service.code || service.value),
+  }))
+
+const SERVICES = asAgendaServices(DEFAULT_PETSHOP_SERVICES)
+
 const AGENDA_TABS = [
   { id: 'banho_tosa', label: 'Banho/Tosa', icon: Scissors },
   { id: 'veterinaria', label: 'Veterinária', icon: Stethoscope },
@@ -31,17 +53,22 @@ const AGENDA_TABS = [
 const normalizeServiceType = (type = '') =>
   String(type || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
 
-const getAppointmentServiceGroup = (type = '') => {
+const getAppointmentServiceGroup = (type = '', services = SERVICES) => {
+  const matched = (services || SERVICES).find((service) => service.value === type)
+  if (matched?.group_type) return matched.group_type
   const service = normalizeServiceType(type)
   if (/vet|consulta|vacina|clinica|medico/.test(service)) return 'veterinaria'
   return 'banho_tosa'
 }
 
-const serviceOptionsForGroup = (group) =>
-  SERVICES.filter((service) => service.value === 'outro' || getAppointmentServiceGroup(service.value) === group)
+const serviceOptionsForGroup = (group, services = SERVICES) =>
+  (services || SERVICES).filter((service) => service.value === 'outro' || getAppointmentServiceGroup(service.value, services) === group)
 
-const serviceLabelFallback = (type = '') =>
+const serviceLabelFallbackLegacy = (type = '') =>
   SERVICES.find((service) => service.value === type)?.label || String(type || 'Serviço')
+
+const serviceLabelFallback = (type = '', services = SERVICES) =>
+  (services || SERVICES).find((service) => service.value === type)?.label || serviceLabelFallbackLegacy(type)
 
 const buildStatsForDate = (items, selectedDate) => {
   const day = isoDate(selectedDate)
@@ -206,13 +233,13 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [] }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = isoDate(now)
   const defaultTime = `${String(now.getHours()+1).padStart(2,'0')}:00`
-  const serviceGroup = isEdit ? getAppointmentServiceGroup(appt?.service_type) : (appt?.serviceGroup || 'banho_tosa')
-  const serviceOptions = serviceOptionsForGroup(serviceGroup)
+  const serviceGroup = isEdit ? getAppointmentServiceGroup(appt?.service_type, services) : (appt?.serviceGroup || 'banho_tosa')
+  const serviceOptions = serviceOptionsForGroup(serviceGroup, services)
   const defaultService = serviceOptions[0] || SERVICES[0]
 
   const [form, setForm] = useState(isEdit ? {
@@ -224,9 +251,10 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
     price:        appt.price || 0,
     status:       appt.status || 'agendado',
     notes:        appt.notes || '',
+    groomer_id:    appt.groomer_id || '',
   } : {
     pet_id: '', service_type: defaultService.value, date: defaultDate, time: defaultTime,
-    duration_min: 60, price: defaultService.price, status: 'agendado', notes: '',
+    duration_min: defaultService.duration || 60, price: defaultService.price, status: 'agendado', notes: '', groomer_id: '',
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
@@ -234,9 +262,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
 
   const handleServiceChange = (svc) => {
-    const s = SERVICES.find(x => x.value === svc)
+    const s = (services || SERVICES).find(x => x.value === svc)
     set('service_type', svc)
-    if (!isEdit && s) set('price', s.price)
+    if (!isEdit && s) {
+      set('price', s.price)
+      set('duration_min', s.duration || 60)
+    }
   }
 
   async function handleSubmit() {
@@ -250,6 +281,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
         pet_id: form.pet_id, service_type: form.service_type,
         scheduled_at, duration_min: Number(form.duration_min),
         price: Number(form.price), status: form.status, notes: form.notes,
+        groomer_id: form.groomer_id || null,
       }
       isEdit ? await onUpdate(appt.id, payload) : await onCreate(payload)
       onClose()
@@ -306,7 +338,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
               <div>
                 <select className="inp" value={form.service_type} onChange={e => handleServiceChange(e.target.value)}>
                   {isEdit && form.service_type && !serviceOptions.some(s => s.value === form.service_type) && (
-                    <option value={form.service_type}>{serviceLabelFallback(form.service_type)}</option>
+                    <option value={form.service_type}>{serviceLabelFallback(form.service_type, services)}</option>
                   )}
                   {serviceOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
@@ -318,6 +350,19 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
                 <select className="inp" value={form.status} onChange={e => set('status', e.target.value)}>
                   {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
+              </div>
+
+              <div className="md:col-span-2">
+                <label className="inp-label">Responsavel pelo servico</label>
+                <select className="inp" value={form.groomer_id} onChange={e => set('groomer_id', e.target.value)}>
+                  <option value="">Sem responsavel</option>
+                  {staff.map((person) => (
+                    <option key={person.id} value={person.id}>{person.full_name || person.email}</option>
+                  ))}
+                </select>
+                <p className="text-[11px] text-muted mt-1">
+                  Pode ficar vazio no agendamento. O dono define o profissional depois, antes do fechamento de comissao.
+                </p>
               </div>
 
               {/* Data / Hora */}
@@ -376,8 +421,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets }) {
 }
 
 // ── Coluna de Status (Kanban) ──────────────────────────────────────────────────
-function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onReceipt }) {
+function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onReceipt, services = SERVICES, staffById = new Map() }) {
   const sb = statusBadge(appt.status)
+  const assigned = staffById.get(appt.groomer_id)
   return (
     <div className="bg-surface border border-[var(--border)] rounded-xl p-3.5 space-y-2.5 hover:border-amber-500/30 transition-colors">
       <div className="flex items-start justify-between gap-2">
@@ -402,10 +448,13 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
           <p className="text-amber-400 font-bold leading-none">{fmtInterval(appt.scheduled_at)}</p>
           <p className="mt-1 opacity-70 flex items-center gap-1">
              {(() => {
-               const s = SERVICES.find(x => x.value === appt.service_type);
+               const s = (services || SERVICES).find(x => x.value === appt.service_type);
                const Icon = s?.icon || PawPrint;
                return <><Icon size={10}/> {s?.label || 'Serviço'}</>
              })()}
+          </p>
+          <p className={`mt-1 ${assigned ? 'text-muted' : 'text-amber-400'}`}>
+            {assigned ? `Resp.: ${assigned.full_name || assigned.email}` : 'Sem responsavel'}
           </p>
         </div>
       </div>
@@ -446,9 +495,10 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
 
 // ── Página Principal ──────────────────────────────────────────────────────────
 export default function AgendaPage() {
-  const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel, statusBadge } =
+  const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel: legacyServiceLabel, statusBadge } =
     useAppointments()
   const { clients: pets, load: loadPets } = useClients()
+  const { loadPetshopServices, loadAssignableStaff } = usePetshopAdvanced()
 
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [modal, setModal]           = useState(null)   // null | {} | {appt}
@@ -457,9 +507,16 @@ export default function AgendaPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [search, setSearch]         = useState('')
   const [activeAgendaTab, setActiveAgendaTab] = useState('banho_tosa')
+  const [agendaServices, setAgendaServices] = useState(SERVICES)
+  const [staff, setStaff] = useState([])
+
+  const staffById = useMemo(() => new Map((staff || []).map((person) => [person.id, person])), [staff])
+  const serviceLabel = (type) => serviceLabelFallback(type, agendaServices) || legacyServiceLabel(type)
 
   useEffect(() => {
     loadPets()
+    loadPetshopServices().then((items) => setAgendaServices(asAgendaServices(items))).catch((err) => console.warn('Falha ao carregar servicos:', err))
+    loadAssignableStaff().then(setStaff).catch((err) => console.warn('Falha ao carregar equipe:', err))
   }, [])
 
   useEffect(() => {
@@ -467,12 +524,12 @@ export default function AgendaPage() {
   }, [selectedDate, filterStatus])
 
   const tabbedAppointments = appointments.filter((appointment) =>
-    getAppointmentServiceGroup(appointment.service_type) === activeAgendaTab
+    getAppointmentServiceGroup(appointment.service_type, agendaServices) === activeAgendaTab
   )
   const stats = buildStatsForDate(tabbedAppointments, selectedDate)
   const tabCounts = AGENDA_TABS.reduce((acc, tab) => ({
     ...acc,
-    [tab.id]: appointments.filter((appointment) => getAppointmentServiceGroup(appointment.service_type) === tab.id).length,
+    [tab.id]: appointments.filter((appointment) => getAppointmentServiceGroup(appointment.service_type, agendaServices) === tab.id).length,
   }), {})
 
   const displayed = tabbedAppointments.filter(a => {
@@ -481,7 +538,8 @@ export default function AgendaPage() {
     return (
       a.pets?.pet_name?.toLowerCase().includes(q) ||
       a.pets?.owner_name?.toLowerCase().includes(q) ||
-      a.service_type?.toLowerCase().includes(q)
+      a.service_type?.toLowerCase().includes(q) ||
+      staffById.get(a.groomer_id)?.full_name?.toLowerCase().includes(q)
     )
   })
 
@@ -623,7 +681,7 @@ export default function AgendaPage() {
             <table className="tbl">
               <thead><tr>
                 <th>Hora</th><th>Pet</th><th>Tutor</th><th>Serviço</th>
-                <th>Status</th><th>Valor</th><th>Obs.</th><th></th>
+                <th>Responsavel</th><th>Status</th><th>Valor</th><th>Obs.</th><th></th>
               </tr></thead>
               <tbody>
                 {displayed.map(a => {
@@ -640,6 +698,11 @@ export default function AgendaPage() {
                         <p className="text-xs text-muted">{a.pets?.phone}</p>
                       </td>
                       <td className="text-xs">{serviceLabel(a.service_type)}</td>
+                      <td className="text-xs">
+                        {staffById.get(a.groomer_id)?.full_name || (
+                          <span className={a.status === 'concluido' ? 'text-amber-400 font-semibold' : 'text-muted'}>Sem responsavel</span>
+                        )}
+                      </td>
                       <td><span className={`badge ${sb.cls}`}>{sb.label}</span></td>
                       <td><span className="font-semibold text-emerald-400">{fmtCurrency(a.price)}</span></td>
                       <td><span className="text-xs text-muted truncate max-w-[120px] block">{a.notes || '—'}</span></td>
@@ -695,7 +758,8 @@ export default function AgendaPage() {
                 <div className="space-y-2.5 min-h-[100px]">
                   {colItems.map(a => (
                     <KanbanCard key={a.id} appt={a} serviceLabel={serviceLabel} statusBadge={statusBadge}
-                      onEdit={(a) => setModal(a)} onStatus={updateStatus} onReceipt={setReceipt}/>
+                      onEdit={(a) => setModal(a)} onStatus={updateStatus} onReceipt={setReceipt}
+                      services={agendaServices} staffById={staffById}/>
                   ))}
                   {colItems.length === 0 && (
                     <div className="border border-dashed border-[var(--border)] rounded-xl p-4 text-center">
@@ -714,6 +778,8 @@ export default function AgendaPage() {
         <ApptModal
           appt={modal?.id ? modal : null}
           pets={pets}
+          services={agendaServices}
+          staff={staff}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}
