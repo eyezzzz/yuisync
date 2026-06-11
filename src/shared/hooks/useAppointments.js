@@ -363,9 +363,11 @@ export function useAppointments() {
       banho: 'Banho',
       tosa: 'Tosa',
       banho_e_tosa: 'Banho & Tosa',
+      escovacao: 'Escovacao',
       veterinario: 'Veterinario',
       consulta: 'Consulta',
       vacina: 'Vacina',
+      motoboy: 'Motoboy/Transporte',
       outro: 'Outro',
     }
     if (labels[type]) return labels[type]

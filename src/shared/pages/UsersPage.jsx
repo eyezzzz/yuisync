@@ -15,6 +15,8 @@ const STAFF_TYPE_OPTIONS = [
   { value: 'banho_tosa', label: 'Banho / Tosa' },
   { value: 'veterinaria', label: 'Veterinaria' },
   { value: 'motodog', label: 'MotoDog' },
+  { value: 'vendedor_caixa', label: 'Vendedor / Caixa' },
+  { value: 'gerente', label: 'Gerente' },
 ]
 
 const TEMP_PASSWORD_RE = /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d).{12,128}$/
