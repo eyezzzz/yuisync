@@ -130,7 +130,7 @@ async function syncSaleToChatTimeline(moduleId, tenantId, sale, cartItems) {
         client_id: sale.client_id || null,
         status: 'human',
         intent: 'pos_venda',
-        channel: 'pdv',
+        channel: 'interno',
         last_message_at: now,
       }, tenantId, includeTenant)
 
