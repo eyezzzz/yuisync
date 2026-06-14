@@ -257,7 +257,13 @@ export function useAppointments() {
 
         query = applyTenantFilter(query, activeTenantId, includeTenant)
 
-        if (filters.date) {
+        if (filters.startDate || filters.endDate) {
+          const startDate = filters.startDate || filters.endDate
+          const endDate = filters.endDate || filters.startDate
+          query = query
+            .gte('scheduled_at', `${startDate}T00:00:00${tz}`)
+            .lte('scheduled_at', `${endDate}T23:59:59.999${tz}`)
+        } else if (filters.date) {
           query = query
             .gte('scheduled_at', `${filters.date}T00:00:00${tz}`)
             .lte('scheduled_at', `${filters.date}T23:59:59.999${tz}`)
@@ -279,7 +285,13 @@ export function useAppointments() {
 
           query = applyTenantFilter(query, activeTenantId, includeTenant)
 
-          if (filters.date) {
+          if (filters.startDate || filters.endDate) {
+            const startDate = filters.startDate || filters.endDate
+            const endDate = filters.endDate || filters.startDate
+            query = query
+              .gte('scheduled_at', `${startDate}T00:00:00${tz}`)
+              .lte('scheduled_at', `${endDate}T23:59:59.999${tz}`)
+          } else if (filters.date) {
             query = query
               .gte('scheduled_at', `${filters.date}T00:00:00${tz}`)
               .lte('scheduled_at', `${filters.date}T23:59:59.999${tz}`)

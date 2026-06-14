@@ -81,6 +81,24 @@ const serviceFitsAgendaGroup = (service, group, services = SERVICES) => {
   return declaredGroup === group
 }
 
+const fmtAppointmentInterval = (appt) => {
+  if (!appt?.scheduled_at) return '-'
+  const start = new Date(appt.scheduled_at)
+  const duration = Math.max(15, Number(appt.duration_min || 60))
+  const end = new Date(start.getTime() + duration * 60 * 1000)
+  const f = (d) => d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })
+  return `${f(start)} - ${f(end)}`
+}
+
+const agendaCardTone = (status) => ({
+  agendado: 'border-amber-400/35 bg-amber-500/12 text-amber-100',
+  confirmado: 'border-blue-400/35 bg-blue-500/12 text-blue-100',
+  em_andamento: 'border-violet-400/40 bg-violet-500/14 text-violet-100',
+  concluido: 'border-emerald-400/35 bg-emerald-500/12 text-emerald-100',
+  cancelado: 'border-red-400/25 bg-red-500/10 text-red-100 opacity-70',
+  no_show: 'border-red-400/25 bg-red-500/10 text-red-100 opacity-70',
+}[status] || 'border-white/12 bg-white/7 text-text')
+
 const serviceOptionsForGroup = (group, services = SERVICES) =>
   (services || SERVICES).filter((service) => serviceFitsAgendaGroup(service, group, services))
 
@@ -116,6 +134,10 @@ const isoDate = (d) =>
   `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`
 
 const addDays = (d, n) => { const r = new Date(d); r.setDate(r.getDate() + n); return r }
+const startOfWeek = (d) => addDays(d, -((d.getDay() + 6) % 7))
+const AGENDA_HOURS = Array.from({ length: 14 }, (_, i) => i + 7)
+const localDateKey = (value) => value ? isoDate(new Date(value)) : ''
+const localHour = (value) => value ? new Date(value).getHours() : -1
 
 const fmtInterval = (iso) => {
   if (!iso) return '—'
@@ -256,8 +278,8 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
 function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [], onSearchClients }) {
   const isEdit = !!appt?.id
   const now = new Date()
-  const defaultDate = isoDate(now)
-  const defaultTime = `${String(now.getHours()+1).padStart(2,'0')}:00`
+  const defaultDate = appt?.date || isoDate(now)
+  const defaultTime = appt?.time || `${String(now.getHours()+1).padStart(2,'0')}:00`
   const serviceGroup = isEdit ? getAppointmentServiceGroup(appt?.service_type, services) : (appt?.serviceGroup || 'banho_tosa')
   const serviceOptions = serviceOptionsForGroup(serviceGroup, services)
   const fallbackService = SERVICES.find((service) => serviceFitsAgendaGroup(service, serviceGroup, SERVICES))
@@ -570,6 +592,160 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
 }
 
 // ── Página Principal ──────────────────────────────────────────────────────────
+function AgendaTimelineView({
+  days,
+  selectedDate,
+  appointments,
+  serviceLabel,
+  statusBadge,
+  staffById,
+  onEdit,
+  onCreateAt,
+  onSelectDate,
+}) {
+  const selectedKey = isoDate(selectedDate)
+  const hours = useMemo(() => {
+    const appointmentHours = (appointments || [])
+      .map((appt) => localHour(appt.scheduled_at))
+      .filter((hour) => hour >= 0 && hour <= 23)
+    const min = Math.min(AGENDA_HOURS[0], ...(appointmentHours.length ? appointmentHours : [AGENDA_HOURS[0]]))
+    const max = Math.max(AGENDA_HOURS[AGENDA_HOURS.length - 1], ...(appointmentHours.length ? appointmentHours : [AGENDA_HOURS[AGENDA_HOURS.length - 1]]))
+    return Array.from({ length: max - min + 1 }, (_, index) => min + index)
+  }, [appointments])
+
+  const bySlot = useMemo(() => {
+    const map = new Map()
+    ;(appointments || []).forEach((appt) => {
+      const key = `${localDateKey(appt.scheduled_at)}-${localHour(appt.scheduled_at)}`
+      const list = map.get(key) || []
+      list.push(appt)
+      map.set(key, list)
+    })
+    map.forEach((list) => list.sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
+    return map
+  }, [appointments])
+
+  return (
+    <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
+      <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)]">
+        <div>
+          <p className="text-sm font-bold text-text">Agenda semanal</p>
+          <p className="text-xs text-muted">
+            {days[0]?.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+            {' ate '}
+            {days[days.length - 1]?.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+          </p>
+        </div>
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <span className="inline-flex h-2.5 w-2.5 rounded-full bg-amber-400" />
+          Horarios do periodo carregado
+        </div>
+      </div>
+
+      <div className="overflow-x-auto">
+        <div className="min-w-[1080px]">
+          <div
+            className="grid border-b border-[var(--border)] bg-surface/50"
+            style={{ gridTemplateColumns: '76px repeat(7, minmax(136px, 1fr))' }}
+          >
+            <div className="px-3 py-3 text-[10px] font-black uppercase tracking-widest text-muted">Hora</div>
+            {days.map((day) => {
+              const key = isoDate(day)
+              const isSelected = key === selectedKey
+              const dayCount = (appointments || []).filter((appt) => localDateKey(appt.scheduled_at) === key).length
+              return (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onSelectDate(day)}
+                  className={`text-left px-3 py-3 border-l border-[var(--border)] transition-colors ${
+                    isSelected ? 'bg-amber-500/14' : 'hover:bg-white/5'
+                  }`}
+                >
+                  <p className={`text-xs font-black uppercase tracking-widest ${isSelected ? 'text-amber-300' : 'text-muted'}`}>
+                    {PT_WEEKDAYS[day.getDay()]}
+                  </p>
+                  <div className="mt-1 flex items-center justify-between gap-2">
+                    <span className="text-lg font-display font-black text-text">{String(day.getDate()).padStart(2, '0')}</span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-amber-500 text-gray-950' : 'bg-white/8 text-muted'}`}>
+                      {dayCount}
+                    </span>
+                  </div>
+                </button>
+              )
+            })}
+          </div>
+
+          {hours.map((hour) => (
+            <div
+              key={hour}
+              className="grid border-b border-[var(--border)] last:border-b-0"
+              style={{ gridTemplateColumns: '76px repeat(7, minmax(136px, 1fr))' }}
+            >
+              <div className="px-3 py-3 text-xs font-bold text-muted bg-surface/35">
+                {String(hour).padStart(2, '0')}:00
+              </div>
+
+              {days.map((day) => {
+                const dayKey = isoDate(day)
+                const slotItems = bySlot.get(`${dayKey}-${hour}`) || []
+                return (
+                  <div
+                    key={`${dayKey}-${hour}`}
+                    className="min-h-[96px] border-l border-[var(--border)] p-2 hover:bg-white/[0.03] transition-colors"
+                    onDoubleClick={() => onCreateAt(day, hour)}
+                  >
+                    {slotItems.length === 0 ? (
+                      <button
+                        type="button"
+                        onClick={() => onCreateAt(day, hour)}
+                        className="h-full min-h-[76px] w-full rounded-lg border border-dashed border-transparent text-[11px] text-transparent hover:border-amber-400/25 hover:text-amber-300 transition-colors"
+                      >
+                        + agendar
+                      </button>
+                    ) : (
+                      <div className="space-y-2">
+                        {slotItems.map((appt) => {
+                          const sb = statusBadge(appt.status)
+                          const assigned = staffById.get(appt.groomer_id)
+                          return (
+                            <button
+                              key={appt.id}
+                              type="button"
+                              onClick={() => onEdit(appt)}
+                              className={`w-full rounded-lg border p-2 text-left shadow-sm transition-transform hover:-translate-y-0.5 ${agendaCardTone(appt.status)}`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="text-[11px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
+                                  <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
+                                  <p className="truncate text-[11px] text-muted">{appt.pets?.owner_name || 'Cliente'}</p>
+                                </div>
+                                <span className={`badge ${sb.cls} shrink-0 text-[9px]`}>{sb.label}</span>
+                              </div>
+                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted">
+                                <span className="truncate">{serviceLabel(appt.service_type)}</span>
+                                <span className="font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
+                              </div>
+                              <p className={`mt-1 truncate text-[10px] ${assigned ? 'text-muted' : 'text-amber-300'}`}>
+                                {assigned ? `Resp.: ${assigned.full_name || assigned.email}` : 'Sem responsavel'}
+                              </p>
+                            </button>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export default function AgendaPage() {
   const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel: legacyServiceLabel, statusBadge } =
     useAppointments()
@@ -579,7 +755,7 @@ export default function AgendaPage() {
   const [selectedDate, setSelectedDate] = useState(new Date())
   const [modal, setModal]           = useState(null)   // null | {} | {appt}
   const [receipt, setReceipt]       = useState(null) // appt to print
-  const [view, setView]             = useState('list')  // 'list' | 'kanban'
+  const [view, setView]             = useState('list')  // 'list' | 'kanban' | 'agenda'
   const [filterStatus, setFilterStatus] = useState('')
   const [search, setSearch]         = useState('')
   const [activeAgendaTab, setActiveAgendaTab] = useState('banho_tosa')
@@ -588,6 +764,9 @@ export default function AgendaPage() {
 
   const staffById = useMemo(() => new Map((staff || []).map((person) => [person.id, person])), [staff])
   const serviceLabel = (type) => serviceLabelFallback(type, agendaServices) || legacyServiceLabel(type)
+  const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate])
+  const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart])
+  const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart])
 
   useEffect(() => {
     loadPets()
@@ -596,8 +775,17 @@ export default function AgendaPage() {
   }, [loadPets, loadPetshopServices, loadAssignableStaff])
 
   useEffect(() => {
+    if (view === 'agenda') {
+      load({
+        startDate: isoDate(weekStart),
+        endDate: isoDate(weekEnd),
+        status: filterStatus || undefined,
+      })
+      return
+    }
+
     load({ date: isoDate(selectedDate), status: filterStatus || undefined })
-  }, [selectedDate, filterStatus, load])
+  }, [selectedDate, filterStatus, view, weekStart, weekEnd, load])
 
   const tabbedAppointments = appointments.filter((appointment) =>
     getAppointmentServiceGroup(appointment.service_type, agendaServices) === activeAgendaTab
@@ -620,6 +808,20 @@ export default function AgendaPage() {
   })
 
   const isToday = isoDate(selectedDate) === todayISO()
+  const reloadCurrentView = () => {
+    if (view === 'agenda') {
+      load({ startDate: isoDate(weekStart), endDate: isoDate(weekEnd), status: filterStatus || undefined })
+      return
+    }
+    load({ date: isoDate(selectedDate), status: filterStatus || undefined })
+  }
+  const openSlotModal = (day, hour) => {
+    setModal({
+      serviceGroup: activeAgendaTab,
+      date: isoDate(day),
+      time: `${String(hour).padStart(2, '0')}:00`,
+    })
+  }
 
   return (
     <div className="page animate-fade-up">
@@ -715,6 +917,7 @@ export default function AgendaPage() {
         <div className="flex bg-card border border-[var(--border)] rounded-xl p-1">
           {[
             { id:'list',   label:'Lista'  },
+            { id:'agenda', label:'Agenda' },
             { id:'kanban', label:'Kanban' },
           ].map(v => (
             <button key={v.id} onClick={() => setView(v.id)}
@@ -726,7 +929,7 @@ export default function AgendaPage() {
           ))}
         </div>
 
-        <button onClick={() => load({ date: isoDate(selectedDate), status: filterStatus || undefined })}
+        <button onClick={reloadCurrentView}
           className="btn btn-ghost btn-sm btn-icon" title="Atualizar">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
         </button>
@@ -737,7 +940,7 @@ export default function AgendaPage() {
         <div className="flex items-center justify-center py-16 text-muted text-sm">
           <RefreshCw size={16} className="animate-spin mr-2"/> Carregando...
         </div>
-      ) : displayed.length === 0 ? (
+      ) : displayed.length === 0 && view !== 'agenda' ? (
         <div className="flex flex-col items-center justify-center py-20 gap-4 bg-card border border-[var(--border)] rounded-xl2">
           <Calendar size={40} className="text-muted/30"/>
           <div className="text-center">
@@ -750,6 +953,18 @@ export default function AgendaPage() {
             <Plus size={15}/> Novo Agendamento
           </button>
         </div>
+      ) : view === 'agenda' ? (
+        <AgendaTimelineView
+          days={weekDays}
+          selectedDate={selectedDate}
+          appointments={displayed}
+          serviceLabel={serviceLabel}
+          statusBadge={statusBadge}
+          staffById={staffById}
+          onEdit={(appt) => setModal(appt)}
+          onCreateAt={openSlotModal}
+          onSelectDate={setSelectedDate}
+        />
       ) : view === 'list' ? (
         /* ── LIST VIEW ── */
         <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
