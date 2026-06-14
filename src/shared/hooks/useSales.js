@@ -53,6 +53,10 @@ function mapSalesRows(data = []) {
   })
 }
 
+function assertActiveTenant(tenantId, action = 'salvar') {
+  if (!tenantId) throw new Error(`Selecione uma empresa ativa antes de ${action}.`)
+}
+
 function salesSelect({ includeFulfillment = true, includeProfiles = true, includeClients = true } = {}) {
   const fields = [
     'id',
@@ -379,6 +383,7 @@ export function useSales() {
   const createSale = useCallback(async (saleData, cartItems) => {
     if (!cartItems?.length) throw new Error('Carrinho vazio')
     if (!activeModuleId) throw new Error('Modulo nao identificado')
+    assertActiveTenant(activeTenantId, 'salvar a venda')
 
     const subtotal = cartItems.reduce((sum, item) => sum + item.unit_price * item.quantity, 0)
     const discount = Number(saleData.discount || 0)
@@ -528,6 +533,7 @@ export function useSales() {
 
   const issueSaleFiscal = useCallback(async (saleId) => {
     if (!saleId) throw new Error('Venda nao informada para emissao fiscal.')
+    assertActiveTenant(activeTenantId, 'emitir a nota')
     const result = await syncFiscalForSale(activeModuleId, activeTenantId, { id: saleId })
     return result
   }, [activeModuleId, activeTenantId])

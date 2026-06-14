@@ -25,6 +25,10 @@ async function fetchAllProductPages(buildQuery) {
   return { data: rows, error: null }
 }
 
+function assertActiveTenant(tenantId, action = 'salvar') {
+  if (!tenantId) throw new Error(`Selecione uma empresa ativa antes de ${action}.`)
+}
+
 export function useProducts() {
   const [products, setProducts]   = useState([])
   const [loading, setLoading]     = useState(false)
@@ -90,6 +94,7 @@ export function useProducts() {
   }, [activeModuleId, activeTenantId])
 
   const create = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o produto')
     const { data, error } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       const insertPayload = buildTenantPayload({ ...payload, module_id: activeModuleId }, activeTenantId, includeTenant)
       return supabase
@@ -105,6 +110,7 @@ export function useProducts() {
   }, [activeModuleId, activeTenantId])
 
   const update = useCallback(async (id, payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o produto')
     const payloadClean = { ...payload }
     if (payloadClean.upsell_product) delete payloadClean.upsell_product
 
@@ -178,6 +184,7 @@ export function useProducts() {
   }, [activeModuleId, getByBarcode, update, create])
 
   const adjustStock = useCallback(async (id, delta) => {
+    assertActiveTenant(activeTenantId, 'ajustar o estoque')
     const { data: current } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       let q = supabase
         .from('products')
@@ -194,6 +201,7 @@ export function useProducts() {
   }, [activeModuleId, activeTenantId, update])
 
   const remove = useCallback(async (id) => {
+    assertActiveTenant(activeTenantId, 'remover o produto')
     const { error } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       let q = supabase
         .from('products')

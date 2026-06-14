@@ -50,6 +50,62 @@ const mapPetToClient = (p, moduleId) => ({
 const sanitizeSearch = (value = '') =>
   String(value || '').replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim()
 
+const isSearchFilterError = (error) => {
+  const message = String(error?.message || '').toLowerCase()
+  return message.includes('failed to parse')
+    || message.includes('logic tree')
+    || message.includes('unexpected')
+    || message.includes('operator')
+}
+
+const applyClientSearch = (query, term, includePetFields = true) => {
+  if (!term) return query
+  const filters = [
+    `name.ilike.%${term}%`,
+    `phone.ilike.%${term}%`,
+    `email.ilike.%${term}%`,
+  ]
+  if (includePetFields) {
+    filters.push(
+      `details->>pet_name.ilike.%${term}%`,
+      `details->>breed.ilike.%${term}%`,
+    )
+  }
+  return query.or(filters.join(','))
+}
+
+const normalizeSpecies = (value) => {
+  const species = String(value || '').toLowerCase()
+  return ['dog', 'cat', 'bird', 'rabbit', 'fish', 'other'].includes(species) ? species : 'other'
+}
+
+async function syncPetRecord(client, moduleId) {
+  if (moduleId !== 'petshop' || !client?.id) return
+
+  const payload = {
+    id: client.id,
+    module_id: moduleId,
+    owner_name: client.owner_name || 'Cliente',
+    owner_cpf: client.owner_cpf || null,
+    phone: client.phone || 'sem telefone',
+    email: client.email || null,
+    owner_address: client.owner_address || null,
+    owner_neighborhood: client.owner_neighborhood || null,
+    owner_city: client.owner_city || null,
+    pet_name: client.pet_name || client.owner_name || 'Pet',
+    species: normalizeSpecies(client.species),
+    breed: client.breed || null,
+    birth_date: client.birth_date || null,
+    weight_kg: client.weight_kg || null,
+    color: client.color || null,
+    notes: client.notes || null,
+    updated_at: new Date().toISOString(),
+  }
+
+  const { error } = await supabase.from('pets').upsert(payload, { onConflict: 'id' })
+  if (error) throw error
+}
+
 export function useClients() {
   const [clients, setClients]   = useState([])
   const [loading, setLoading]   = useState(false)
@@ -61,27 +117,23 @@ export function useClients() {
     if (!activeModuleId) return
     setLoading(true); setError(null)
     try {
-      const { data, error: err } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+      const term = sanitizeSearch(search)
+      const runSearch = (includePetFields = true) => runWithTenantFallback(activeTenantId, async (includeTenant) => {
         let q = supabase.from('clients').select(BASE_SELECT)
           .eq('module_id', activeModuleId)
           .order('name')
 
         q = applyTenantFilter(q, activeTenantId, includeTenant)
-        const term = sanitizeSearch(search)
-        if (term) {
-          q = q.or([
-            `name.ilike.%${term}%`,
-            `phone.ilike.%${term}%`,
-            `email.ilike.%${term}%`,
-            `details->>pet_name.ilike.%${term}%`,
-            `details->>breed.ilike.%${term}%`,
-          ].join(','))
-        }
-        return q
+        return applyClientSearch(q, term, includePetFields)
       })
 
-      if (err) throw err
-      setClients((data || []).map(mapClientToPet))
+      let response = await runSearch(true)
+      if (response.error && term && isSearchFilterError(response.error)) {
+        response = await runSearch(false)
+      }
+
+      if (response.error) throw response.error
+      setClients((response.data || []).map(mapClientToPet))
     } catch (e) {
       setError(e.message)
     } finally {
@@ -109,6 +161,7 @@ export function useClients() {
   }, [activeModuleId, activeTenantId])
 
   const create = useCallback(async (payload) => {
+    if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar o cliente.')
     const clientPayload = mapPetToClient(payload, activeModuleId)
     const { data, error } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       const payloadWithTenant = buildTenantPayload(clientPayload, activeTenantId, includeTenant)
@@ -121,11 +174,13 @@ export function useClients() {
 
     if (error) throw error
     const newPet = mapClientToPet(data)
+    await syncPetRecord(newPet, activeModuleId)
     setClients(prev => [newPet, ...prev])
     return newPet
   }, [activeModuleId, activeTenantId])
 
   const update = useCallback(async (id, payload) => {
+    if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar o cliente.')
     const clientPayload = mapPetToClient(payload, activeModuleId)
     // Avoid updating module_id
     delete clientPayload.module_id; 
@@ -145,6 +200,7 @@ export function useClients() {
 
     if (error) throw error
     const updatedPet = mapClientToPet(data)
+    await syncPetRecord(updatedPet, activeModuleId)
     setClients(prev => prev.map(p => p.id === id ? updatedPet : p))
     return updatedPet
   }, [activeModuleId, activeTenantId])

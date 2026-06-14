@@ -56,6 +56,10 @@ const enrichClientRelation = (row) => ({
   client: mapClient(row?.clients || {}),
 })
 
+function assertActiveTenant(tenantId, action = 'salvar') {
+  if (!tenantId) throw new Error(`Selecione uma empresa ativa antes de ${action}.`)
+}
+
 export function usePetshopGrowth() {
   const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
@@ -88,6 +92,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const saveBookingSettings = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar a agenda online')
     const slug = sanitizeSlug(payload.public_slug || `agenda-${String(activeTenantId || moduleId).slice(0, 8)}`) || 'agenda-petshop'
     const row = {
       module_id: moduleId,
@@ -129,6 +134,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const createBookingRequest = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'registrar a solicitacao')
     const row = {
       module_id: moduleId,
       client_id: payload.client_id || null,
@@ -166,6 +172,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const updateBookingRequest = useCallback(async (requestId, payload) => {
+    assertActiveTenant(activeTenantId, 'alterar a solicitacao')
     const response = await runScoped(async (includeTenant) => {
       let query = supabase
         .from('petshop_growth_booking_requests')
@@ -203,6 +210,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const createLead = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'criar o lead')
     const row = {
       module_id: moduleId,
       client_id: payload.client_id || null,
@@ -236,6 +244,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const updateLead = useCallback(async (leadId, payload) => {
+    assertActiveTenant(activeTenantId, 'alterar o lead')
     const response = await runScoped(async (includeTenant) => {
       let query = supabase
         .from('petshop_growth_leads')
@@ -303,6 +312,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const saveNoShowPolicy = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar a politica de no-show')
     const row = {
       module_id: moduleId,
       require_prepayment: payload.require_prepayment === true,
@@ -342,6 +352,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const registerNoShowEvent = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'registrar o no-show')
     const row = {
       module_id: moduleId,
       appointment_id: payload.appointment_id || null,
@@ -379,6 +390,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const saveReportCard = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o report card')
     const row = {
       module_id: moduleId,
       appointment_id: payload.appointment_id || null,
@@ -430,6 +442,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const upsertPortalAccess = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'gerar acesso ao portal')
     if (!payload.client_id) {
       throw new Error('Selecione um cliente para gerar acesso ao portal.')
     }
@@ -457,6 +470,7 @@ export function usePetshopGrowth() {
   }, [activeTenantId, moduleId, runScoped])
 
   const updatePortalAccess = useCallback(async (accessId, payload) => {
+    assertActiveTenant(activeTenantId, 'alterar acesso ao portal')
     const response = await runScoped(async (includeTenant) => {
       let query = supabase
         .from('petshop_growth_portal_access')

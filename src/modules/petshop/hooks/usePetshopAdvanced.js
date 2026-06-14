@@ -136,6 +136,12 @@ const buildUsageSummary = (sub) => {
 }
 const mapServiceOrder = (order) => ({ ...order, client: formatClient(order.clients || {}), sale: order.sales || null })
 
+function assertActiveTenant(tenantId, action = 'salvar') {
+  if (!tenantId) {
+    throw new Error(`Selecione uma empresa ativa antes de ${action}.`)
+  }
+}
+
 async function getCurrentProfileId() {
   const { data, error } = await supabase.auth.getUser()
   if (error) throw error
@@ -276,6 +282,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const savePlan = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o plano')
     const row = { module_id: moduleId, name: payload.name?.trim(), price: Number(payload.price || 0), billing_cycle: payload.billing_cycle || 'monthly', services: normalizePlanServices(payload.services), active: payload.active !== false, updated_at: new Date().toISOString() }
     if (!row.name) throw new Error('Informe o nome do plano.')
     const res = await runScoped(async (includeTenant) => {
@@ -298,6 +305,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const saveClientSubscription = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o plano do cliente')
     const planServices = normalizePlanServices(payload.plan?.services || payload.subscription_plans?.services || [])
     const startedAt = payload.started_at || todayISO()
     const row = {
@@ -354,6 +362,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const saveLoyaltySettings = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar a configuracao de fidelidade')
     const row = { module_id: moduleId, points_per_real: Number(payload.points_per_real || DEFAULT_LOYALTY_SETTINGS.points_per_real), points_per_service: Number(payload.points_per_service || DEFAULT_LOYALTY_SETTINGS.points_per_service), redemption_rate: Number(payload.redemption_rate || DEFAULT_LOYALTY_SETTINGS.redemption_rate), expiry_days: Number(payload.expiry_days || DEFAULT_LOYALTY_SETTINGS.expiry_days), updated_at: new Date().toISOString() }
     const res = await runScoped(async (includeTenant) => {
       const p = buildTenantPayload(row, activeTenantId, includeTenant)
@@ -364,6 +373,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const createLoyaltyEntry = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'lancar pontos')
     const row = { client_id: payload.client_id, module_id: moduleId, points: Number(payload.points || 0), reason: payload.reason || 'bonus', reference_id: payload.reference_id || null, expires_at: payload.expires_at || null }
     if (!row.client_id || !row.points) throw new Error('Informe o cliente e a pontuacao.')
     const res = await runScoped(async (includeTenant) => {
@@ -396,6 +406,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const savePetshopService = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o servico')
     const code = normalizeCode(payload.code || payload.name)
     const row = {
       module_id: moduleId,
@@ -429,6 +440,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const setPetshopServiceActive = useCallback(async (service, active) => {
+    assertActiveTenant(activeTenantId, 'alterar o servico')
     if (!service?.id || String(service.id).startsWith(service.code || '')) {
       throw new Error('Aplique o SQL de servicos antes de alterar este item.')
     }
@@ -454,6 +466,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId])
 
   const saveTeamMember = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o funcionario')
     const staffType = normalizeStaffType(payload.staff_type)
     const permissions = { [moduleId]: payload.role_id || 'funcionario_pet' }
     const basePayload = {
@@ -517,6 +530,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const saveCommissionRule = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar a regra de comissao')
     const scope = payload.scope || payload.applies_to || 'all'
     const row = {
       module_id: moduleId,
@@ -550,6 +564,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const deleteCommissionRule = useCallback(async (ruleId) => {
+    assertActiveTenant(activeTenantId, 'remover a regra de comissao')
     const res = await runScoped(async (includeTenant) => applyTenantFilter(supabase.from('commission_rules').delete().eq('id', ruleId).eq('module_id', moduleId), activeTenantId, includeTenant))
     if (res.error) throw res.error
   }, [activeTenantId, moduleId, runScoped])
@@ -732,6 +747,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, loadClientMap, loadGroomers, moduleId, runScoped])
 
   const updateAppointmentGroomer = useCallback(async (appointment, groomerId) => {
+    assertActiveTenant(activeTenantId, 'alterar o responsavel do agendamento')
     if (!appointment?.id) throw new Error('Agendamento invalido.')
 
     const updateRes = await runScoped(async (includeTenant) => {
@@ -749,6 +765,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, loadAppointmentById, moduleId, runScoped])
 
   const updateAppointmentLiveStatus = useCallback(async (appointment, nextStatus) => {
+    assertActiveTenant(activeTenantId, 'alterar o status do agendamento')
     const now = new Date().toISOString()
     const row = { live_status: nextStatus }
     if (nextStatus === 'check_in' && !appointment.checkin_at) row.checkin_at = now
@@ -849,6 +866,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const updateServiceOrder = useCallback(async (order, payload) => {
+    assertActiveTenant(activeTenantId, 'alterar a ordem')
     if (!order?.id) throw new Error('Ordem invalida.')
     const res = await runScoped(async (includeTenant) => {
       let q = supabase.from('service_delivery_orders').update({ ...payload, updated_at: new Date().toISOString() }).eq('id', order.id).eq('module_id', moduleId).select(ORDER_SELECT).single()
@@ -919,6 +937,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const openCashRegister = useCallback(async ({ opening_balance = 0, notes = '' }) => {
+    assertActiveTenant(activeTenantId, 'abrir o caixa')
     const profileId = await getCurrentProfileId()
     const res = await runScoped(async (includeTenant) => {
       const row = buildTenantPayload({ module_id: moduleId, opened_by: profileId, opening_balance: Number(opening_balance || 0), notes: notes || null }, activeTenantId, includeTenant)
@@ -929,6 +948,7 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const closeCashRegister = useCallback(async ({ registerId, closing_balance = 0, notes = '' }) => {
+    assertActiveTenant(activeTenantId, 'fechar o caixa')
     const dashboard = await loadCashDashboard()
     const current = dashboard.current
     if (!current || current.id !== registerId) throw new Error('Nenhum caixa aberto encontrado.')

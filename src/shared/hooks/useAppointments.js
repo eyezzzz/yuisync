@@ -5,7 +5,7 @@ import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
 const APPOINTMENT_BASE_FIELDS = `
-  id, client_id, service_type, scheduled_at, duration_min, price, status, notes, source, created_at,
+  id, pet_id, client_id, service_type, scheduled_at, duration_min, price, status, notes, source, created_at,
   employee_id, groomer_id, live_status, checkin_at, ready_at, subscription_id, subscription_benefit_used
 `
 const APPOINTMENT_SELECT = `${APPOINTMENT_BASE_FIELDS},
@@ -59,6 +59,73 @@ async function loadClientsMap(activeModuleId, activeTenantId, clientIds) {
 
   if (response.error) throw response.error
   return new Map((response.data || []).map((client) => [client.id, client]))
+}
+
+const normalizeSpecies = (value) => {
+  const species = String(value || '').toLowerCase()
+  return ['dog', 'cat', 'bird', 'rabbit', 'fish', 'other'].includes(species) ? species : 'other'
+}
+
+function normalizeAppointmentPayload(payload = {}, moduleId) {
+  const apiPayload = { ...payload }
+  if (moduleId) apiPayload.module_id = moduleId
+
+  const clientId = apiPayload.client_id || apiPayload.pet_id
+  if (clientId) {
+    apiPayload.client_id = clientId
+    apiPayload.pet_id = apiPayload.pet_id || clientId
+  }
+
+  return apiPayload
+}
+
+async function ensurePetRecordForClient(activeModuleId, activeTenantId, clientId) {
+  if (activeModuleId !== 'petshop' || !clientId) return clientId
+
+  const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+    let query = supabase
+      .from('clients')
+      .select('id, name, phone, email, document, address, neighborhood, city, notes, details')
+      .eq('module_id', activeModuleId)
+      .eq('id', clientId)
+      .single()
+
+    query = applyTenantFilter(query, activeTenantId, includeTenant)
+    return query
+  })
+
+  if (response.error) throw response.error
+  const client = response.data
+  if (!client?.id) throw new Error('Cliente selecionado nao encontrado.')
+
+  const petPayload = {
+    id: client.id,
+    module_id: activeModuleId,
+    owner_name: client.name || 'Cliente',
+    owner_cpf: client.document || null,
+    phone: client.phone || 'sem telefone',
+    email: client.email || null,
+    owner_address: client.address || null,
+    owner_neighborhood: client.neighborhood || null,
+    owner_city: client.city || null,
+    pet_name: client.details?.pet_name || client.name || 'Pet',
+    species: normalizeSpecies(client.details?.species),
+    breed: client.details?.breed || null,
+    birth_date: client.details?.birth_date || null,
+    weight_kg: client.details?.weight_kg || null,
+    color: client.details?.color || null,
+    notes: client.notes || null,
+    updated_at: new Date().toISOString(),
+  }
+
+  const petResponse = await supabase
+    .from('pets')
+    .upsert(petPayload, { onConflict: 'id' })
+    .select('id')
+    .single()
+
+  if (petResponse.error) throw petResponse.error
+  return petResponse.data?.id || client.id
 }
 
 async function findAvailableSubscriptionBenefit(moduleId, tenantId, clientId, serviceType) {
@@ -260,10 +327,10 @@ export function useAppointments() {
   useEffect(() => () => channelRef.current?.unsubscribe(), [])
 
   const create = useCallback(async (payload) => {
-    const apiPayload = { ...payload, module_id: activeModuleId }
-    if (apiPayload.pet_id) {
-      apiPayload.client_id = apiPayload.pet_id
-      delete apiPayload.pet_id
+    if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar o agendamento.')
+    const apiPayload = normalizeAppointmentPayload(payload, activeModuleId)
+    if (apiPayload.client_id) {
+      apiPayload.pet_id = await ensurePetRecordForClient(activeModuleId, activeTenantId, apiPayload.client_id)
     }
 
     const benefit = await findAvailableSubscriptionBenefit(
@@ -303,10 +370,10 @@ export function useAppointments() {
   }, [activeModuleId, activeTenantId, fetchAppointmentById])
 
   const update = useCallback(async (id, payload) => {
-    const apiPayload = { ...payload }
-    if (apiPayload.pet_id) {
-      apiPayload.client_id = apiPayload.pet_id
-      delete apiPayload.pet_id
+    if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar o agendamento.')
+    const apiPayload = normalizeAppointmentPayload(payload)
+    if (apiPayload.client_id) {
+      apiPayload.pet_id = await ensurePetRecordForClient(activeModuleId, activeTenantId, apiPayload.client_id)
     }
 
     const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {

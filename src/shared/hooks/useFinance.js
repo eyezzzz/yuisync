@@ -43,6 +43,10 @@ function buildFiscalVersionLabel() {
   return `${yyyy}.${mm}.${dd}-${hh}${min}${ss}`
 }
 
+function assertActiveTenant(tenantId, action = 'salvar') {
+  if (!tenantId) throw new Error(`Selecione uma empresa ativa antes de ${action}.`)
+}
+
 export function useFinance() {
   const [invoices, setInvoices] = useState([])
   const [loading, setLoading]   = useState(false)
@@ -83,6 +87,7 @@ export function useFinance() {
   // 2. Criar nova fatura (PDV ou recorrência)
   const createInvoice = useCallback(async (payload) => {
     if (!activeModuleId) throw new Error('Módulo não identificado')
+    assertActiveTenant(activeTenantId, 'salvar a fatura')
     const { data, error: err } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       const insertPayload = buildTenantPayload({
         ...payload,
@@ -175,6 +180,7 @@ export function useFinance() {
 
   // 4. Atualizar status (Pagamento, Cancelamento)
   const updateStatus = useCallback(async (id, status, extra = {}) => {
+    assertActiveTenant(activeTenantId, 'alterar a fatura')
     const payload = { 
       status, 
       updated_at: new Date().toISOString(),
@@ -199,6 +205,7 @@ export function useFinance() {
   }, [activeTenantId])
 
   const deleteInvoice = useCallback(async (id) => {
+    assertActiveTenant(activeTenantId, 'remover a fatura')
     const { error: err } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       let q = supabase.from('invoices').delete().eq('id', id)
       q = applyTenantFilter(q, activeTenantId, includeTenant)
@@ -224,6 +231,7 @@ export function useFinance() {
   }, [activeModuleId, activeTenantId])
 
   const saveBillingSettings = useCallback(async (payload) => {
+    assertActiveTenant(activeTenantId, 'salvar o faturamento')
     const { data, error: err } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       const row = buildTenantPayload({ ...payload, module_id: activeModuleId }, activeTenantId, includeTenant)
       const conflict = includeTenant ? 'tenant_id,module_id' : 'module_id'
