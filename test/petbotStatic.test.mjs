@@ -116,3 +116,18 @@ test('PetBot usa LLM como interpretador antes do guardiao', () => {
   assert.match(webhook, /interpretation: llmInterpretation/)
   assert.match(webhook, /redraftPetbotReplyWithLlm/)
 })
+
+test('fluxo legado do WhatsApp tem MotoDog, Pix e checklist configuraveis', () => {
+  const migration = read('database/petshop_legacy_whatsapp_flow.sql')
+  const settings = read('src/shared/pages/SettingsPage.jsx')
+  const guard = read('server/lib/petbotGuard.js')
+
+  assert.match(migration, /pet_transport_options/)
+  assert.match(migration, /pix_key/)
+  assert.match(migration, /payment_status/)
+  assert.match(settings, /Opcoes MotoDog/)
+  assert.match(settings, /Chave Pix/)
+  assert.match(settings, /Mensagens padrao/)
+  assert.match(guard, /buildPetbotConfirmationReply/)
+  assert.match(guard, /aguardando_comprovante/)
+})

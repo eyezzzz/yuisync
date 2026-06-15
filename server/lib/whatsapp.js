@@ -694,6 +694,80 @@ async function touchSession(sessionId) {
   }
 }
 
+function parseContext(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function isPossiblePaymentProof(event) {
+  const type = clean(event.type)
+  const mime = clean(event.media?.mime_type).toLowerCase()
+  return type === 'image' || type === 'document' || mime.includes('pdf')
+}
+
+async function markPossiblePaymentProof(session, event, savedIncoming = {}) {
+  if (!isPossiblePaymentProof(event)) return false
+  const context = parseContext(session.context)
+  const saleId = clean(context.last_sale_id)
+  if (!saleId) return false
+  const receivedAt = new Date().toISOString()
+  const proofMetadata = {
+    chat_message_id: savedIncoming.id || null,
+    whatsapp_message_id: event.messageId,
+    whatsapp_media: event.media || null,
+    received_at: receivedAt,
+  }
+  const { data, error } = await adminSupabase
+    .from('sales')
+    .update({
+      payment_status: 'comprovante_recebido',
+      payment_proof_received_at: receivedAt,
+      payment_proof_metadata: proofMetadata,
+    })
+    .eq('id', saleId)
+    .in('payment_status', ['aguardando_comprovante', 'comprovante_recebido'])
+    .select('id')
+    .maybeSingle()
+  if (error || !data) return false
+
+  await adminSupabase
+    .from('service_delivery_orders')
+    .update({
+      payment_status: 'comprovante_recebido',
+      payment_proof_received_at: receivedAt,
+      payment_proof_metadata: proofMetadata,
+    })
+    .eq('sale_id', saleId)
+
+  await adminSupabase
+    .from('chat_sessions')
+    .update({
+      context: {
+        ...context,
+        petbot: {
+          ...parseContext(context.petbot),
+          paymentProof: {
+            status: 'comprovante_recebido',
+            requested: true,
+            received: true,
+            mediaId: clean(event.media?.id),
+            url: '',
+          },
+        },
+      },
+      last_message_at: receivedAt,
+    })
+    .eq('id', session.id)
+
+  return true
+}
+
 function buildInboundMetadata(event) {
   return {
     channel: 'whatsapp',
@@ -760,7 +834,7 @@ async function saveAssistantFallback(sessionId, content, metadata) {
 }
 
 async function insertIncomingWhatsappMessage(sessionId, event, content) {
-  const { error } = await adminSupabase
+  const { data, error } = await adminSupabase
     .from('chat_messages')
     .insert({
       session_id: sessionId,
@@ -769,10 +843,13 @@ async function insertIncomingWhatsappMessage(sessionId, event, content) {
       metadata: buildInboundMetadata(event),
       sent_at: timestampToIso(event.timestamp),
     })
+    .select('id')
+    .single()
 
   if (error) {
     throw new HttpError(500, 'Unable to save WhatsApp user message.')
   }
+  return data
 }
 
 async function processIncomingWhatsappMessage(event) {
@@ -800,6 +877,23 @@ async function processIncomingWhatsappMessage(event) {
         media_processing_error: error instanceof Error ? error.message : 'Unknown media processing error',
       }
     }
+  }
+
+  if (isPossiblePaymentProof(event) && clean(parseContext(session.context).last_sale_id)) {
+    const savedIncoming = await insertIncomingWhatsappMessage(session.id, event, event.text || `[Comprovante ${event.type || 'midia'} recebido no WhatsApp]`)
+    await touchSession(session.id)
+    if (await markPossiblePaymentProof(session, event, savedIncoming)) {
+      const savedProof = await saveAssistantFallback(session.id, 'Comprovante recebido. Vou deixar marcado para a equipe dar baixa manual, combinado?', {
+        channel: 'whatsapp',
+        delivery_status: 'pending',
+        payment_proof_received: true,
+        whatsapp_reply_to_message_id: event.messageId,
+        whatsapp_phone_number_id: event.phoneNumberId,
+      })
+      await sendAndMarkDelivered(config, savedProof, { to: event.from, replyToMessageId: event.messageId })
+      return { sessionId: session.id, paymentProofReceived: true }
+    }
+    return { sessionId: session.id, paymentProofIgnored: true }
   }
 
   if (!event.isSupportedText) {

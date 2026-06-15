@@ -3,6 +3,7 @@ import { serverEnv } from './env.js'
 import { logger } from './logger.js'
 import {
   buildPetbotSearchText,
+  buildPetbotConfirmationReply,
   markPetbotOrderError,
   markPetbotOrderSaved,
   mergePetbotContext,
@@ -365,6 +366,53 @@ function parseRating(value = '') {
 function hasConfirmedOrderContext(session) {
   const context = parseJsonObject(session?.context)
   return Boolean(context.last_sale_id || context.last_order_id || context.last_appointment_id)
+}
+
+function parseRegistrationUpdateFromMessage(message = '') {
+  const text = cleanText(message)
+  const details = {}
+  const document = text.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/)?.[0] || ''
+  const zip = text.match(/\b\d{5}-?\d{3}\b/)?.[0] || ''
+  const birth = text.match(/\b(\d{2})[/-](\d{2})[/-](\d{4})\b/)
+  const number = text.match(/\b(?:numero|n[uú]mero|nº|casa|apto|apartamento|ap)\s*[:\-]?\s*([a-z0-9-]+)\b/i)?.[1] || ''
+  const reference = text.match(/\b(?:referencia|referência|ponto de referencia|perto de|ao lado de|em frente)\s*[:\-]?\s*(.+)$/i)?.[1] || ''
+  if (zip) details.zip_code = zip
+  if (birth) details.tutor_birth_date = `${birth[3]}-${birth[2]}-${birth[1]}`
+  if (number) details.address_number = number
+  if (reference) details.address_reference = reference.slice(0, 160)
+  return { document, details }
+}
+
+async function updateCustomerRegistrationFromMessage(supabase, session, message) {
+  if (!session.client_id) return false
+  const parsed = parseRegistrationUpdateFromMessage(message)
+  if (!parsed.document && !Object.keys(parsed.details).length) return false
+
+  const { data: current } = await supabase
+    .from('clients')
+    .select('document,details')
+    .eq('id', session.client_id)
+    .maybeSingle()
+
+  const nextDetails = {
+    ...(parseJsonObject(current?.details)),
+    ...parsed.details,
+  }
+
+  const { error } = await supabase
+    .from('clients')
+    .update({
+      ...(parsed.document ? { document: parsed.document } : {}),
+      details: {
+        ...nextDetails,
+        registration_status: nextDetails.tutor_birth_date && nextDetails.zip_code && nextDetails.address_number && nextDetails.address_reference && (parsed.document || current?.document)
+          ? 'completo'
+          : 'pendente',
+      },
+    })
+    .eq('id', session.client_id)
+
+  return !error
 }
 
 function isPlaceholderName(value = '') {
@@ -742,6 +790,7 @@ function buildSystemPrompt({
   storeCity,
   deliveryFee,
   petTransportFee,
+  petTransportOptions,
   customerContext,
   stockContext,
   appointmentsContext,
@@ -796,7 +845,7 @@ function buildSystemPrompt({
     `Telefone da loja: ${storePhone || 'Nao informado'}`,
     `Endereco: ${storeLocation}`,
     `Taxa de entrega: R$ ${Number(deliveryFee ?? DEFAULT_DELIVERY_FEE).toFixed(2)}`,
-    `Transporte do pet banho/tosa: R$ ${Number(petTransportFee ?? 20).toFixed(2)}`,
+    `Transporte do pet banho/tosa: use as opcoes MotoDog configuradas (${(Array.isArray(petTransportOptions) ? petTransportOptions : []).map((item) => `${item.label || item.id} R$ ${Number(item.fee || 0).toFixed(2)}`).join('; ') || `fallback R$ ${Number(petTransportFee ?? 20).toFixed(2)}`}).`,
     '',
     'Cliente atual:',
     customerContext || 'Cliente nao carregado.',
@@ -818,7 +867,7 @@ function buildSystemPrompt({
     'Entrega/retirada: pergunte exatamente "Será entrega ou retirada na loja?"',
     'Se for entrega, antes do resumo final diga: "A taxa de entrega é R$ [TAXA]. O total com entrega fica R$ [TOTAL]."',
     'Resumo final de entrega deve mostrar subtotal, taxa de entrega e total final. Termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
-    'Apos confirmar e registrar com a ferramenta, responda: "Pedido confirmado! 🎉\\n\\nDe 0 a 10, como avalia o atendimento?"',
+    'Apos confirmar e registrar com a ferramenta, use a confirmacao do guardiao: pedido confirmado, comprovante Pix quando aplicavel, checklist de cadastro faltante e avaliacao 0-10.',
   ].join('\n')
 }
 
@@ -826,7 +875,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
   return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
       .from('settings')
-      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options')
       .eq('module_id', moduleId)
 
     if (tenantId) {
@@ -834,7 +883,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
     }
 
     let result = await query.maybeSingle()
-    if (result.error && /pet_transport_fee/i.test(String(result.error.message || ''))) {
+    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options)/i.test(String(result.error.message || ''))) {
       let fallbackQuery = supabase
         .from('settings')
         .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
@@ -859,6 +908,10 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
       botPrompt: data?.bot_prompt || '',
       deliveryFee: Number(data?.delivery_fee ?? DEFAULT_DELIVERY_FEE),
       petTransportFee: Number(data?.pet_transport_fee ?? 20),
+      pixKey: data?.pix_key || '',
+      pixHolderName: data?.pix_holder_name || '',
+      messageTemplates: data?.message_templates || {},
+      petTransportOptions: Array.isArray(data?.pet_transport_options) ? data.pet_transport_options : [],
     }
   })
 }
@@ -1170,6 +1223,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
       order_id: sessionContext.last_order_id || null,
       appointment_id: sessionContext.last_appointment_id || null,
       total: Number(sessionContext.last_total || 0),
+      payment_status: sessionContext.last_payment_status || null,
       duplicated: true,
     }
   }
@@ -1279,6 +1333,9 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
   const subtotal = normalizedItems.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
   const deliveryFee = args.fulfillment_type === 'entrega' ? Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
   const total = subtotal + deliveryFee
+  const paymentStatus = args.order_type === 'produto'
+    ? (args.payment_method === 'pix' ? 'aguardando_comprovante' : 'baixado')
+    : 'nao_aplicavel'
   const orderType = args.order_type === 'produto' ? 'entrega' : 'servico'
   const fulfillmentType = args.order_type === 'produto'
     ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
@@ -1320,6 +1377,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
       discount: 0,
       total_price: total,
       status: 'concluido',
+      payment_status: paymentStatus,
       source: 'whatsapp',
       fulfillment_type: fulfillmentType,
       notes,
@@ -1446,6 +1504,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
         last_order_id: order?.id || null,
         last_appointment_id: appointment?.id || null,
         last_total: total,
+        last_payment_status: paymentStatus,
       },
       last_message_at: new Date().toISOString(),
     })
@@ -1456,6 +1515,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
     order_id: order?.id || null,
     appointment_id: appointment?.id || null,
     total,
+    payment_status: paymentStatus,
   }
 }
 
@@ -1481,6 +1541,8 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     delivery_reference: cleanText(args.delivery_reference),
     delivery_fee: Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE),
     service_transport_fee: Number(args.service_transport_fee || 0),
+    service_transport_mode: cleanText(args.service_transport_mode),
+    service_transport_label: cleanText(args.service_transport_label),
     service_transport_address: cleanText(args.service_transport_address),
     service_transport_neighborhood: cleanText(args.service_transport_neighborhood),
     service_transport_city: cleanText(args.service_transport_city),
@@ -1526,6 +1588,7 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
     order_id: cleanText(data?.order_id) || null,
     appointment_id: cleanText(data?.appointment_id) || null,
     total: Number(data?.total || payload.expected_total || 0),
+    payment_status: cleanText(data?.payment_status),
     duplicated: Boolean(data?.duplicated),
   }
 }
@@ -1810,6 +1873,34 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     return { reply, savedMessage: savedReply }
   }
 
+  if (hasConfirmedOrderContext(session) && await updateCustomerRegistrationFromMessage(supabase, session, trimmedMessage)) {
+    await insertUserMessages(supabase, sessionId, normalizeDashboardUserMessages(trimmedMessage, options))
+    const reply = 'Recebi os dados e atualizei o cadastro. Obrigado!\n\nDe 0 a 10, como avalia o atendimento?'
+    const botSentAt = new Date().toISOString()
+    const { data: savedReply, error: replyInsertError } = await supabase
+      .from('chat_messages')
+      .insert({
+        session_id: sessionId,
+        role: 'assistant',
+        content: reply,
+        metadata: {
+          source: options.source || 'dashboard_simulation',
+          registration_update: true,
+          ...(options.assistantMetadata || {}),
+        },
+        tokens_used: 0,
+        sent_at: botSentAt,
+      })
+      .select('id, role, content, metadata, tokens_used, sent_at')
+      .single()
+
+    if (replyInsertError) {
+      throw new HttpError(500, 'Unable to save assistant response.')
+    }
+
+    return { reply, savedMessage: savedReply }
+  }
+
   if (session.status === 'human' && !options.allowBotWhenHuman) {
     throw new HttpError(409, 'Chat is currently assigned to a human agent.')
   }
@@ -1870,7 +1961,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     try {
       orderResult = await createConfirmedPetshopOrderViaRpc(supabase, sessionForGuard, storeSettings, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
-      reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
+      reply = buildPetbotConfirmationReply(state, storeSettings)
     } catch (error) {
       state = markPetbotOrderError(state, error)
       reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar um atendente para resolver isso antes de finalizar.'
@@ -1908,6 +1999,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       last_sale_id: orderResult.sale_id,
       last_order_id: orderResult.order_id || null,
       last_appointment_id: orderResult.appointment_id || null,
+      last_payment_status: orderResult.payment_status || null,
     } : {}),
   }, state)
 

@@ -74,6 +74,18 @@ function visibleOrderNotes(order) {
     .join(' | ')
 }
 
+function paymentStatus(order) {
+  return order.payment_status || order.sale?.payment_status || 'nao_aplicavel'
+}
+
+function paymentBadge(order) {
+  const status = paymentStatus(order)
+  if (status === 'aguardando_comprovante') return { label: 'Pix aguardando comprovante', cls: 'badge-amber' }
+  if (status === 'comprovante_recebido') return { label: 'Comprovante recebido', cls: 'badge-blue' }
+  if (status === 'baixado') return { label: 'Pagamento baixado', cls: 'badge-green' }
+  return null
+}
+
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (char) => ({
     '&': '&amp;',
@@ -156,6 +168,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
         ${discount > 0 ? `<div class="row"><span>Desconto</span><span>-${fmtCurrency(discount)}</span></div>` : ''}
         <div class="row total"><span>Total</span><span>${fmtCurrency(total)}</span></div>
         <div class="row"><span>Pagamento</span><span>${escapeHtml(order.sale?.payment_method || '-')}</span></div>
+        ${paymentStatus(order) !== 'nao_aplicavel' ? `<div class="row"><span>Status pgto.</span><span>${escapeHtml(paymentStatus(order))}</span></div>` : ''}
         <div class="hr"></div>
         <div class="muted wrap">Origem: ${escapeHtml(address || sourceLabel(order))}</div>
         ${publicNotes ? `<div class="muted wrap">${escapeHtml(publicNotes)}</div>` : ''}
@@ -183,6 +196,7 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
   const ownerName = order.client?.owner_name || order.sale?.customer_name || 'Cliente'
   const petName = order.client?.pet_name && order.client.pet_name !== ownerName ? order.client.pet_name : ''
   const subtitle = petName ? `Pet: ${petName}` : sourceLabel(order)
+  const payBadge = paymentBadge(order)
 
   return (
     <div className="bg-card border border-[var(--border)] rounded-2xl p-4 space-y-4">
@@ -191,7 +205,10 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
           <p className="font-display font-bold text-lg text-text truncate">{ownerName}</p>
           <p className="text-xs text-muted truncate">{subtitle}</p>
         </div>
-        <span className="badge badge-blue capitalize">{order.order_type}</span>
+        <div className="flex flex-col items-end gap-2">
+          <span className="badge badge-blue capitalize">{order.order_type}</span>
+          {payBadge && <span className={`badge ${payBadge.cls}`}>{payBadge.label}</span>}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3 text-sm">
@@ -257,6 +274,7 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
           <span className="leading-snug">{originAddress || 'Endereco nao informado na ordem.'}</span>
         </div>
         <p className="text-[11px] text-muted mt-2">Canal: {sourceLabel(order)}</p>
+        {order.transport_label && <p className="text-[11px] text-emerald-500 mt-1">MotoDog: {order.transport_label}</p>}
       </div>
 
       {publicNotes && (
@@ -323,6 +341,7 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
               const originAddress = orderAddress(order) || orderOriginAddress(order) || sourceLabel(order)
               const firstItem = items[0]
               const extraCount = Math.max(0, items.length - 1)
+              const payBadge = paymentBadge(order)
 
               return (
                 <tr key={order.id}>
@@ -348,7 +367,10 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
                     )}
                   </td>
                   <td className="font-semibold text-text">#{String(order.sale_id || '').slice(0, 8) || '-'}</td>
-                  <td className="font-semibold text-emerald-400">{fmtCurrency(order.sale?.total_price || 0)}</td>
+                  <td>
+                    <p className="font-semibold text-emerald-400">{fmtCurrency(order.sale?.total_price || 0)}</p>
+                    {payBadge && <span className={`badge ${payBadge.cls} mt-1`}>{payBadge.label}</span>}
+                  </td>
                   <td>
                     <div className="flex items-start gap-2 text-sm text-text">
                       <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />

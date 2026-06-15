@@ -10,6 +10,21 @@ import { MODULES } from '../../config/modules'
 import { buildTenantPayload, isTenantSchemaError, runWithTenantFallback } from '../../lib/tenant'
 import { DEFAULT_PETBOT_PROMPT } from '../../../shared/petbotPrompt'
 
+const DEFAULT_PET_TRANSPORT_OPTIONS = [
+  { id: 'buscar_e_levar', label: 'Buscar e levar', fee: '20.00', maxWeightKg: '10', active: true },
+  { id: 'somente_buscar', label: 'Somente buscar', fee: '15.00', maxWeightKg: '10', active: true },
+  { id: 'somente_levar', label: 'Somente levar', fee: '15.00', maxWeightKg: '10', active: true },
+]
+
+const DEFAULT_MESSAGE_TEMPLATES = {
+  appointment_summary: 'Ola [NOME], segue o resumo do seu agendamento\n\nPet: [PET]\nValor do agendamento: [VALOR]\nLocal: [LOJA]\nEndereco: [ENDERECO_LOJA]\nData: [DATA]\nHorario: [HORARIO]',
+  registration_checklist: 'Assim que possivel envie: data de nascimento do tutor, CPF, CEP, numero da casa, ponto de referencia, nome e raca do pet para completar o cadastro conosco.',
+  payment_proof_request: 'Por gentileza, envie o comprovante de pagamento para darmos baixa no sistema.',
+  motodog_options: 'MotoDog: buscar e levar R$20, somente buscar R$15, somente levar R$15. Opcoes para pets ate 10kg.',
+  monthly_plan: 'Nosso pacote mensal tem 4 banhos no mes, 1 por semana, pagamento antecipado e melhor horario reservado.',
+  small_bath_service: 'Banho pequeno porte inclui banho, corte de unha, limpeza de ouvido e tosa higienica.',
+}
+
 const INITIAL_FORM = {
   store_name: '',
   store_address: '',
@@ -33,6 +48,10 @@ const INITIAL_FORM = {
   bot_prompt: DEFAULT_PETBOT_PROMPT,
   delivery_fee: '10.00',
   pet_transport_fee: '20.00',
+  pix_key: '',
+  pix_holder_name: '',
+  pet_transport_options: DEFAULT_PET_TRANSPORT_OPTIONS,
+  message_templates: DEFAULT_MESSAGE_TEMPLATES,
   issuer_legal_name: '',
   issuer_trade_name: '',
   issuer_cnpj: '',
@@ -61,7 +80,14 @@ function isFiscalSchemaError(error) {
 
 function isFeeSchemaError(error) {
   const msg = String(error?.message || '').toLowerCase()
-  return (msg.includes('delivery_fee') || msg.includes('pet_transport_fee')) && (
+  return (
+    msg.includes('delivery_fee')
+    || msg.includes('pet_transport_fee')
+    || msg.includes('pix_key')
+    || msg.includes('pix_holder_name')
+    || msg.includes('message_templates')
+    || msg.includes('pet_transport_options')
+  ) && (
     msg.includes('schema cache')
     || msg.includes('column')
     || msg.includes('does not exist')
@@ -73,6 +99,31 @@ function toBool(value, fallback = false) {
   if (value === 'true' || value === '1') return true
   if (value === 'false' || value === '0') return false
   return fallback
+}
+
+function normalizeTransportOptions(value) {
+  const rows = Array.isArray(value) && value.length ? value : DEFAULT_PET_TRANSPORT_OPTIONS
+  return rows.map((item, index) => ({
+    id: item.id || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.id || `opcao_${index + 1}`,
+    label: item.label || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.label || `Opcao ${index + 1}`,
+    fee: String(item.fee ?? DEFAULT_PET_TRANSPORT_OPTIONS[index]?.fee ?? '0.00'),
+    maxWeightKg: String(item.maxWeightKg ?? item.max_weight_kg ?? DEFAULT_PET_TRANSPORT_OPTIONS[index]?.maxWeightKg ?? '10'),
+    active: item.active !== false,
+  }))
+}
+
+function normalizeTemplates(value) {
+  return { ...DEFAULT_MESSAGE_TEMPLATES, ...(value && typeof value === 'object' ? value : {}) }
+}
+
+function serializeTransportOptions(rows = []) {
+  return normalizeTransportOptions(rows).map((item) => ({
+    id: item.id,
+    label: item.label,
+    fee: Number(item.fee || 0),
+    maxWeightKg: Number(item.maxWeightKg || 0),
+    active: Boolean(item.active),
+  }))
 }
 
 export default function SettingsPage() {
@@ -167,6 +218,10 @@ export default function SettingsPage() {
           bot_prompt: data.bot_prompt || DEFAULT_PETBOT_PROMPT,
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
           pet_transport_fee: data.pet_transport_fee != null ? String(data.pet_transport_fee) : '20.00',
+          pix_key: data.pix_key || '',
+          pix_holder_name: data.pix_holder_name || '',
+          pet_transport_options: normalizeTransportOptions(data.pet_transport_options),
+          message_templates: normalizeTemplates(data.message_templates),
         }
       }
 
@@ -248,6 +303,8 @@ export default function SettingsPage() {
         const row = buildTenantPayload({
           module_id: effectiveModId,
           ...form,
+          pet_transport_options: serializeTransportOptions(form.pet_transport_options),
+          message_templates: normalizeTemplates(form.message_templates),
           updated_at: new Date().toISOString(),
         }, activeTenantId, includeTenant)
 
@@ -257,6 +314,10 @@ export default function SettingsPage() {
           const fallbackRow = { ...row }
           delete fallbackRow.delivery_fee
           delete fallbackRow.pet_transport_fee
+          delete fallbackRow.pix_key
+          delete fallbackRow.pix_holder_name
+          delete fallbackRow.message_templates
+          delete fallbackRow.pet_transport_options
           return supabase.from('settings').upsert(fallbackRow, { onConflict: conflict })
         }
         return firstTry
@@ -322,6 +383,25 @@ export default function SettingsPage() {
     } finally {
       setSaving(false)
     }
+  }
+
+  function updateTransportOption(index, key, value) {
+    setForm((prev) => ({
+      ...prev,
+      pet_transport_options: normalizeTransportOptions(prev.pet_transport_options).map((item, itemIndex) => (
+        itemIndex === index ? { ...item, [key]: value } : item
+      )),
+    }))
+  }
+
+  function updateTemplate(key, value) {
+    setForm((prev) => ({
+      ...prev,
+      message_templates: {
+        ...normalizeTemplates(prev.message_templates),
+        [key]: value,
+      },
+    }))
   }
 
   async function handleCreateTenant() {
@@ -712,7 +792,51 @@ export default function SettingsPage() {
                     value={form.pet_transport_fee}
                     onChange={(event) => setForm((prev) => ({ ...prev, pet_transport_fee: event.target.value }))}
                   />
+                  <p className="text-xs text-muted mt-2">Fallback legado. O PetBot prioriza as opcoes MotoDog abaixo.</p>
                 </div>
+                <div className="space-y-3">
+                  <label className="inp-label">Opcoes MotoDog</label>
+                  {normalizeTransportOptions(form.pet_transport_options).map((option, index) => (
+                    <div key={option.id} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_120px_120px_90px] gap-3 rounded-2xl border border-[var(--border)] bg-surface/60 p-3">
+                      <input className="inp" disabled={!canEdit} value={option.label} onChange={(event) => updateTransportOption(index, 'label', event.target.value)} />
+                      <input className="inp" type="number" min="0" step="0.01" disabled={!canEdit} value={option.fee} onChange={(event) => updateTransportOption(index, 'fee', event.target.value)} />
+                      <input className="inp" type="number" min="0" step="0.1" disabled={!canEdit} value={option.maxWeightKg} onChange={(event) => updateTransportOption(index, 'maxWeightKg', event.target.value)} />
+                      <label className="flex items-center gap-2 text-sm text-muted">
+                        <input type="checkbox" disabled={!canEdit} checked={option.active} onChange={(event) => updateTransportOption(index, 'active', event.target.checked)} />
+                        Ativo
+                      </label>
+                    </div>
+                  ))}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="inp-label">Chave Pix</label>
+                    <input className="inp" disabled={!canEdit} value={form.pix_key} onChange={(event) => setForm((prev) => ({ ...prev, pix_key: event.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="inp-label">Titular Pix</label>
+                    <input className="inp" disabled={!canEdit} value={form.pix_holder_name} onChange={(event) => setForm((prev) => ({ ...prev, pix_holder_name: event.target.value }))} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className={showGeneralSettings ? 'col-span-1 md:col-span-2 space-y-4' : 'hidden'}>
+              <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
+                <FileText size={14} /> Mensagens padrao
+              </h3>
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-5">
+                {Object.entries(normalizeTemplates(form.message_templates)).map(([key, value]) => (
+                  <div key={key} className="space-y-2">
+                    <label className="inp-label">{key.replaceAll('_', ' ')}</label>
+                    <textarea
+                      className="inp min-h-[110px] resize-y"
+                      disabled={!canEdit}
+                      value={value}
+                      onChange={(event) => updateTemplate(key, event.target.value)}
+                    />
+                  </div>
+                ))}
               </div>
             </div>
 

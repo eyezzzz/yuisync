@@ -30,7 +30,27 @@ alter table public.appointments
   add column if not exists updated_at timestamptz not null default now();
 
 alter table public.settings
-  add column if not exists pet_transport_fee numeric(10,2) not null default 20.00;
+  add column if not exists pet_transport_fee numeric(10,2) not null default 20.00,
+  add column if not exists pix_key text,
+  add column if not exists pix_holder_name text,
+  add column if not exists message_templates jsonb not null default '{}'::jsonb,
+  add column if not exists pet_transport_options jsonb not null default '[
+    {"id":"buscar_e_levar","label":"Buscar e levar","fee":20.00,"maxWeightKg":10,"active":true},
+    {"id":"somente_buscar","label":"Somente buscar","fee":15.00,"maxWeightKg":10,"active":true},
+    {"id":"somente_levar","label":"Somente levar","fee":15.00,"maxWeightKg":10,"active":true}
+  ]'::jsonb;
+
+alter table public.sales
+  add column if not exists payment_status text not null default 'nao_aplicavel',
+  add column if not exists payment_proof_url text,
+  add column if not exists payment_proof_received_at timestamptz,
+  add column if not exists payment_proof_metadata jsonb not null default '{}'::jsonb;
+
+alter table public.appointments
+  add column if not exists payment_status text not null default 'nao_aplicavel',
+  add column if not exists payment_proof_url text,
+  add column if not exists payment_proof_received_at timestamptz,
+  add column if not exists payment_proof_metadata jsonb not null default '{}'::jsonb;
 
 create table if not exists public.service_delivery_orders (
   id uuid primary key default uuid_generate_v4(),
@@ -52,6 +72,14 @@ create table if not exists public.service_delivery_orders (
   created_at timestamptz default now(),
   updated_at timestamptz default now()
 );
+
+alter table public.service_delivery_orders
+  add column if not exists payment_status text not null default 'nao_aplicavel',
+  add column if not exists payment_proof_url text,
+  add column if not exists payment_proof_received_at timestamptz,
+  add column if not exists payment_proof_metadata jsonb not null default '{}'::jsonb,
+  add column if not exists transport_mode text,
+  add column if not exists transport_label text;
 
 create unique index if not exists idx_service_delivery_orders_sale_id_unique
   on public.service_delivery_orders (sale_id)
@@ -90,6 +118,8 @@ declare
   v_delivery_reference text := nullif(trim(p_payload->>'delivery_reference'), '');
   v_delivery_fee numeric := coalesce(nullif(p_payload->>'delivery_fee', '')::numeric, 10);
   v_service_transport_fee numeric := coalesce(nullif(p_payload->>'service_transport_fee', '')::numeric, 0);
+  v_service_transport_mode text := nullif(trim(p_payload->>'service_transport_mode'), '');
+  v_service_transport_label text := nullif(trim(p_payload->>'service_transport_label'), '');
   v_service_transport_address text := nullif(trim(p_payload->>'service_transport_address'), '');
   v_service_transport_neighborhood text := nullif(trim(p_payload->>'service_transport_neighborhood'), '');
   v_service_transport_city text := nullif(trim(p_payload->>'service_transport_city'), '');
@@ -119,6 +149,7 @@ declare
   v_sale_fulfillment text;
   v_operational_order_type text;
   v_operational_status text;
+  v_payment_status text := 'nao_aplicavel';
   v_session_context jsonb;
 begin
   if v_session_id is null or v_tenant_id is null or v_module_id = '' then
@@ -344,6 +375,10 @@ begin
     + case when v_order_type = 'produto' and v_fulfillment_type = 'entrega' then v_delivery_fee else 0 end
     + case when v_order_type <> 'produto' then v_service_transport_fee else 0 end;
 
+  if v_order_type = 'produto' then
+    v_payment_status := case when lower(coalesce(v_payment_method, '')) = 'pix' then 'aguardando_comprovante' else 'baixado' end;
+  end if;
+
   if v_expected_total is not null and abs(v_total - v_expected_total) > 0.01 then
     raise exception 'Total divergente. Esperado %, recalculado %.', v_expected_total, v_total;
   end if;
@@ -365,9 +400,10 @@ begin
     case when v_item_summary is not null then 'Itens: ' || v_item_summary end,
     case when v_fulfillment_type = 'entrega' then 'Endereco: ' || concat_ws(' - ', v_delivery_address, v_delivery_neighborhood, v_delivery_city) end,
     case when v_service_grooming_detail is not null then 'Acabamento: ' || v_service_grooming_detail end,
-    case when v_service_transport_fee > 0 then 'Transporte pet: R$ ' || to_char(v_service_transport_fee, 'FM999999990.00') end,
+    case when v_service_transport_fee > 0 then 'Transporte pet: ' || coalesce(v_service_transport_label, 'MotoDog') || ' - R$ ' || to_char(v_service_transport_fee, 'FM999999990.00') end,
     case when v_service_transport_fee > 0 then 'Buscar pet em: ' || concat_ws(' - ', v_service_transport_address, v_service_transport_neighborhood, v_service_transport_city) end,
     v_notes_input,
+    case when v_payment_status = 'aguardando_comprovante' then 'Pagamento Pix: aguardando comprovante/baixa manual' end,
     case when v_fulfillment_type = 'retirada' then 'Retirada na loja' end,
     case when v_fulfillment_type = 'entrega' then 'Taxa de entrega: R$ ' || to_char(v_delivery_fee, 'FM999999990.00') end,
     case when v_delivery_reference is not null then 'Referencia: ' || v_delivery_reference end,
@@ -383,11 +419,11 @@ begin
 
   insert into public.sales (
     tenant_id, module_id, client_id, customer_name, customer_phone, payment_method,
-    subtotal, discount, total_price, status, source, fulfillment_type, notes
+    subtotal, discount, total_price, status, payment_status, source, fulfillment_type, notes
   )
   values (
     v_tenant_id, v_module_id, v_client_id, v_customer_name, v_customer_phone, v_payment_method,
-    v_subtotal, 0, v_total, 'concluido', 'whatsapp', v_sale_fulfillment, v_notes
+    v_subtotal, 0, v_total, 'concluido', v_payment_status, 'whatsapp', v_sale_fulfillment, v_notes
   )
   returning id into v_sale_id;
 
@@ -433,6 +469,7 @@ begin
           source = 'whatsapp',
           customer_name = v_customer_name,
           customer_phone = v_customer_phone,
+          payment_status = v_payment_status,
           description = v_notes,
           notes = v_notes,
           updated_at = now()
@@ -440,7 +477,7 @@ begin
     else
       insert into public.appointments (
         tenant_id, module_id, client_id, pet_id, service_type, scheduled_at, service_date, start_time, end_time, duration_min,
-        price, status, source, customer_name, customer_phone, description, notes
+        price, status, payment_status, source, customer_name, customer_phone, description, notes
       )
       values (
         v_tenant_id, v_module_id, v_client_id, v_pet_id, v_service_type, v_scheduled_for,
@@ -448,7 +485,7 @@ begin
         (v_scheduled_for at time zone 'America/Sao_Paulo')::time,
         ((v_scheduled_for + make_interval(mins => v_service_duration)) at time zone 'America/Sao_Paulo')::time,
         v_service_duration,
-        v_subtotal, 'agendado', 'whatsapp', v_customer_name, v_customer_phone, v_notes, v_notes
+        v_subtotal, 'agendado', v_payment_status, 'whatsapp', v_customer_name, v_customer_phone, v_notes, v_notes
       )
       returning id into v_appointment_id;
     end if;
@@ -470,6 +507,9 @@ begin
       delivery_neighborhood = case when v_fulfillment_type = 'entrega' then v_delivery_neighborhood when v_service_transport_fee > 0 then v_service_transport_neighborhood else null end,
       delivery_city = case when v_fulfillment_type = 'entrega' then v_delivery_city when v_service_transport_fee > 0 then v_service_transport_city else null end,
       contact_phone = v_customer_phone,
+      payment_status = v_payment_status,
+      transport_mode = case when v_service_transport_fee > 0 then v_service_transport_mode else null end,
+      transport_label = case when v_service_transport_fee > 0 then v_service_transport_label else null end,
       notes = v_notes,
       updated_at = now()
   where sale_id = v_sale_id
@@ -478,7 +518,7 @@ begin
   if v_order_id is null then
     insert into public.service_delivery_orders (
       tenant_id, module_id, sale_id, client_id, session_id, source, order_type, status,
-      scheduled_for, delivery_address, delivery_neighborhood, delivery_city, contact_phone, notes, updated_at
+      scheduled_for, delivery_address, delivery_neighborhood, delivery_city, contact_phone, payment_status, transport_mode, transport_label, notes, updated_at
     )
     values (
       v_tenant_id, v_module_id, v_sale_id, v_client_id, v_session_id, 'whatsapp', v_operational_order_type, v_operational_status,
@@ -486,7 +526,12 @@ begin
       case when v_fulfillment_type = 'entrega' then v_delivery_address when v_service_transport_fee > 0 then v_service_transport_address else null end,
       case when v_fulfillment_type = 'entrega' then v_delivery_neighborhood when v_service_transport_fee > 0 then v_service_transport_neighborhood else null end,
       case when v_fulfillment_type = 'entrega' then v_delivery_city when v_service_transport_fee > 0 then v_service_transport_city else null end,
-      v_customer_phone, v_notes, now()
+      v_customer_phone,
+      v_payment_status,
+      case when v_service_transport_fee > 0 then v_service_transport_mode else null end,
+      case when v_service_transport_fee > 0 then v_service_transport_label else null end,
+      v_notes,
+      now()
     )
     returning id into v_order_id;
   end if;
@@ -505,7 +550,8 @@ begin
           'last_sale_id', v_sale_id,
           'last_order_id', v_order_id,
           'last_appointment_id', v_appointment_id,
-          'last_total', v_total
+          'last_total', v_total,
+          'last_payment_status', v_payment_status
         ),
         last_message_at = now()
     where id = v_session_id;
@@ -517,7 +563,8 @@ begin
             'last_sale_id', v_sale_id,
             'last_order_id', v_order_id,
             'last_appointment_id', v_appointment_id,
-            'last_total', v_total
+            'last_total', v_total,
+            'last_payment_status', v_payment_status
           )
         )::text,
         last_message_at = now()
@@ -528,7 +575,8 @@ begin
     'sale_id', v_sale_id,
     'order_id', v_order_id,
     'appointment_id', v_appointment_id,
-    'total', v_total
+    'total', v_total,
+    'payment_status', v_payment_status
   );
 end;
 $$;

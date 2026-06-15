@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  buildPetbotConfirmationReply,
   getPetbotState,
   markPetbotOrderSaved,
   mergePetbotContext,
@@ -1300,7 +1301,7 @@ test('banho com transporte aceito soma taxa e salva endereco de busca', () => {
   context = result.context
   result = turn(context, '1', { appointments: mixedAppointments })
   context = result.context
-  result = turn(context, 'sim', { appointments: mixedAppointments })
+  result = turn(context, 'buscar e levar', { appointments: mixedAppointments })
   context = result.context
   assert.equal(result.action, 'pedir_endereco_transporte_pet')
 
@@ -1315,7 +1316,53 @@ test('banho com transporte aceito soma taxa e salva endereco de busca', () => {
   result = turn(context, 'sim', { appointments: mixedAppointments })
   assert.equal(result.shouldSaveOrder, true)
   assert.equal(result.orderArgs.service_transport_fee, 20)
+  assert.equal(result.orderArgs.service_transport_mode, 'buscar_e_levar')
   assert.match(result.orderArgs.service_transport_address, /Bernardo Mascarenhas/i)
+})
+
+test('banho com somente buscar usa opcao MotoDog de 15 reais', () => {
+  let context = {}
+  let result = turn(context, 'quero banho pro meu cachorro', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Roberta', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'Toby shih tzu', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'sem perfume', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, 'amanha', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, '14:00', { appointments: mixedAppointments })
+  context = result.context
+  result = turn(context, '1', { appointments: mixedAppointments })
+  context = result.context
+  assert.match(result.reply, /Buscar e levar|Somente buscar|Somente levar/i)
+
+  result = turn(context, 'somente buscar', { appointments: mixedAppointments })
+  context = result.context
+  assert.equal(result.action, 'pedir_endereco_transporte_pet')
+  assert.equal(result.state.serviceTransport.mode, 'somente_buscar')
+  assert.equal(result.state.serviceTransport.fee, 15)
+})
+
+test('confirmacao pix pede comprovante e cadastro complementar', () => {
+  const saved = markPetbotOrderSaved({
+    ...getPetbotState({}),
+    intent: 'produto',
+    payment: { method: 'pix' },
+    registrationChecklist: {
+      requested: false,
+      completed: false,
+      missing: ['CPF do tutor', 'CEP da rua'],
+    },
+  }, { sale_id: 'sale-1', order_id: 'order-1', total: 120 })
+
+  const reply = buildPetbotConfirmationReply(saved, { pixKey: 'pix@loja.com', pixHolderName: 'Quatro Patas' })
+  assert.equal(saved.paymentProof.status, 'aguardando_comprovante')
+  assert.match(reply, /pix@loja\.com/i)
+  assert.match(reply, /comprovante/i)
+  assert.match(reply, /CPF do tutor/i)
+  assert.match(reply, /De 0 a 10/i)
 })
 
 test('veterinaria salva sem pagamento depois do horario real', () => {

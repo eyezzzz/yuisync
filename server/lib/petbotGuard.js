@@ -7,6 +7,11 @@ import {
 
 const DEFAULT_DELIVERY_FEE = 10
 const DEFAULT_PET_TRANSPORT_FEE = 20
+const DEFAULT_PET_TRANSPORT_OPTIONS = [
+  { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 20, maxWeightKg: 10, active: true },
+  { id: 'somente_buscar', label: 'Somente buscar', fee: 15, maxWeightKg: 10, active: true },
+  { id: 'somente_levar', label: 'Somente levar', fee: 15, maxWeightKg: 10, active: true },
+]
 
 const PETBOT_VERSION = 1
 
@@ -174,6 +179,82 @@ function money(value = 0) {
   return `R$ ${Number(value || 0).toFixed(2).replace('.', ',')}`
 }
 
+function normalizeTransportOptions(settings = {}) {
+  let raw = settings.petTransportOptions || settings.pet_transport_options || null
+  if (typeof raw === 'string') {
+    try {
+      raw = JSON.parse(raw)
+    } catch {
+      raw = null
+    }
+  }
+  const source = Array.isArray(raw) && raw.length ? raw : DEFAULT_PET_TRANSPORT_OPTIONS
+  const normalized = source
+    .map((option, index) => ({
+      id: clean(option.id || option.mode || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.id || `opcao_${index + 1}`),
+      label: clean(option.label || option.name || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.label || `Opcao ${index + 1}`),
+      fee: Number(option.fee ?? option.price ?? DEFAULT_PET_TRANSPORT_OPTIONS[index]?.fee ?? settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE),
+      maxWeightKg: option.maxWeightKg ?? option.max_weight_kg ?? DEFAULT_PET_TRANSPORT_OPTIONS[index]?.maxWeightKg ?? 10,
+      active: option.active !== false,
+    }))
+    .filter((option) => option.active && option.id && option.label && Number.isFinite(option.fee))
+
+  if (normalized.length) return normalized
+  return [{
+    id: 'buscar_e_levar',
+    label: 'Buscar e levar',
+    fee: Number(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE),
+    maxWeightKg: 10,
+    active: true,
+  }]
+}
+
+function transportOptionLine(option, index) {
+  const limit = Number(option.maxWeightKg || 0) > 0 ? `, ate ${option.maxWeightKg}kg` : ''
+  return `${index + 1}. ${option.label} - ${money(option.fee)}${limit}`
+}
+
+function buildTransportQuestion(settings = {}) {
+  const options = normalizeTransportOptions(settings)
+  return [
+    'Voce quer que a gente busque e entregue o pet na sua residencia?',
+    'Opcoes MotoDog:',
+    ...options.map(transportOptionLine),
+    'Se nao quiser transporte, pode dizer "sem transporte".',
+  ].join('\n')
+}
+
+function inferTransportOption(message = '', settings = {}) {
+  const lower = norm(message)
+  const options = normalizeTransportOptions(settings)
+  if (!lower) return null
+  const numeric = lower.match(/\b([123])\b/)
+  if (numeric) return options[Number(numeric[1]) - 1] || null
+  if (/(buscar|busca).*(levar|entregar|entrega|trazer|volta)|ida.*volta|leva.*traz/.test(lower)) {
+    return options.find((option) => option.id === 'buscar_e_levar') || options[0] || null
+  }
+  if (/(somente|so|só|apenas).*(buscar|busca)|buscar apenas|so busca|só busca/.test(lower)) {
+    return options.find((option) => option.id === 'somente_buscar') || null
+  }
+  if (/(somente|so|só|apenas).*(levar|entregar|entrega)|levar apenas|so levar|só levar/.test(lower)) {
+    return options.find((option) => option.id === 'somente_levar') || null
+  }
+  return options.find((option) => lower.includes(norm(option.label))) || null
+}
+
+function applyTransportOption(state, option) {
+  if (!option) return false
+  state.serviceTransport ||= defaultServiceTransport()
+  state.serviceTransport.offered = true
+  state.serviceTransport.accepted = true
+  state.serviceTransport.declined = false
+  state.serviceTransport.mode = option.id
+  state.serviceTransport.label = option.label
+  state.serviceTransport.fee = Number(option.fee || 0)
+  state.serviceTransport.maxWeightKg = option.maxWeightKg ?? null
+  return true
+}
+
 function saoPauloTodayIso() {
   return new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
 }
@@ -295,6 +376,9 @@ function defaultServiceTransport() {
     offered: false,
     accepted: false,
     declined: false,
+    mode: '',
+    label: '',
+    maxWeightKg: null,
     fee: 0,
     address: '',
     neighborhood: '',
@@ -353,6 +437,8 @@ function defaultState() {
     partialSummaryShown: false,
     finalSummaryShown: false,
     saved: false,
+    registrationChecklist: defaultRegistrationChecklist(),
+    paymentProof: defaultPaymentProof(),
     awaiting: '',
     blockedReasons: [],
     lastQuestion: '',
@@ -360,6 +446,24 @@ function defaultState() {
     lastSaleId: '',
     lastOrderId: '',
     lastAppointmentId: '',
+  }
+}
+
+function defaultRegistrationChecklist() {
+  return {
+    requested: false,
+    completed: false,
+    missing: [],
+  }
+}
+
+function defaultPaymentProof() {
+  return {
+    status: 'nao_aplicavel',
+    requested: false,
+    received: false,
+    mediaId: '',
+    url: '',
   }
 }
 
@@ -374,6 +478,8 @@ export function getPetbotState(context = {}) {
     payment: { ...base.payment, ...(incoming.payment || {}) },
     fulfillment: { ...base.fulfillment, ...(incoming.fulfillment || {}) },
     serviceTransport: { ...base.serviceTransport, ...(incoming.serviceTransport || {}) },
+    registrationChecklist: { ...base.registrationChecklist, ...(incoming.registrationChecklist || {}) },
+    paymentProof: { ...base.paymentProof, ...(incoming.paymentProof || {}) },
     totals: { ...base.totals, ...(incoming.totals || {}) },
     blockedReasons: Array.isArray(incoming.blockedReasons) ? incoming.blockedReasons : [],
     productOptions: Array.isArray(incoming.productOptions) ? incoming.productOptions : [],
@@ -543,7 +649,22 @@ function hydrateFromCustomer(state, session = {}, customer = {}) {
   if (!state.fulfillment.address && clean(client.address)) state.fulfillment.address = clean(client.address)
   if (!state.fulfillment.neighborhood && clean(client.neighborhood)) state.fulfillment.neighborhood = clean(client.neighborhood)
   if (!state.fulfillment.city && clean(client.city)) state.fulfillment.city = clean(client.city)
+  state.registrationChecklist = {
+    ...defaultRegistrationChecklist(),
+    ...(state.registrationChecklist || {}),
+    missing: registrationMissingFields(state, client, details),
+  }
   return state
+}
+
+function registrationMissingFields(state = {}, client = {}, details = {}) {
+  const missing = []
+  if (!clean(details.tutor_birth_date)) missing.push('data de nascimento do tutor')
+  if (!clean(client.document)) missing.push('CPF do tutor')
+  if (!clean(details.zip_code)) missing.push('CEP da rua')
+  if (!clean(details.address_number) || !clean(details.address_reference)) missing.push('numero da casa e ponto de referencia')
+  if (!clean(state.petName || details.pet_name) || !clean(state.breed || details.breed)) missing.push('nome e raca do pet')
+  return [...new Set(missing)]
 }
 
 function normalizeSpecies(value = '') {
@@ -1913,6 +2034,8 @@ function buildOrderArgs(state) {
     change_for: null,
     fulfillment_type: 'servico',
     service_transport_fee: state.serviceTransport?.accepted ? Number(state.totals.serviceTransportFee || state.serviceTransport.fee || 0) : 0,
+    service_transport_mode: state.serviceTransport?.accepted ? state.serviceTransport.mode : '',
+    service_transport_label: state.serviceTransport?.accepted ? state.serviceTransport.label : '',
     service_transport_address: state.serviceTransport?.accepted ? state.serviceTransport.address : '',
     service_transport_neighborhood: state.serviceTransport?.accepted ? state.serviceTransport.neighborhood : '',
     service_transport_city: state.serviceTransport?.accepted ? state.serviceTransport.city : '',
@@ -1928,7 +2051,7 @@ function buildOrderArgs(state) {
   }
 }
 
-function applyMessageFacts(state, message) {
+function applyMessageFacts(state, message, settings = {}) {
   const name = extractCustomerName(message, state)
   if (name && !state.nameConfirmed) {
     state.customerName = name
@@ -2039,12 +2162,14 @@ function applyMessageFacts(state, message) {
   if (state.intent === 'banho_tosa' && state.awaiting === 'service_transport') {
     state.serviceTransport ||= defaultServiceTransport()
     state.serviceTransport.offered = true
-    if (isAffirmative(message)) {
-      state.serviceTransport.accepted = true
-      state.serviceTransport.declined = false
+    const transportOption = inferTransportOption(message, settings)
+    if (transportOption) {
+      applyTransportOption(state, transportOption)
     } else if (isNegative(message)) {
       state.serviceTransport.accepted = false
       state.serviceTransport.declined = true
+    } else if (isAffirmative(message) && normalizeTransportOptions(settings).length === 1) {
+      applyTransportOption(state, normalizeTransportOptions(settings)[0])
     }
   }
 
@@ -2441,21 +2566,22 @@ function serviceFlow(state, message, appointments, settings) {
     state.partialSummaryShown = true
     state.serviceTransport ||= defaultServiceTransport()
     state.serviceTransport.offered = true
-    state.serviceTransport.fee = Number(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)
+    const firstTransport = normalizeTransportOptions(settings)[0]
+    state.serviceTransport.fee = Number(firstTransport?.fee ?? settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)
     recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
-    return ask(`${buildPartialSummary(state)}\n\nQuer que a gente busque o pet? O transporte fica ${money(state.serviceTransport.fee)}.`, state, 'service_transport', 'transporte_pet_pendente')
+    return ask(`${buildPartialSummary(state)}\n\n${buildTransportQuestion(settings)}`, state, 'service_transport', 'transporte_pet_pendente')
   }
 
   if (state.intent === 'banho_tosa' && state.serviceTransport?.offered && !state.serviceTransport.accepted && !state.serviceTransport.declined) {
-    return ask(`Quer que a gente busque o pet? O transporte fica ${money(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)}.`, state, 'service_transport', 'transporte_pet_pendente')
+    return ask(buildTransportQuestion(settings), state, 'service_transport', 'transporte_pet_pendente')
   }
 
   if (state.intent === 'banho_tosa' && state.serviceTransport?.accepted) {
     const missing = missingServiceTransportAddressFields(state)
     if (missing.length) {
-      state.serviceTransport.fee = Number(settings.petTransportFee ?? DEFAULT_PET_TRANSPORT_FEE)
+      state.serviceTransport.fee = Number(state.serviceTransport.fee || settings.petTransportFee || DEFAULT_PET_TRANSPORT_FEE)
       recalcTotals(state, settings.deliveryFee, settings.petTransportFee)
-      return ask(`Perfeito. Para buscar o pet, me passa ${missing.join(', ')}.`, state, 'service_transport_address', 'endereco_transporte_incompleto')
+      return ask(`Perfeito. Para o MotoDog, me passa ${missing.join(', ')}.`, state, 'service_transport_address', 'endereco_transporte_incompleto')
     }
   }
 
@@ -2696,7 +2822,7 @@ export function runPetbotGuard({
   }
 
   applyInterpretedFacts(state, interpretation, trimmed)
-  applyMessageFacts(state, trimmed)
+  applyMessageFacts(state, trimmed, settings)
 
   if (interpretation?.wants_human || hasAny(trimmed, HUMAN_HINTS)) {
     const target = state.intent === 'veterinaria' ? 'a veterinária' : 'um atendente'
@@ -2763,12 +2889,47 @@ export function runPetbotGuard({
   return ask(`Perfeito, ${state.customerName}. Você precisa de produto, banho/tosa ou veterinária?`, state, 'intent', 'intencao_pendente')
 }
 
+export function buildPetbotConfirmationReply(state = {}, settings = {}) {
+  const lines = ['Pedido confirmado! 🎉']
+  const isPix = norm(state.payment?.method) === 'pix'
+  if (isPix) {
+    const pixKey = clean(settings.pixKey || settings.pix_key)
+    const holder = clean(settings.pixHolderName || settings.pix_holder_name)
+    if (pixKey) {
+      lines.push(`Pagamento via Pix: ${pixKey}${holder ? ` (${holder})` : ''}.\nAssim que puder, envie o comprovante para a equipe dar baixa.`)
+    } else {
+      lines.push('Pagamento via Pix combinado.\nAssim que puder, envie o comprovante para a equipe dar baixa.')
+    }
+  }
+
+  const missing = Array.isArray(state.registrationChecklist?.missing)
+    ? state.registrationChecklist.missing.filter(Boolean)
+    : []
+  if (missing.length) {
+    lines.push([
+      'Para completar seu cadastro conosco, depois me envie:',
+      ...missing.map((item) => `• ${item}`),
+    ].join('\n'))
+  }
+
+  lines.push('De 0 a 10, como avalia o atendimento?')
+  return lines.join('\n\n')
+}
+
 export function markPetbotOrderSaved(state, result = {}) {
   const next = getPetbotState({ petbot: state })
   next.saved = true
   next.status = 'awaiting_rating'
   next.awaiting = 'rating'
   next.finalSummaryShown = true
+  if (next.petName && next.breed && Array.isArray(next.registrationChecklist?.missing)) {
+    next.registrationChecklist.missing = next.registrationChecklist.missing.filter((item) => !/nome e raca do pet/i.test(item))
+  }
+  next.registrationChecklist.requested = Boolean(next.registrationChecklist?.missing?.length)
+  if (norm(next.payment?.method) === 'pix') {
+    next.paymentProof.status = 'aguardando_comprovante'
+    next.paymentProof.requested = true
+  }
   next.lastSaleId = clean(result.sale_id)
   next.lastOrderId = clean(result.order_id)
   next.lastAppointmentId = clean(result.appointment_id)

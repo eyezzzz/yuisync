@@ -21,6 +21,7 @@ const SPECIES = [
 
 const EMPTY_FORM = {
   owner_name: '', owner_cpf: '', phone: '', email: '', owner_address: '', owner_neighborhood: '', owner_city: '',
+  tutor_birth_date: '', zip_code: '', address_number: '', address_reference: '',
   pet_name: '', species: 'dog', breed: '', birth_date: '', weight_kg: '', color: '', notes: '',
 }
 
@@ -32,6 +33,12 @@ function formatPhone(value) { const d = digits(value); if (d.length === 11) retu
 function formatCpf(value) { const d = digits(value); if (d.length === 11) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`; return value || '-' }
 function getPlanTone(status) { return status === 'active' ? 'badge-green' : status === 'paused' ? 'badge-amber' : 'badge-gray' }
 function getServiceLabel(type) { return ({ banho: 'Banho', tosa: 'Tosa', banho_e_tosa: 'Banho e tosa', consulta: 'Consulta', vacina: 'Vacina', motodog: 'MotoDog' }[type] || type) }
+function getRegistrationBadge(pet = {}) {
+  if (pet.registration_status === 'completo') return { label: 'Completo', cls: 'badge-green' }
+  if (pet.registration_status === 'sem_cpf' || !pet.owner_cpf) return { label: 'Sem CPF', cls: 'badge-red' }
+  if (pet.registration_status === 'sem_endereco' || !pet.owner_address || !pet.owner_neighborhood) return { label: 'Sem endereco', cls: 'badge-amber' }
+  return { label: 'Pendente cadastro', cls: 'badge-amber' }
+}
 
 function PetModal({ pet, plans, subscription, onClose, onSave }) {
   const [form, setForm] = useState({
@@ -52,6 +59,7 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
         petPayload: {
           owner_name: form.owner_name.trim(), owner_cpf: formatCpf(form.owner_cpf), phone: formatPhone(form.phone), email: form.email.trim(),
           owner_address: form.owner_address.trim(), owner_neighborhood: form.owner_neighborhood.trim(), owner_city: form.owner_city.trim(),
+          tutor_birth_date: form.tutor_birth_date || null, zip_code: form.zip_code.trim(), address_number: form.address_number.trim(), address_reference: form.address_reference.trim(),
           pet_name: form.pet_name.trim(), species: form.species, breed: form.breed.trim(), birth_date: form.birth_date || null,
           weight_kg: form.weight_kg ? Number(form.weight_kg) : null, color: form.color.trim(), notes: form.notes.trim(),
         },
@@ -84,10 +92,14 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
               <div className="md:col-span-2"><label className="inp-label">Tutor</label><input className="inp" value={form.owner_name} onChange={(e) => setField('owner_name', e.target.value)} /></div>
               <div><label className="inp-label">Telefone</label><input className="inp" value={form.phone} onChange={(e) => setField('phone', e.target.value)} /></div>
               <div><label className="inp-label">CPF</label><input className="inp" value={form.owner_cpf} onChange={(e) => setField('owner_cpf', e.target.value)} /></div>
+              <div><label className="inp-label">Nascimento do tutor</label><input className="inp" type="date" value={form.tutor_birth_date || ''} onChange={(e) => setField('tutor_birth_date', e.target.value)} /></div>
+              <div><label className="inp-label">CEP</label><input className="inp" value={form.zip_code || ''} onChange={(e) => setField('zip_code', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Email</label><input className="inp" value={form.email} onChange={(e) => setField('email', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Endereco</label><input className="inp" value={form.owner_address} onChange={(e) => setField('owner_address', e.target.value)} /></div>
+              <div><label className="inp-label">Numero</label><input className="inp" value={form.address_number || ''} onChange={(e) => setField('address_number', e.target.value)} /></div>
               <div><label className="inp-label">Bairro</label><input className="inp" value={form.owner_neighborhood} onChange={(e) => setField('owner_neighborhood', e.target.value)} /></div>
               <div><label className="inp-label">Cidade</label><input className="inp" value={form.owner_city} onChange={(e) => setField('owner_city', e.target.value)} /></div>
+              <div><label className="inp-label">Referencia</label><input className="inp" value={form.address_reference || ''} onChange={(e) => setField('address_reference', e.target.value)} /></div>
             </div>
             <div className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="md:col-span-2"><label className="inp-label">Pet</label><input className="inp" value={form.pet_name} onChange={(e) => setField('pet_name', e.target.value)} /></div>
@@ -116,13 +128,14 @@ function PetDrawer({ pet, subscription, onClose, onEdit, speciesIcon, serviceLab
   if (!pet) return null
   const Icon = speciesIcon(pet.species)
   const recentAppointments = appointments.filter((item) => item.pets?.id === pet.id).slice(0, 8)
+  const registrationBadge = getRegistrationBadge(pet)
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex theme-petshop-modal">
       <div className="flex-1 bg-black/50 backdrop-blur-[8px]" onClick={onClose} />
       <div className="w-full max-w-lg bg-surface border-l border-[var(--border2)] flex flex-col overflow-hidden shadow-card">
         <div className="modal-header">
-          <div className="flex items-center gap-3"><div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center"><Icon size={22} /></div><div><h2 className="font-display font-bold text-lg text-text">{pet.owner_name}</h2><p className="text-sm text-muted">{pet.pet_name || 'Pet sem nome'}{pet.breed ? ` - ${pet.breed}` : ''}</p></div></div>
+          <div className="flex items-center gap-3"><div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center"><Icon size={22} /></div><div><h2 className="font-display font-bold text-lg text-text">{pet.owner_name}</h2><p className="text-sm text-muted">{pet.pet_name || 'Pet sem nome'}{pet.breed ? ` - ${pet.breed}` : ''}</p><span className={`badge ${registrationBadge.cls} mt-2`}>{registrationBadge.label}</span></div></div>
           <div className="flex items-center gap-2"><button onClick={() => onEdit(pet)} className="btn btn-secondary btn-sm">Editar</button><button onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button></div>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
@@ -131,8 +144,11 @@ function PetDrawer({ pet, subscription, onClose, onEdit, speciesIcon, serviceLab
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Pet</p><p className="text-text font-semibold mt-1">{pet.pet_name || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Telefone</p><p className="text-text font-semibold mt-1">{formatPhone(pet.phone)}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">CPF</p><p className="text-text font-semibold mt-1">{formatCpf(pet.owner_cpf)}</p></div>
+            <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Nascimento tutor</p><p className="text-text font-semibold mt-1">{fmtDate(pet.tutor_birth_date) || '-'}</p></div>
+            <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">CEP</p><p className="text-text font-semibold mt-1">{pet.zip_code || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Nascimento</p><p className="text-text font-semibold mt-1">{fmtDate(pet.birth_date) || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Peso</p><p className="text-text font-semibold mt-1">{pet.weight_kg ? `${pet.weight_kg} kg` : '-'}</p></div>
+            <div className="col-span-2"><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Numero / referencia</p><p className="text-text font-semibold mt-1">{[pet.address_number, pet.address_reference].filter(Boolean).join(' - ') || '-'}</p></div>
           </div>
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3">
             <div className="flex items-center justify-between gap-3"><p className="text-xs uppercase tracking-widest text-muted font-bold">Plano vinculado</p>{subscription && <span className={`badge ${getPlanTone(subscription.status)}`}>{PLAN_LABELS[subscription.status] || 'Plano'}</span>}</div>
@@ -321,6 +337,7 @@ export default function PetsPage() {
             const Icon = speciesIcon(pet.species)
             const subscription = latestSubscriptionByClient.get(pet.id)
             const ageLabel = age(pet.birth_date)
+            const registrationBadge = getRegistrationBadge(pet)
             return (
               <div key={pet.id} className="bg-card border border-[var(--border)] rounded-2xl p-5 transition-all hover:-translate-y-1 hover:border-emerald-500/30 shadow-card">
                 <div className="flex items-start justify-between gap-3">
@@ -343,6 +360,7 @@ export default function PetsPage() {
                     </div>
                   </button>
                   <div className="flex items-center gap-2 flex-shrink-0">
+                    <span className={`badge ${registrationBadge.cls}`}>{registrationBadge.label}</span>
                     <button onClick={() => setModalPet(pet)} className="btn btn-ghost btn-sm">Editar</button>
                     <button onClick={() => handleDelete(pet.id)} className="btn btn-ghost btn-sm text-red-400"><Trash2 size={13} /></button>
                   </div>

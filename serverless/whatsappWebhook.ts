@@ -2,7 +2,10 @@ import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 // @ts-ignore Shared runtime guard is authored as ESM JavaScript for the Node API too.
-import {
+import * as petbotGuard from '../server/lib/petbotGuard.js'
+
+const {
+  buildPetbotConfirmationReply,
   buildPetbotSearchText,
   markPetbotOrderError,
   markPetbotOrderSaved,
@@ -10,7 +13,7 @@ import {
   recoverPetbotContextFromHistory,
   runPetbotGuard,
   snapshotPetbotState,
-} from '../server/lib/petbotGuard.js'
+} = petbotGuard as any
 // @ts-ignore Shared AI helper is authored as ESM JavaScript for the Node API too.
 import {
   buildInterpretedPetbotSearchText,
@@ -284,6 +287,10 @@ type StoreContext = {
   botPrompt: string
   deliveryFee: number
   petTransportFee: number
+  pixKey: string
+  pixHolderName: string
+  messageTemplates: LooseRecord
+  petTransportOptions: LooseRecord[]
   customerContext: string
   examplesContext: string
   modelName: string
@@ -437,6 +444,58 @@ function parseRating(value: unknown): number | null {
 function hasConfirmedOrderContext(session: ChatSession): boolean {
   const context = parseJsonObject(session.context)
   return Boolean(context.last_sale_id || context.last_order_id || context.last_appointment_id)
+}
+
+function parseRegistrationUpdateFromMessage(message: unknown): LooseRecord {
+  const text = clean(message)
+  const details: LooseRecord = {}
+  const document = text.match(/\b\d{3}\.?\d{3}\.?\d{3}-?\d{2}\b/)?.[0] || ''
+  const zip = text.match(/\b\d{5}-?\d{3}\b/)?.[0] || ''
+  const birth = text.match(/\b(\d{2})[/-](\d{2})[/-](\d{4})\b/)
+  const number = text.match(/\b(?:numero|n[uú]mero|nº|casa|apto|apartamento|ap)\s*[:\-]?\s*([a-z0-9-]+)\b/i)?.[1] || ''
+  const reference = text.match(/\b(?:referencia|referência|ponto de referencia|perto de|ao lado de|em frente)\s*[:\-]?\s*(.+)$/i)?.[1] || ''
+  if (zip) details.zip_code = zip
+  if (birth) details.tutor_birth_date = `${birth[3]}-${birth[2]}-${birth[1]}`
+  if (number) details.address_number = number
+  if (reference) details.address_reference = reference.slice(0, 160)
+  return { document, details }
+}
+
+async function updateCustomerRegistrationFromMessage(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  message: unknown,
+): Promise<boolean> {
+  if (!session.client_id) return false
+  const parsed = parseRegistrationUpdateFromMessage(message)
+  const detailsPatch = record(parsed.details)
+  if (!clean(parsed.document) && !Object.keys(detailsPatch).length) return false
+
+  const current = await supabase
+    .from('clients')
+    .select('document,details')
+    .eq('id', session.client_id)
+    .maybeSingle()
+
+  const nextDetails = {
+    ...parseJsonObject(current.data?.details),
+    ...detailsPatch,
+  }
+
+  const response = await supabase
+    .from('clients')
+    .update({
+      ...(clean(parsed.document) ? { document: clean(parsed.document) } : {}),
+      details: {
+        ...nextDetails,
+        registration_status: nextDetails.tutor_birth_date && nextDetails.zip_code && nextDetails.address_number && nextDetails.address_reference && (clean(parsed.document) || current.data?.document)
+          ? 'completo'
+          : 'pendente',
+      },
+    })
+    .eq('id', session.client_id)
+
+  return !response.error
 }
 
 function normalizePhone(value: unknown): string {
@@ -1001,6 +1060,74 @@ async function touchSession(supabase: SupabaseClient, sessionId: string, sentAt 
   if (error) fail(500, 'Unable to update chat session timestamp.')
 }
 
+function isPossiblePaymentProof(event: WhatsappEvent) {
+  const type = clean(event.type)
+  const mime = clean(event.media?.mime_type).toLowerCase()
+  return type === 'image' || type === 'document' || mime.includes('pdf')
+}
+
+async function markPossiblePaymentProof(
+  supabase: SupabaseClient,
+  session: ChatSession,
+  event: WhatsappEvent,
+  savedIncoming: SavedMessage,
+) {
+  if (!isPossiblePaymentProof(event)) return false
+  const context = parseJsonObject(session.context)
+  const saleId = clean(context.last_sale_id)
+  if (!saleId) return false
+  const proofMetadata = {
+    chat_message_id: savedIncoming.id,
+    whatsapp_message_id: event.messageId,
+    whatsapp_media: event.media || null,
+    received_at: new Date().toISOString(),
+  }
+  const saleUpdate = await supabase
+    .from('sales')
+    .update({
+      payment_status: 'comprovante_recebido',
+      payment_proof_received_at: proofMetadata.received_at,
+      payment_proof_metadata: proofMetadata,
+    })
+    .eq('id', saleId)
+    .in('payment_status', ['aguardando_comprovante', 'comprovante_recebido'])
+    .select('id')
+    .maybeSingle()
+
+  if (saleUpdate.error || !saleUpdate.data) return false
+
+  await supabase
+    .from('service_delivery_orders')
+    .update({
+      payment_status: 'comprovante_recebido',
+      payment_proof_received_at: proofMetadata.received_at,
+      payment_proof_metadata: proofMetadata,
+    })
+    .eq('sale_id', saleId)
+
+  await supabase
+    .from('chat_sessions')
+    .update({
+      context: {
+        ...context,
+        petbot: {
+          ...(parseJsonObject(context.petbot)),
+          paymentProof: {
+            status: 'comprovante_recebido',
+            requested: true,
+            received: true,
+            mediaId: clean(event.media?.id),
+            url: '',
+          },
+        },
+      },
+      last_message_at: proofMetadata.received_at,
+    })
+    .eq('id', session.id)
+
+  return true
+}
+
 function normalizeSearchText(value: unknown): string {
   return clean(value)
     .normalize('NFD')
@@ -1561,6 +1688,7 @@ async function createConfirmedPetshopOrder(
       order_id: sessionContext.last_order_id || null,
       appointment_id: sessionContext.last_appointment_id || null,
       total: Number(sessionContext.last_total || 0),
+      payment_status: sessionContext.last_payment_status || null,
       duplicated: true,
     }
   }
@@ -1668,6 +1796,9 @@ async function createConfirmedPetshopOrder(
   const subtotal = normalizedItems.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
   const deliveryFee = args.fulfillment_type === 'entrega' ? Number(context.deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
   const total = subtotal + deliveryFee
+  const paymentStatus = clean(args.order_type) === 'produto'
+    ? (clean(args.payment_method) === 'pix' ? 'aguardando_comprovante' : 'baixado')
+    : 'nao_aplicavel'
   const orderType = args.order_type === 'produto' ? 'entrega' : 'servico'
   const fulfillmentType = args.order_type === 'produto'
     ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
@@ -1709,6 +1840,7 @@ async function createConfirmedPetshopOrder(
       discount: 0,
       total_price: total,
       status: 'concluido',
+      payment_status: paymentStatus,
       source: 'whatsapp',
       fulfillment_type: fulfillmentType,
       notes,
@@ -1839,6 +1971,7 @@ async function createConfirmedPetshopOrder(
         last_order_id: order?.id || null,
         last_appointment_id: appointment?.id || null,
         last_total: total,
+        last_payment_status: paymentStatus,
       },
       last_message_at: new Date().toISOString(),
     })
@@ -1849,6 +1982,7 @@ async function createConfirmedPetshopOrder(
     order_id: order?.id || null,
     appointment_id: appointment?.id || null,
     total,
+    payment_status: paymentStatus,
   }
 }
 
@@ -1879,6 +2013,8 @@ function buildPetbotOrderTransactionPayload(
     delivery_reference: clean(args.delivery_reference),
     delivery_fee: Number(context.deliveryFee ?? DEFAULT_DELIVERY_FEE),
     service_transport_fee: Number(args.service_transport_fee || 0),
+    service_transport_mode: clean(args.service_transport_mode),
+    service_transport_label: clean(args.service_transport_label),
     service_transport_address: clean(args.service_transport_address),
     service_transport_neighborhood: clean(args.service_transport_neighborhood),
     service_transport_city: clean(args.service_transport_city),
@@ -1930,6 +2066,7 @@ async function createConfirmedPetshopOrderViaRpc(
     order_id: clean(result.order_id) || null,
     appointment_id: clean(result.appointment_id) || null,
     total: Number(result.total || payload.expected_total || 0),
+    payment_status: clean(result.payment_status),
     duplicated: Boolean(result.duplicated),
   }
 }
@@ -2070,11 +2207,11 @@ async function loadStoreContext(
     cachedLoad(settingsCache, cacheKey, STORE_CONTEXT_CACHE_MS, async () => {
       let result = await supabase
         .from('settings')
-        .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee')
+        .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options')
         .eq('tenant_id', session.tenant_id)
         .eq('module_id', session.module_id)
         .maybeSingle()
-      if (result.error && /pet_transport_fee/i.test(String(result.error.message || ''))) {
+      if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options)/i.test(String(result.error.message || ''))) {
         result = await supabase
           .from('settings')
           .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
@@ -2160,6 +2297,10 @@ async function loadStoreContext(
     botPrompt: clean(settings.bot_prompt),
     deliveryFee: Number(settings.delivery_fee ?? DEFAULT_DELIVERY_FEE),
     petTransportFee: Number(settings.pet_transport_fee ?? 20),
+    pixKey: clean(settings.pix_key),
+    pixHolderName: clean(settings.pix_holder_name),
+    messageTemplates: record(settings.message_templates),
+    petTransportOptions: Array.isArray(settings.pet_transport_options) ? settings.pet_transport_options as LooseRecord[] : [],
     customerContext: '',
     examplesContext: '',
     modelName: env.openAiModel,
@@ -2293,6 +2434,7 @@ function buildSystemPrompt(context: StoreContext): string {
     `Telefone da loja: ${context.storePhone || 'Nao informado'}`,
     `Endereco: ${storeLocation}`,
     `Taxa de entrega: R$ ${Number(context.deliveryFee ?? DEFAULT_DELIVERY_FEE).toFixed(2)}`,
+    `MotoDog banho/tosa: use as opcoes configuradas (${(context.petTransportOptions || []).map((item) => `${item.label || item.id} R$ ${Number(item.fee || 0).toFixed(2)}`).join('; ') || `fallback R$ ${Number(context.petTransportFee ?? 20).toFixed(2)}`}).`,
     `Transporte do pet banho/tosa: R$ ${Number(context.petTransportFee ?? 20).toFixed(2)}`,
     '',
     'Cliente atual:',
@@ -2315,7 +2457,7 @@ function buildSystemPrompt(context: StoreContext): string {
     'Entrega/retirada: pergunte exatamente "Será entrega ou retirada na loja?"',
     'Se for entrega, antes do resumo final diga: "A taxa de entrega é R$ [TAXA]. O total com entrega fica R$ [TOTAL]."',
     'Resumo final de entrega deve mostrar subtotal, taxa de entrega e total final. Termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
-    'Apos confirmar e registrar com a ferramenta, responda: "Pedido confirmado! 🎉\\n\\nDe 0 a 10, como avalia o atendimento?"',
+    'Apos confirmar e registrar com a ferramenta, use a confirmacao do guardiao: pedido confirmado, comprovante Pix quando aplicavel, checklist de cadastro faltante e avaliacao 0-10.',
   ].join('\n')
 }
 
@@ -2581,6 +2723,16 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   const savedIncoming = await saveIncomingMessage(supabase, session.id, event, incomingContent)
   await touchSession(supabase, session.id)
 
+  if (await markPossiblePaymentProof(supabase, session, event, savedIncoming)) {
+    const proofReply = 'Comprovante recebido. Vou deixar marcado para a equipe dar baixa manual, combinado?'
+    const savedProofReply = await saveAssistantMessage(supabase, session.id, event, proofReply, 0, {
+      payment_proof_received: true,
+      delivery_status: 'pending',
+    })
+    await sendAndMarkDelivered(supabase, env, event, savedProofReply)
+    return { sessionId: session.id, paymentProofReceived: true }
+  }
+
   if (await hasAssistantReply(supabase, session.id, event.messageId)) {
     return { sessionId: session.id, duplicate: true }
   }
@@ -2601,6 +2753,15 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     const savedRatingReply = await saveAssistantMessage(supabase, session.id, event, reply, 0, { csat_score: rating })
     await sendAndMarkDelivered(supabase, env, event, savedRatingReply)
     return { sessionId: session.id, ai: true, intent: 'satisfacao_coletada', csatScore: rating }
+  }
+
+  if (hasConfirmedOrderContext(session) && await updateCustomerRegistrationFromMessage(supabase, session, event.text)) {
+    const reply = 'Recebi os dados e atualizei o cadastro. Obrigado!\n\nDe 0 a 10, como avalia o atendimento?'
+    const savedRegistrationReply = await saveAssistantMessage(supabase, session.id, event, reply, 0, {
+      registration_update: true,
+    })
+    await sendAndMarkDelivered(supabase, env, event, savedRegistrationReply)
+    return { sessionId: session.id, ai: true, registrationUpdate: true }
   }
 
   if (session.status === 'human') {
@@ -2663,7 +2824,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     try {
       orderResult = await createConfirmedPetshopOrderViaRpc(supabase, sessionForGuard, context, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
-      reply = 'Pedido confirmado! 🎉\n\nDe 0 a 10, como avalia o atendimento?'
+      reply = buildPetbotConfirmationReply(state, context)
     } catch (error) {
       state = markPetbotOrderError(state, error)
       reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar um atendente para resolver isso antes de finalizar.'
@@ -2694,6 +2855,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
       last_sale_id: orderResult.sale_id,
       last_order_id: orderResult.order_id || null,
       last_appointment_id: orderResult.appointment_id || null,
+      last_payment_status: orderResult.payment_status || null,
     } : {}),
   }, state)
   const botSentAt = new Date().toISOString()

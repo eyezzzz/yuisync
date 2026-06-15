@@ -18,6 +18,11 @@ const mapClientToPet = (c) => ({
   owner_city: c.city || '',
   notes: c.notes || '',
   created_at: c.created_at,
+  tutor_birth_date: c.details?.tutor_birth_date || '',
+  zip_code: c.details?.zip_code || '',
+  address_number: c.details?.address_number || '',
+  address_reference: c.details?.address_reference || '',
+  registration_status: c.details?.registration_status || inferRegistrationStatus(c),
   pet_name: c.details?.pet_name || '',
   species: c.details?.species || 'other',
   breed: c.details?.breed || '',
@@ -44,8 +49,33 @@ const mapPetToClient = (p, moduleId) => ({
     birth_date: p.birth_date || null,
     weight_kg: p.weight_kg || null,
     color: p.color || null,
+    tutor_birth_date: p.tutor_birth_date || null,
+    zip_code: p.zip_code || null,
+    address_number: p.address_number || null,
+    address_reference: p.address_reference || null,
+    registration_status: p.registration_status || inferRegistrationStatus({
+      document: p.owner_cpf,
+      address: p.owner_address,
+      neighborhood: p.owner_neighborhood,
+      details: {
+        tutor_birth_date: p.tutor_birth_date,
+        zip_code: p.zip_code,
+        address_number: p.address_number,
+        address_reference: p.address_reference,
+        pet_name: p.pet_name,
+        breed: p.breed,
+      },
+    }),
   }
 })
+
+function inferRegistrationStatus(client = {}) {
+  const details = client.details || {}
+  if (!client.address || !client.neighborhood) return 'sem_endereco'
+  if (!client.document) return 'sem_cpf'
+  if (!details.tutor_birth_date || !details.zip_code || !details.address_number || !details.address_reference) return 'pendente'
+  return 'completo'
+}
 
 const sanitizeSearch = (value = '') =>
   String(value || '').replace(/[%,()]/g, ' ').replace(/\s+/g, ' ').trim()
