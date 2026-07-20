@@ -1,10 +1,10 @@
 import React, { useState } from 'react'
-import { LogOut, ChevronRight, Star, Building2, RefreshCw } from 'lucide-react'
+import { LogOut, ChevronRight, Star, Building2, RefreshCw, Moon, Sun } from 'lucide-react'
 import { ModuleSwitcher } from './ModuleSwitcher'
 import { NavLink, useLocation } from 'react-router-dom'
 import { useAuthCtx } from '../context/AuthContext'
 
-export function Sidebar({ profile, onLogout, open, setOpen, storeSettings, activeModule, setActiveModuleId }) {
+export function Sidebar({ profile, onLogout, open, setOpen, storeSettings, activeModule, setActiveModuleId, darkMode, onToggleDarkMode }) {
   const isAdminGlobal = profile?.role === 'admin'
   const userModuleRole = (profile?.module_permissions || {})[activeModule.id]
   const location = useLocation()
@@ -100,6 +100,10 @@ export function Sidebar({ profile, onLogout, open, setOpen, storeSettings, activ
         </nav>
 
         <div className="px-2.5 py-3 border-t border-[var(--border2)] space-y-2.5">
+          <button type="button" onClick={onToggleDarkMode} className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-sm font-semibold text-text hover:border-[var(--primary-border)] transition-colors" aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'}>
+            <span className="flex items-center gap-2"><span className="w-7 h-7 rounded-lg bg-[var(--primary-bg-light)] text-primary flex items-center justify-center">{darkMode ? <Sun size={15} /> : <Moon size={15} />}</span>{darkMode ? 'Modo claro' : 'Modo noturno'}</span>
+            <span className="text-xs text-muted">Alterar</span>
+          </button>
           {isAdminGlobal && (
             <div className="px-2.5 py-2.5 rounded-xl border border-white/10 bg-white/[0.03]">
               <p className="text-[10px] text-muted uppercase tracking-[0.16em] font-bold mb-1.5 flex items-center gap-1">

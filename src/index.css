@@ -211,6 +211,77 @@ body.app-loading #root {
   color: #475569 !important;
 }
 
+/* Modo noturno YuiSync: preto, azul e branco como a tela de acesso. */
+.theme-petshop.theme-dark {
+  --bg: #070B14;
+  --surface: #0D1424;
+  --card: #111B2E;
+  --text: #F8FAFC;
+  --muted: #A9B8CE;
+  --muted2: #64748B;
+  --border: #22324A;
+  --border2: #18243A;
+  --primary: #38BDF8;
+  --primary-hover: #7DD3FC;
+  --primary-bg-light: rgba(56, 189, 248, 0.14);
+  --primary-border: rgba(56, 189, 248, 0.34);
+  --shadow-primary: 0 0 34px rgba(56, 189, 248, 0.2);
+  --shadow-surface: 0 22px 55px rgba(0, 0, 0, 0.46);
+  --bg-pattern: none;
+}
+
+.theme-petshop.theme-dark .page-title,
+.theme-petshop.theme-dark h1,
+.theme-petshop.theme-dark h2 { color: var(--text) !important; }
+.theme-petshop.theme-dark .page-sub,
+.theme-petshop.theme-dark p { color: var(--muted) !important; }
+.theme-petshop.theme-dark .btn-secondary {
+  background-color: var(--card) !important;
+  color: var(--text) !important;
+  border-color: var(--border) !important;
+}
+.theme-petshop.theme-dark .btn-ghost { color: var(--muted) !important; border-color: var(--border) !important; }
+.theme-petshop.theme-dark .btn-ghost:hover { background-color: #17243A !important; color: var(--text) !important; }
+.theme-petshop.theme-dark .page [class*="bg-white/5"],
+.theme-petshop.theme-dark .page [class*="bg-white/8"],
+.theme-petshop.theme-dark .page [class*="bg-white/10"],
+.theme-petshop.theme-dark .page [class*="bg-black/10"],
+.theme-petshop.theme-dark .page [class*="bg-black/20"] { background-color: #162238 !important; }
+.theme-petshop.theme-dark .page [class*="border-white/5"],
+.theme-petshop.theme-dark .page [class*="border-white/10"],
+.theme-petshop.theme-dark .page [class*="border-white/20"] { border-color: var(--border) !important; }
+.theme-petshop.theme-dark .badge-gray { background-color: #22324A !important; color: #CBD5E1 !important; border-color: #334155 !important; }
+
+body.yuisync-dark .theme-petshop-modal {
+  --bg: #070B14;
+  --surface: #0D1424;
+  --card: #111B2E;
+  --text: #F8FAFC;
+  --muted: #A9B8CE;
+  --muted2: #64748B;
+  --border: #22324A;
+  --border2: #18243A;
+  --primary: #38BDF8;
+  --primary-hover: #7DD3FC;
+  --primary-bg-light: rgba(56, 189, 248, 0.14);
+  --primary-border: rgba(56, 189, 248, 0.34);
+  --shadow-surface: 0 22px 55px rgba(0,0,0,.55);
+}
+body.yuisync-dark .theme-petshop-modal .modal-box {
+  background: radial-gradient(circle at top right, rgba(56,189,248,.12), transparent 30%), #0D1424;
+}
+body.yuisync-dark .theme-petshop-modal .btn-secondary { background-color: var(--card) !important; color: var(--text) !important; border-color: var(--border) !important; }
+body.yuisync-dark .theme-petshop-modal .btn-secondary:hover,
+body.yuisync-dark .theme-petshop-modal .btn-ghost:hover { background-color: #17243A !important; }
+body.yuisync-dark .theme-petshop-modal [class*="bg-white/5"],
+body.yuisync-dark .theme-petshop-modal [class*="bg-white/8"],
+body.yuisync-dark .theme-petshop-modal [class*="bg-white/10"],
+body.yuisync-dark .theme-petshop-modal [class*="bg-black/10"],
+body.yuisync-dark .theme-petshop-modal [class*="bg-black/20"] { background-color: #162238 !important; }
+body.yuisync-dark .theme-petshop-modal [class*="border-white/5"],
+body.yuisync-dark .theme-petshop-modal [class*="border-white/10"],
+body.yuisync-dark .theme-petshop-modal [class*="border-white/20"] { border-color: var(--border) !important; }
+
 .theme-legacy-disabled {
   --primary: #4ADE80; 
   --primary-hover: #86EFAC;

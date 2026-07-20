@@ -61,6 +61,7 @@ function AppLayout() {
   } = useAuthCtx()
   const [open, setOpen] = useState(false)
   const [focusMode, setFocusMode] = useState(false)
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('@yuisync-color-mode') === 'dark')
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -73,6 +74,12 @@ function AppLayout() {
   useEffect(() => {
     setFocusMode(false)
   }, [location.pathname])
+
+  useEffect(() => {
+    localStorage.setItem('@yuisync-color-mode', darkMode ? 'dark' : 'light')
+    document.body.classList.toggle('yuisync-dark', darkMode)
+    return () => document.body.classList.remove('yuisync-dark')
+  }, [darkMode])
 
   useEffect(() => {
     // Determine active module based on URL instead of manually tracking strings
@@ -126,7 +133,7 @@ function AppLayout() {
   const setPage = (pageName) => navigate(`/${activeModuleId}/${pageName}`)
 
   return (
-    <div className={`flex h-screen bg-bg overflow-hidden font-body theme-${activeModuleId} relative`}>
+    <div className={`flex h-screen bg-bg overflow-hidden font-body theme-${activeModuleId} ${darkMode ? 'theme-dark' : ''} relative`}>
       {activeModuleId !== 'petshop' && <StarField count={80} className="text-emerald-500" />}
       {!focusMode && (
         <Sidebar
@@ -136,6 +143,8 @@ function AppLayout() {
           storeSettings={storeSettings}
           activeModule={activeModule}
           setActiveModuleId={setActiveModuleId}
+          darkMode={darkMode}
+          onToggleDarkMode={() => setDarkMode((current) => !current)}
         />
       )}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 z-10">
@@ -146,6 +155,9 @@ function AppLayout() {
           <span className="font-display font-bold text-sm text-text">
             {storeSettings?.store_name || activeModule.name}
           </span>
+          <button type="button" aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'} onClick={() => setDarkMode((current) => !current)} className="ml-auto btn btn-ghost btn-sm btn-icon">
+            {darkMode ? '☀' : '◐'}
+          </button>
         </header>}
 
         <main className="flex-1 overflow-y-auto">

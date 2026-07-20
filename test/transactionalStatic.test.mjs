@@ -161,3 +161,14 @@ test('detalhes do cliente mostram endereco completo e complemento', async () => 
   assert.match(clients, /address_complement: c\.details\?\.address_complement/)
   assert.doesNotMatch(source, /Numero \/ referencia/)
 })
+
+test('modo noturno e persistido e tem alternancia no menu', async () => {
+  const router = await read('src/router/AppRouter.jsx')
+  const sidebar = await read('src/components/Sidebar.jsx')
+  const styles = await read('src/index.css')
+  assert.match(router, /@yuisync-color-mode/)
+  assert.match(router, /theme-\$\{activeModuleId\} \$\{darkMode \? 'theme-dark' : ''\}/)
+  assert.match(sidebar, /Modo noturno/)
+  assert.match(styles, /\.theme-petshop\.theme-dark/)
+  assert.match(styles, /#38BDF8/)
+})
