@@ -158,6 +158,7 @@ test('importacao legado preserva historico e oculta registros arquivados', async
   assert.match(script, /BATCH_SIZE = 250/)
   assert.match(script, /repair-product-categories/)
   assert.match(script, /repair-product-units/)
+  assert.match(script, /repair-bulk-stock/)
   assert.match(script, /canonical_product_category/)
   assert.match(script, /'active': False/)
   assert.match(script, /'on_conflict': 'barcode'/)

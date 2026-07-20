@@ -315,6 +315,29 @@ def product_unit_updates(db: SupabaseRest, tenant_id: str, products: list[dict])
     return updates, unmatched
 
 
+def product_bulk_stock_updates(db: SupabaseRest, tenant_id: str, products: list[dict]) -> tuple[list[dict], list[dict]]:
+    current = db.all_rows('products', {
+        'select': '*',
+        'tenant_id': f'eq.{tenant_id}',
+        'module_id': f'eq.{MODULE_ID}',
+        'active': 'eq.true',
+    })
+    by_barcode = {product['barcode']: product for product in products if product['barcode']}
+    by_name = {normalized_product_name(product['name']): product for product in products}
+    updates = []
+    unmatched = []
+    for current_product in current:
+        source = by_barcode.get(current_product.get('barcode')) or by_name.get(normalized_product_name(current_product.get('name')))
+        if not source:
+            unmatched.append(current_product)
+            continue
+        if source['bot_metadata']['unit'] != 'KG':
+            continue
+        if abs(float(current_product.get('stock_quantity') or 0) - float(source['stock_quantity'])) > 0.0005:
+            updates.append({**current_product, 'stock_quantity': source['stock_quantity']})
+    return updates, unmatched
+
+
 def parse_clients(path: Path, tenant_id: str) -> tuple[list[dict], int, int]:
     clients = []
     skipped = 0
@@ -375,9 +398,10 @@ def main():
     parser.add_argument('--repair-product-prices', action='store_true', help='Corrige preço e custo dos produtos ativos a partir da planilha, sem alterar estoque ou clientes.')
     parser.add_argument('--repair-product-categories', action='store_true', help='Corrige as categorias dos produtos ativos a partir da planilha, sem alterar preço, estoque ou clientes.')
     parser.add_argument('--repair-product-units', action='store_true', help='Registra as unidades dos produtos ativos a partir da planilha, sem alterar preço, estoque ou clientes.')
+    parser.add_argument('--repair-bulk-stock', action='store_true', help='Corrige apenas os saldos dos itens em KG com a casa decimal da planilha, sem alterar preços ou outros produtos.')
     parser.add_argument('--execute', action='store_true', help='Aplica a substituição; sem esta flag apenas valida.')
     args = parser.parse_args()
-    if not args.products.exists() or (not (args.repair_product_prices or args.repair_product_categories or args.repair_product_units) and not args.people.exists()):
+    if not args.products.exists() or (not (args.repair_product_prices or args.repair_product_categories or args.repair_product_units or args.repair_bulk_stock) and not args.people.exists()):
         raise SystemExit('Planilhas não encontradas. Informe --products e --people com os caminhos corretos.')
 
     env = {**load_env(ROOT / '.env'), **os.environ}
@@ -503,6 +527,43 @@ def main():
             'products_with_unit_registered': len(updates),
             'active_products_without_sheet_match': len(unmatched),
             'preserved': ['price', 'cost_price', 'stock_quantity', 'clients', 'sales', 'stock_movements'],
+        }, ensure_ascii=False, indent=2))
+        return
+
+    if args.repair_bulk_stock:
+        updates, unmatched = product_bulk_stock_updates(db, tenant['id'], products)
+        print(json.dumps({
+            'tenant': tenant,
+            'kg_products_with_corrected_decimal': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'mode': 'execute' if args.execute else 'dry-run',
+        }, ensure_ascii=False, indent=2))
+        if not args.execute:
+            return
+
+        backup_dir = ROOT / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        backup_path = backup_dir / f'bulk-stock-decimal-repair-{datetime.now():%Y%m%d-%H%M%S}.json'
+        backup_path.write_text(json.dumps({
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'tenant': tenant,
+            'products_before_repair': db.all_rows('products', {
+                'select': '*',
+                'tenant_id': f'eq.{tenant["id"]}',
+                'module_id': f'eq.{MODULE_ID}',
+                'active': 'eq.true',
+            }),
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        for batch in chunks(updates):
+            db.request(
+                'POST', 'products', {'on_conflict': 'id'}, batch,
+                headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
+            )
+        print(json.dumps({
+            'status': 'completed',
+            'backup': str(backup_path),
+            'kg_products_with_corrected_decimal': len(updates),
+            'preserved': ['price', 'cost_price', 'all_non_kg_stock', 'clients', 'sales', 'stock_movements'],
         }, ensure_ascii=False, indent=2))
         return
 
