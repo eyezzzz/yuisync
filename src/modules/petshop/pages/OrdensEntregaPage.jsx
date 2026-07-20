@@ -125,7 +125,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
     storeSettings?.store_neighborhood,
     storeSettings?.store_city,
   ].filter(Boolean).join(' - ')
-  const address = orderOriginAddress(order)
+  const address = completeClientAddress(order) || orderOriginAddress(order)
   const directItems = orderItems(order)
   const items = directItems.length ? directItems : fallbackItems
   const publicNotes = visibleOrderNotes(order)

@@ -55,7 +55,14 @@ def clean(value) -> str:
 
 
 def numeric(value) -> float:
-    text = clean(value).replace('.', '').replace(',', '.')
+    # Células numéricas do .xls chegam como float (ex.: 9.99). A conversão
+    # anterior removia o ponto e transformava 9.99 em 999. Só aplicamos a
+    # normalização brasileira quando o valor vier como texto.
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    text = re.sub(r'[^0-9,.-]', '', clean(value))
+    if ',' in text:
+        text = text.replace('.', '').replace(',', '.')
     try:
         return float(text or 0)
     except ValueError:
@@ -69,6 +76,10 @@ def digits(value) -> str:
 def safe_text(value, limit=500) -> str | None:
     value = clean(value)
     return value[:limit] if value else None
+
+
+def normalized_product_name(value) -> str:
+    return unicodedata.normalize('NFD', clean(value)).encode('ascii', 'ignore').decode().casefold()
 
 
 def chunks(items, size=BATCH_SIZE):
@@ -201,6 +212,34 @@ def parse_products(path: Path, tenant_id: str) -> tuple[list[dict], int]:
     return products, skipped
 
 
+def product_price_updates(db: SupabaseRest, tenant_id: str, products: list[dict]) -> tuple[list[dict], list[dict]]:
+    current = db.all_rows('products', {
+        'select': '*',
+        'tenant_id': f'eq.{tenant_id}',
+        'module_id': f'eq.{MODULE_ID}',
+        'active': 'eq.true',
+    })
+    by_barcode = {product['barcode']: product for product in products if product['barcode']}
+    by_name = {normalized_product_name(product['name']): product for product in products}
+    updates = []
+    unmatched = []
+    for current_product in current:
+        source = by_barcode.get(current_product.get('barcode')) or by_name.get(normalized_product_name(current_product.get('name')))
+        if not source:
+            unmatched.append(current_product)
+            continue
+        if (
+            abs(float(current_product.get('price') or 0) - float(source['price'])) > 0.009
+            or abs(float(current_product.get('cost_price') or 0) - float(source['cost_price'])) > 0.009
+        ):
+            updates.append({
+                **current_product,
+                'price': source['price'],
+                'cost_price': source['cost_price'],
+            })
+    return updates, unmatched
+
+
 def parse_clients(path: Path, tenant_id: str) -> tuple[list[dict], int, int]:
     clients = []
     skipped = 0
@@ -258,9 +297,10 @@ def main():
     parser.add_argument('--tenant-slug', required=True)
     parser.add_argument('--products', type=Path, default=DEFAULT_PRODUCTS)
     parser.add_argument('--people', type=Path, default=DEFAULT_PEOPLE)
+    parser.add_argument('--repair-product-prices', action='store_true', help='Corrige preço e custo dos produtos ativos a partir da planilha, sem alterar estoque ou clientes.')
     parser.add_argument('--execute', action='store_true', help='Aplica a substituição; sem esta flag apenas valida.')
     args = parser.parse_args()
-    if not args.products.exists() or not args.people.exists():
+    if not args.products.exists() or (not args.repair_product_prices and not args.people.exists()):
         raise SystemExit('Planilhas não encontradas. Informe --products e --people com os caminhos corretos.')
 
     env = {**load_env(ROOT / '.env'), **os.environ}
@@ -272,6 +312,45 @@ def main():
         raise SystemExit(f'Tenant não encontrado: {args.tenant_slug}')
     tenant = tenants[0]
     products, skipped_products = parse_products(args.products, tenant['id'])
+    if args.repair_product_prices:
+        updates, unmatched = product_price_updates(db, tenant['id'], products)
+        print(json.dumps({
+            'tenant': tenant,
+            'product_rows_in_spreadsheet': len(products),
+            'prices_or_costs_to_correct': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'mode': 'execute' if args.execute else 'dry-run',
+        }, ensure_ascii=False, indent=2))
+        if not args.execute:
+            return
+
+        backup_dir = ROOT / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        backup_path = backup_dir / f'product-price-repair-{datetime.now():%Y%m%d-%H%M%S}.json'
+        backup_path.write_text(json.dumps({
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'tenant': tenant,
+            'active_products_before_repair': db.all_rows('products', {
+                'select': '*',
+                'tenant_id': f'eq.{tenant["id"]}',
+                'module_id': f'eq.{MODULE_ID}',
+                'active': 'eq.true',
+            }),
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        for batch in chunks(updates):
+            db.request(
+                'POST', 'products', {'on_conflict': 'id'}, batch,
+                headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
+            )
+        print(json.dumps({
+            'status': 'completed',
+            'backup': str(backup_path),
+            'products_corrected': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'preserved': ['stock_quantity', 'clients', 'sales', 'stock_movements'],
+        }, ensure_ascii=False, indent=2))
+        return
+
     clients, skipped_people, pets_found = parse_clients(args.people, tenant['id'])
     print(json.dumps({
         'tenant': tenant,
