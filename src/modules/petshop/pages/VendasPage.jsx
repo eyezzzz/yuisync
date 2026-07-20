@@ -1275,7 +1275,7 @@ export default function VendasPage() {
           <div className="w-80 lg:w-96 min-h-0 flex flex-col bg-surface flex-shrink-0 border-l border-[var(--border2)]">
             <div className="px-4 py-3 border-b border-[var(--border2)] font-display font-bold">{tab === 'caixa' ? 'Fechamento da venda' : 'Carrinho'}</div>
             {tab !== 'caixa' && (
-              <div className="flex-1 min-h-0 overflow-y-auto px-4">{cart.map(item => <CartItem key={item.product_id} item={item} onQty={changeQty} onRemove={removeFromCart}/>)}</div>
+              <div className="min-h-0 max-h-[42vh] overflow-y-auto px-4">{cart.map(item => <CartItem key={item.product_id} item={item} onQty={changeQty} onRemove={removeFromCart}/>)}</div>
             )}
             <div className="flex-1 min-h-0 overflow-y-auto p-4 border-t border-[var(--border2)] space-y-4">
               <div className="relative" ref={searchRef}>
