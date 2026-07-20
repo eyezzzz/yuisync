@@ -57,10 +57,15 @@ test('historico de vendas desambigua o relacionamento com vendedor', async () =>
   assert.doesNotMatch(source, /['"]profiles\s*\(/)
 })
 
-test('seletor da agenda fecha ao escolher cliente e pesquisa localmente', async () => {
+test('seletor da agenda fecha ao escolher cliente e usa busca hibrida limitada', async () => {
   const source = await read('src/modules/petshop/pages/AgendaPage.jsx')
+  const clientsSource = await read('src/shared/hooks/useClients.js')
   assert.match(source, /setClientPickerOpen\(false\)/)
   assert.match(source, /useDeferredValue\(petSearch\)/)
   assert.match(source, /\.slice\(0, 8\)/)
-  assert.doesNotMatch(source, /onSearchClients/)
+  assert.match(source, /searchRequestRef/)
+  assert.match(source, /onSearchClients\(query, \{ limit: 20 \}\)/)
+  assert.match(clientsSource, /const search = useCallback/)
+  assert.match(clientsSource, /\.limit\(limit\)/)
+  assert.doesNotMatch(source, /onSearchClients=\{loadPets\}/)
 })

@@ -171,6 +171,32 @@ export function useClients() {
     }
   }, [activeModuleId, activeTenantId])
 
+  const search = useCallback(async (searchTerm = '', options = {}) => {
+    if (!activeModuleId || !activeTenantId) return []
+    const term = sanitizeSearch(searchTerm)
+    if (!term) return []
+    const limit = Math.min(50, Math.max(1, Number(options.limit || 20)))
+
+    const runSearch = (includePetFields = true) => runWithTenantFallback(activeTenantId, async (includeTenant) => {
+      let query = supabase
+        .from('clients')
+        .select(BASE_SELECT)
+        .eq('module_id', activeModuleId)
+        .order('name')
+        .limit(limit)
+
+      query = applyTenantFilter(query, activeTenantId, includeTenant)
+      return applyClientSearch(query, term, includePetFields)
+    })
+
+    let response = await runSearch(true)
+    if (response.error && isSearchFilterError(response.error)) {
+      response = await runSearch(false)
+    }
+    if (response.error) throw response.error
+    return (response.data || []).map(mapClientToPet)
+  }, [activeModuleId, activeTenantId])
+
   const getById = useCallback(async (id) => {
     const { data } = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
       let q = supabase
@@ -256,5 +282,5 @@ export function useClients() {
     return months < 12 ? `${months}m` : `${Math.floor(months/12)}a`
   }
 
-  return { clients, loading, error, load, getById, create, update, remove, speciesIcon, age }
+  return { clients, loading, error, load, search, getById, create, update, remove, speciesIcon, age }
 }

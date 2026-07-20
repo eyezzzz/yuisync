@@ -275,7 +275,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [] }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [], onSearchClients }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -310,8 +310,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
   const [clientPickerOpen, setClientPickerOpen] = useState(() => !form.pet_id)
+  const [selectedClient, setSelectedClient] = useState(() => appt?.pets || null)
+  const [remotePets, setRemotePets] = useState([])
+  const [searchingClients, setSearchingClients] = useState(false)
   const clientPickerRef = useRef(null)
   const clientSearchRef = useRef(null)
+  const searchRequestRef = useRef(0)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const petSearch = form.pet_search || ''
@@ -327,17 +331,47 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
       pet.species,
     ].filter(Boolean).join(' ')),
   })), [pets])
-  const filteredPets = useMemo(() => {
+  const localFilteredPets = useMemo(() => {
     const q = safeLower(deferredPetSearch)
     return searchablePets
       .filter(({ searchText }) => !q || searchText.includes(q))
-      .slice(0, 8)
       .map(({ pet }) => pet)
   }, [searchablePets, deferredPetSearch])
+  const filteredPets = useMemo(() => {
+    const unique = new Map()
+    ;[...localFilteredPets, ...remotePets].forEach((pet) => unique.set(pet.id, pet))
+    return [...unique.values()].slice(0, 8)
+  }, [localFilteredPets, remotePets])
   const selectedPet = useMemo(() => (
-    (pets || []).find((pet) => pet.id === form.pet_id)
+    (selectedClient?.id === form.pet_id ? selectedClient : null)
+    || (pets || []).find((pet) => pet.id === form.pet_id)
     || (appt?.pets?.id === form.pet_id ? appt.pets : null)
-  ), [pets, form.pet_id, appt?.pets])
+  ), [selectedClient, pets, form.pet_id, appt?.pets])
+
+  useEffect(() => {
+    const query = petSearch.trim()
+    if (!onSearchClients || query.length < 2) {
+      searchRequestRef.current += 1
+      setRemotePets([])
+      setSearchingClients(false)
+      return undefined
+    }
+
+    const requestId = ++searchRequestRef.current
+    const timer = setTimeout(async () => {
+      setSearchingClients(true)
+      try {
+        const results = await onSearchClients(query, { limit: 20 })
+        if (searchRequestRef.current === requestId) setRemotePets(results || [])
+      } catch (searchError) {
+        if (searchRequestRef.current === requestId) console.warn('Falha ao buscar clientes da agenda:', searchError)
+      } finally {
+        if (searchRequestRef.current === requestId) setSearchingClients(false)
+      }
+    }, 120)
+
+    return () => clearTimeout(timer)
+  }, [petSearch, onSearchClients])
 
   useEffect(() => {
     if (!clientPickerOpen) return undefined
@@ -357,6 +391,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
 
   const selectClient = (pet) => {
     setForm((current) => ({ ...current, pet_id: pet.id, pet_search: '' }))
+    setSelectedClient(pet)
     setErr('')
     setClientPickerOpen(false)
   }
@@ -468,7 +503,11 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                 )}
                   </div>
                   <p className="text-[11px] text-muted">
-                    {deferredPetSearch ? 'Mostrando ate 8 resultados.' : 'Digite um nome, pet ou telefone para refinar a lista.'}
+                    {searchingClients
+                      ? 'Buscando mais clientes...'
+                      : deferredPetSearch
+                        ? 'Mostrando ate 8 resultados.'
+                        : 'Digite um nome, pet ou telefone para refinar a lista.'}
                   </p>
                 </div>
               )}
@@ -793,7 +832,7 @@ function AgendaTimelineView({
 export default function AgendaPage() {
   const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel: legacyServiceLabel, statusBadge } =
     useAppointments()
-  const { clients: pets, load: loadPets } = useClients()
+  const { clients: pets, load: loadPets, search: searchPets } = useClients()
   const { loadPetshopServices, loadAssignableStaff } = usePetshopAdvanced()
 
   const [selectedDate, setSelectedDate] = useState(new Date())
@@ -1115,6 +1154,7 @@ export default function AgendaPage() {
           pets={pets}
           services={agendaServices}
           staff={staff}
+          onSearchClients={searchPets}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}
