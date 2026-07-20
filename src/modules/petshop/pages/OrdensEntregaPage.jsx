@@ -123,14 +123,15 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
       <head>
         <title>Ordem ${escapeHtml(orderLabel)}</title>
         <style>
-          @page { size: 32mm 500mm; margin: 0; }
+          @page { size: 32mm 140mm; margin: 0; }
           * { box-sizing: border-box; }
           html { width: ${width}; height: auto !important; min-height: 0 !important; }
           body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 6px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; overflow: visible; }
           .receipt { display: flow-root; width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
           @media print {
             html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; }
-            .receipt { break-after: avoid-page; page-break-after: avoid; }
+            body { position: absolute !important; top: 0 !important; left: 0 !important; }
+            .receipt { position: absolute !important; top: 0 !important; left: 0 !important; break-after: avoid-page; page-break-after: avoid; }
           }
           .center { text-align: center; }
           .header { font-size: 15px; font-weight: 700; text-transform: uppercase; }

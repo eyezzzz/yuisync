@@ -309,12 +309,12 @@ export default function BillingPage() {
       <html>
         <head>
           <style>
-            @page { size: 32mm 500mm; margin: 0; }
+            @page { size: 32mm 140mm; margin: 0; }
             * { box-sizing: border-box; }
             html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
             body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
             .receipt { width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
-            @media print { html, body { height: auto !important; min-height: 0 !important; } }
+            @media print { html, body { height: auto !important; min-height: 0 !important; } body, .receipt { position: absolute !important; top: 0 !important; left: 0 !important; } }
             .title { text-align: center; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
             .line { display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px; }
             .hr { border-bottom: 1px dashed #000; margin: 8px 0; }

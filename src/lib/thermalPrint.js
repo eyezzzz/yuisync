@@ -1,11 +1,12 @@
 const PX_PER_MM = 96 / 25.4
-const MIN_RECEIPT_HEIGHT_MM = 45
-const MAX_RECEIPT_HEIGHT_MM = 500
+const MIN_RECEIPT_HEIGHT_MM = 35
+const MAX_RECEIPT_HEIGHT_MM = 140
 
 /**
  * Ajusta a folha térmica ao conteúdo antes de abrir o diálogo nativo.
  * `auto` não é uma altura válida para `@page` no Chromium e alguns drivers
- * retornam ao A4. Por isso a altura é medida em pixels e convertida em mm.
+ * retornam ao A4. A prévia recebe primeiro um tamanho compacto e, quando o
+ * navegador aceitar a atualização, a altura medida do conteúdo a substitui.
  */
 export function printThermalReceipt(printWindow, { widthMm = 32 } = {}) {
   const printWhenReady = () => {

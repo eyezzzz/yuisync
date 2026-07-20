@@ -128,7 +128,7 @@ test('todos os comprovantes medem altura pelo conteudo antes de imprimir', async
   for (const file of receiptFiles) {
     const source = await read(file)
     assert.match(source, /printThermalReceipt\(printWindow\)/)
-    assert.match(source, /@page \{ size: 32mm 500mm; margin: 0; \}/)
+    assert.match(source, /@page \{ size: 32mm 140mm; margin: 0; \}/)
     assert.match(source, /class="receipt"/)
     assert.doesNotMatch(source, /size: 80mm auto/)
     assert.match(source, /width: 32mm/)
@@ -136,5 +136,5 @@ test('todos os comprovantes medem altura pelo conteudo antes de imprimir', async
 
   const utility = await read('src/lib/thermalPrint.js')
   assert.match(utility, /@page \{ size: \$\{widthMm\}mm \$\{heightMm\}mm; margin: 0; \}/)
-  assert.match(utility, /MAX_RECEIPT_HEIGHT_MM = 500/)
+  assert.match(utility, /MAX_RECEIPT_HEIGHT_MM = 140/)
 })
