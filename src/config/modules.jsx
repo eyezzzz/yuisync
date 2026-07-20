@@ -2,7 +2,7 @@ import { lazy } from 'react'
 import {
   LayoutDashboard, Calendar, ShoppingCart, Package,
   PawPrint, MessageSquare, Users, Settings, TrendingUp,
-  FileText, CreditCard, Shield, Trophy, Sparkles, Megaphone,
+  FileText, CreditCard, Shield, Trophy, Megaphone,
   Wallet, ClipboardList,
 } from 'lucide-react'
 
@@ -14,7 +14,6 @@ const PetsPage = lazy(() => import('../modules/petshop/pages/PetsPage'))
 const ChatPage = lazy(() => import('../modules/petshop/pages/ChatPage'))
 const PlanosPage = lazy(() => import('../modules/petshop/pages/PlanosPage'))
 const FidelidadePage = lazy(() => import('../modules/petshop/pages/FidelidadePage'))
-const StatusLivePage = lazy(() => import('../modules/petshop/pages/StatusLivePage'))
 const EquipePage = lazy(() => import('../modules/petshop/pages/EquipePage'))
 const CampanhasPage = lazy(() => import('../modules/petshop/pages/CampanhasPage'))
 const CaixaPage = lazy(() => import('../modules/petshop/pages/CaixaPage'))
@@ -68,7 +67,6 @@ export const MODULES = {
           { id: 'agenda', label: 'Agenda', icon: Calendar, roles: ['admin_pet', 'funcionario_pet'] },
           { id: 'vendas', label: 'Vendas / PDV', icon: ShoppingCart, roles: ['admin_pet', 'funcionario_pet'] },
           { id: 'ordens', label: 'Ordens / Entrega', icon: ClipboardList, roles: ['admin_pet', 'funcionario_pet'] },
-          { id: 'status-live', label: 'Status ao Vivo', icon: Sparkles, roles: ['admin_pet', 'funcionario_pet'] },
           { id: 'chat', label: 'Atendimento WhatsApp', icon: MessageSquare, roles: ['admin_pet', 'funcionario_pet'] },
           { id: 'growth', label: 'Crescimento CRM', icon: TrendingUp, roles: ['admin_pet'] },
         ],
@@ -122,7 +120,6 @@ export const MODULES = {
       pets: PetsPage,
       fidelidade: FidelidadePage,
       chat: ChatPage,
-      'status-live': StatusLivePage,
       caixa: CaixaPage,
       planos: PlanosPage,
       campanhas: CampanhasPage,

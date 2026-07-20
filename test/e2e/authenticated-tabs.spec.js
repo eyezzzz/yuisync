@@ -5,7 +5,6 @@ const moduleRoutes = [
   '/petshop/agenda',
   '/petshop/vendas',
   '/petshop/ordens',
-  '/petshop/status-live',
   '/petshop/chat',
   '/petshop/growth',
   '/petshop/pets',
