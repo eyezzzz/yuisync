@@ -347,7 +347,12 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
       <html>
         <head>
           <style>
-            body { font-family: 'Courier New', Courier, monospace; width: ${storeSettings?.printer_width === '58' ? '58mm' : '80mm'}; margin: 0 auto; padding: 10px; color: #000; }
+            @page { size: auto; margin: 0; }
+            * { box-sizing: border-box; }
+            html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
+            body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
+            .receipt { width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
+            @media print { html, body { height: auto !important; min-height: 0 !important; } }
             .center { text-align: center; }
             .hr { border-bottom: 1px dashed #000; margin: 10px 0; }
             .header { font-weight: bold; font-size: 1.1em; margin-bottom: 5px; text-transform: uppercase; }
@@ -357,7 +362,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
             .footer { font-size: 0.8em; margin-top: 15px; color: #333; }
           </style>
         </head>
-        <body>
+        <body><main class="receipt">
           <div class="center">
             <div class="header">${storeSettings?.store_name?.toUpperCase() || 'PETSHOP CRM'}</div>
             <div class="info">${addr || 'Endereço não configurado'}</div>
@@ -380,7 +385,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
           <div class="info center">Cliente: ${sale.customer || 'Balcão'}</div>
           <div class="info center">Data: ${date}</div>
           <div class="footer center">Obrigado pela preferência!</div>
-        </body>
+        </main></body>
       </html>
     `
     printWindow.document.write(receiptHtml)
@@ -414,7 +419,12 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
       <html>
         <head>
           <style>
-            body { font-family: 'Courier New', Courier, monospace; width: ${storeSettings?.printer_width === '58' ? '58mm' : '80mm'}; margin: 0 auto; padding: 10px; color: #000; }
+            @page { size: auto; margin: 0; }
+            * { box-sizing: border-box; }
+            html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
+            body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
+            .receipt { width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
+            @media print { html, body { height: auto !important; min-height: 0 !important; } }
             .center { text-align: center; }
             .hr { border-bottom: 1px dashed #000; margin: 10px 0; }
             .line { display: flex; justify-content: space-between; font-size: 0.9em; margin: 3px 0; }
@@ -423,7 +433,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
             .key { font-size: 0.75em; word-break: break-all; }
           </style>
         </head>
-        <body>
+        <body><main class="receipt">
           <div class="center header">${storeSettings?.store_name?.toUpperCase() || 'PETSHOP CRM'}</div>
           <div class="hr"></div>
           <div class="line"><strong>DOCUMENTO</strong><strong>${String(fiscal?.document?.document_type || 'nfce').toUpperCase()}</strong></div>
@@ -434,7 +444,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
           ${fiscal?.document?.protocol_number ? `<div class="line"><span>PROTOCOLO</span><span>${fiscal.document.protocol_number}</span></div>` : ''}
           <div class="hr"></div>
           <div class="small center">Emitido em ${date}</div>
-        </body>
+        </main></body>
       </html>
     `
 

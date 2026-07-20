@@ -169,7 +169,12 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
       <html>
         <head>
           <style>
-            body { font-family: 'Courier New', Courier, monospace; width: ${storeSettings?.printer_width === '58' ? '58mm' : '80mm'}; margin: 0 auto; padding: 10px; color: #000; }
+            @page { size: auto; margin: 0; }
+            * { box-sizing: border-box; }
+            html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
+            body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
+            .receipt { width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
+            @media print { html, body { height: auto !important; min-height: 0 !important; } }
             .center { text-align: center; }
             .hr { border-bottom: 1px dashed #000; margin: 10px 0; }
             .header { font-weight: bold; font-size: 1.1em; margin-bottom: 5px; text-transform: uppercase; }
@@ -180,7 +185,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
             .footer { font-size: 0.8em; margin-top: 15px; color: #333; }
           </style>
         </head>
-        <body>
+        <body><main class="receipt">
           <div class="center">
             <div class="header">${storeSettings?.store_name?.toUpperCase() || 'PETSHOP CRM'}</div>
             <div class="info">${addr || 'Endereço não configurado'}</div>
@@ -215,7 +220,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
           <div class="hr"></div>
           <div class="info center">Data: ${date}</div>
           <div class="footer center">Obrigado pela confiança! 🐾</div>
-        </body>
+        </main></body>
       </html>
     `
     printWindow.document.write(receiptHtml)

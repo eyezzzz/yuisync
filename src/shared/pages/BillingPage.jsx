@@ -308,14 +308,19 @@ export default function BillingPage() {
       <html>
         <head>
           <style>
-            body { font-family: 'Courier New', Courier, monospace; width: 80mm; margin: 0 auto; padding: 10px; color: #000; }
+            @page { size: auto; margin: 0; }
+            * { box-sizing: border-box; }
+            html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
+            body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
+            .receipt { width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
+            @media print { html, body { height: auto !important; min-height: 0 !important; } }
             .title { text-align: center; font-weight: bold; text-transform: uppercase; margin-bottom: 8px; }
             .line { display: flex; justify-content: space-between; margin: 4px 0; font-size: 12px; }
             .hr { border-bottom: 1px dashed #000; margin: 8px 0; }
             .key { font-size: 10px; word-break: break-all; }
           </style>
         </head>
-        <body>
+        <body><main class="receipt">
           <div class="title">Cupom Fiscal</div>
           <div class="line"><span>ID</span><span>#${String(invoice.id || '').slice(0, 8).toUpperCase()}</span></div>
           <div class="line"><span>Descricao</span><span>${invoice.notes || 'Consumidor Final'}</span></div>
@@ -323,7 +328,7 @@ export default function BillingPage() {
           <div class="line"><span>Status</span><span>${invoice?.fiscal?.document?.status || invoice?.fiscal_status || 'pending'}</span></div>
           <div class="hr"></div>
           <div class="key">${fiscalKey ? `Chave: ${fiscalKey}` : 'Chave fiscal indisponivel'}</div>
-        </body>
+        </main></body>
       </html>
     `
 

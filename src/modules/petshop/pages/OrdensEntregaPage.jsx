@@ -100,7 +100,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
   const printWindow = window.open('', '_blank')
   if (!printWindow) return
 
-  const width = storeSettings?.printer_width === '58' ? '58mm' : '80mm'
+  const width = '32mm'
   const storeAddress = [
     storeSettings?.store_address,
     storeSettings?.store_neighborhood,
@@ -122,9 +122,17 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
       <head>
         <title>Ordem ${escapeHtml(orderLabel)}</title>
         <style>
-          @page { size: ${width} auto; margin: 0; }
+          /* A altura do rolo vem do driver da impressora. "32mm auto" e invalido
+             no Chrome e pode cair no tamanho A4, deixando uma grande area em branco. */
+          @page { size: auto; margin: 0; }
           * { box-sizing: border-box; }
-          body { width: ${width}; margin: 0 auto; padding: 10px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; }
+          html { width: ${width}; height: auto !important; min-height: 0 !important; }
+          body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 6px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; overflow: visible; }
+          .receipt { display: flow-root; width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
+          @media print {
+            html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; }
+            .receipt { break-after: avoid-page; page-break-after: avoid; }
+          }
           .center { text-align: center; }
           .header { font-size: 15px; font-weight: 700; text-transform: uppercase; }
           .muted { font-size: 10px; }
@@ -136,7 +144,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
           .total { font-size: 15px; font-weight: 700; }
         </style>
       </head>
-      <body>
+      <body><main class="receipt">
         <div class="center">
           <div class="header">${escapeHtml(storeSettings?.store_name || 'PETSHOP')}</div>
           <div class="muted wrap">${escapeHtml(storeAddress || 'Endereco da loja nao configurado')}</div>
@@ -172,7 +180,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
         <div class="hr"></div>
         <div class="muted wrap">Origem: ${escapeHtml(address || sourceLabel(order))}</div>
         ${publicNotes ? `<div class="muted wrap">${escapeHtml(publicNotes)}</div>` : ''}
-      </body>
+      </main></body>
     </html>
   `
 
@@ -301,8 +309,8 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
         <button
           onClick={() => onPrint(order, items)}
           className="btn btn-secondary btn-icon h-11 w-11 justify-center"
-          title="Imprimir ordem 80mm"
-          aria-label="Imprimir ordem 80mm"
+          title="Imprimir ordem térmica"
+          aria-label="Imprimir ordem térmica"
         >
           <Printer size={15} />
         </button>
@@ -383,8 +391,8 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
                       <button
                         onClick={() => onPrint(order, items)}
                         className="btn btn-secondary btn-icon h-10 w-10 justify-center"
-                        title="Imprimir ordem 80mm"
-                        aria-label="Imprimir ordem 80mm"
+                        title="Imprimir ordem térmica"
+                        aria-label="Imprimir ordem térmica"
                       >
                         <Printer size={15} />
                       </button>
