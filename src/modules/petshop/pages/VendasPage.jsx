@@ -1494,7 +1494,7 @@ export default function VendasPage() {
                   <span>{err || prodError}</span>
                 </div>
               )}
-              <div className="sticky bottom-0 z-20 -mx-4 -mb-4 border-t border-[var(--border2)] bg-surface/95 p-4 pt-3 backdrop-blur">
+              <div className="-mx-4 -mb-4 border-t border-[var(--border2)] bg-surface p-4 pt-3">
               <div className="rounded-2xl border border-[var(--border)] bg-card p-4 shadow-sm">
                 <div className="flex items-end justify-between gap-3">
                   <span className="text-sm font-semibold text-muted">Total da venda</span>
