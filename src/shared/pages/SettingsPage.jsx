@@ -46,6 +46,8 @@ const INITIAL_FORM = {
   provider_base_url: '',
   fiscal_notes: '',
   bot_prompt: DEFAULT_PETBOT_PROMPT,
+  petbot_autonomy_mode: 'canary',
+  petbot_autonomy_allowlist: '',
   delivery_fee: '10.00',
   pet_transport_fee: '20.00',
   pix_key: '',
@@ -87,6 +89,8 @@ function isFeeSchemaError(error) {
     || msg.includes('pix_holder_name')
     || msg.includes('message_templates')
     || msg.includes('pet_transport_options')
+    || msg.includes('petbot_autonomy_mode')
+    || msg.includes('petbot_autonomy_allowlist')
   ) && (
     msg.includes('schema cache')
     || msg.includes('column')
@@ -217,6 +221,8 @@ export default function SettingsPage() {
           printer_width: data.printer_width === '58' ? '58' : '80',
           fiscal_id: data.fiscal_id || '',
           bot_prompt: data.bot_prompt || DEFAULT_PETBOT_PROMPT,
+          petbot_autonomy_mode: ['assist', 'canary', 'enabled'].includes(data.petbot_autonomy_mode) ? data.petbot_autonomy_mode : 'canary',
+          petbot_autonomy_allowlist: Array.isArray(data.petbot_autonomy_allowlist) ? data.petbot_autonomy_allowlist.join(', ') : '',
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
           pet_transport_fee: data.pet_transport_fee != null ? String(data.pet_transport_fee) : '20.00',
           pix_key: data.pix_key || '',
@@ -310,6 +316,7 @@ export default function SettingsPage() {
           ...form,
           pet_transport_options: serializeTransportOptions(form.pet_transport_options),
           message_templates: normalizeTemplates(form.message_templates),
+          petbot_autonomy_allowlist: String(form.petbot_autonomy_allowlist || '').split(/[,\n]/).map((value) => value.trim()).filter(Boolean),
           updated_at: new Date().toISOString(),
         }, activeTenantId, includeTenant)
 
@@ -323,6 +330,8 @@ export default function SettingsPage() {
           delete fallbackRow.pix_holder_name
           delete fallbackRow.message_templates
           delete fallbackRow.pet_transport_options
+          delete fallbackRow.petbot_autonomy_mode
+          delete fallbackRow.petbot_autonomy_allowlist
           return supabase.from('settings').upsert(fallbackRow, { onConflict: conflict })
         }
         return firstTry
@@ -764,6 +773,34 @@ export default function SettingsPage() {
                 <p className="text-xs text-muted mt-3">
                   Este e o prompt ativo do PetBot para este tenant. Edite apenas ajustes pontuais; o bot continua usando dados reais do banco para loja, estoque, agenda e historico.
                 </p>
+              </div>
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-4">
+                <div>
+                  <label className="inp-label">Autonomia do PetBot</label>
+                  <select
+                    className="inp"
+                    disabled={!canEdit}
+                    value={form.petbot_autonomy_mode}
+                    onChange={(event) => setForm((prev) => ({ ...prev, petbot_autonomy_mode: event.target.value }))}
+                  >
+                    <option value="assist">Somente assistido — equipe conclui todos os pedidos</option>
+                    <option value="canary">Canario — somente contatos autorizados concluem automaticamente</option>
+                    <option value="enabled">Autonomo — pedidos permitidos pelo guardiao sao concluidos</option>
+                  </select>
+                </div>
+                {form.petbot_autonomy_mode === 'canary' && (
+                  <div>
+                    <label className="inp-label">Contatos autorizados no canario</label>
+                    <textarea
+                      className="inp min-h-[84px] resize-y"
+                      disabled={!canEdit}
+                      value={form.petbot_autonomy_allowlist}
+                      placeholder="(32) 99999-9999, (32) 98888-8888"
+                      onChange={(event) => setForm((prev) => ({ ...prev, petbot_autonomy_allowlist: event.target.value }))}
+                    />
+                    <p className="mt-2 text-xs text-muted">Separe telefones por virgula ou linha. Fora desta lista, o bot coleta o pedido e chama a equipe antes de concluir.</p>
+                  </div>
+                )}
               </div>
             </div>
 

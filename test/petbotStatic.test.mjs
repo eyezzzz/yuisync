@@ -133,6 +133,20 @@ test('WhatsApp e painel usam o mesmo runtime auditavel do PetBot', () => {
   assert.match(migration, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
 })
 
+test('canario impede a criacao automatica fora dos contatos autorizados', () => {
+  const localChat = read('server/lib/chat.js')
+  const settings = read('src/shared/pages/SettingsPage.jsx')
+  const migration = read('supabase/migrations/20260720006000_petbot_canary_controls.sql')
+
+  assert.match(localChat, /function canPetbotCreateOrders/)
+  assert.match(localChat, /canary_not_enabled_for_contact/)
+  assert.match(localChat, /autonomyAllowlist/)
+  assert.match(settings, /Autonomia do PetBot/)
+  assert.match(settings, /Contatos autorizados no canario/)
+  assert.match(migration, /default 'canary'/)
+  assert.match(migration, /\('assist', 'canary', 'enabled'\)/)
+})
+
 test('fluxo legado do WhatsApp tem MotoDog, Pix e checklist configuraveis', () => {
   const migration = read('database/petshop_legacy_whatsapp_flow.sql')
   const settings = read('src/shared/pages/SettingsPage.jsx')

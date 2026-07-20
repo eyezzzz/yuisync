@@ -875,7 +875,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
   return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
       .from('settings')
-      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist')
       .eq('module_id', moduleId)
 
     if (tenantId) {
@@ -883,7 +883,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
     }
 
     let result = await query.maybeSingle()
-    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options)/i.test(String(result.error.message || ''))) {
+    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist)/i.test(String(result.error.message || ''))) {
       let fallbackQuery = supabase
         .from('settings')
         .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
@@ -912,8 +912,24 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
       pixHolderName: data?.pix_holder_name || '',
       messageTemplates: data?.message_templates || {},
       petTransportOptions: Array.isArray(data?.pet_transport_options) ? data.pet_transport_options : [],
+      // Until the canary migration is applied, preserve the currently deployed
+      // behavior instead of unexpectedly routing every conversation to a human.
+      autonomyMode: data?.petbot_autonomy_mode || 'enabled',
+      autonomyAllowlist: Array.isArray(data?.petbot_autonomy_allowlist) ? data.petbot_autonomy_allowlist : [],
     }
   })
+}
+
+function canPetbotCreateOrders(settings = {}, session = {}) {
+  const mode = cleanText(settings.autonomyMode).toLowerCase() || 'enabled'
+  if (mode === 'enabled') return true
+  if (mode !== 'canary') return false
+
+  const phone = cleanText(session.customer_phone).replace(/\D/g, '')
+  const allowlist = Array.isArray(settings.autonomyAllowlist) ? settings.autonomyAllowlist : []
+  return Boolean(phone) && allowlist
+    .map((entry) => cleanText(entry).replace(/\D/g, ''))
+    .includes(phone)
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
@@ -1983,7 +1999,14 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const mediaMessages = Array.isArray(guard.mediaMessages) ? guard.mediaMessages : []
   const primaryImage = mediaMessages.find((item) => item?.type === 'image' && item.imageUrl)
 
-  if (guard.shouldSaveOrder) {
+  if (guard.shouldSaveOrder && !canPetbotCreateOrders(storeSettings, sessionForGuard)) {
+    state = {
+      ...state,
+      blockedReasons: [...new Set([...(state?.blockedReasons || []), 'canary_not_enabled_for_contact'])],
+    }
+    reply = 'Recebi sua confirmacao. Nesta fase de teste, vou encaminhar o pedido para a equipe concluir com voce.'
+    guard = { ...guard, shouldSaveOrder: false, needsHuman: true, action: 'canary_handoff', handoffTarget: 'atendente' }
+  } else if (guard.shouldSaveOrder) {
     try {
       orderResult = await createConfirmedPetshopOrderViaRpc(supabase, sessionForGuard, storeSettings, guard.orderArgs)
       state = markPetbotOrderSaved(state, orderResult)
