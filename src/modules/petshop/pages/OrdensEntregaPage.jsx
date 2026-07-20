@@ -117,6 +117,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
   const discount = Number(order.sale?.discount || 0)
   const orderLabel = String(order.id || '').slice(0, 8)
   const saleLabel = String(order.sale_id || '').slice(0, 8) || '-'
+  const logoUrl = `${window.location.origin}/brand/quatro-patas-logo.png`
 
   const html = `
     <html>
@@ -126,7 +127,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
           @page { margin: 0; }
           * { box-sizing: border-box; }
           html { width: ${width}; height: auto !important; min-height: 0 !important; }
-          body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 6px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; overflow: visible; }
+          body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 4mm 4mm 3mm; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 10px; overflow: visible; }
           .receipt { display: flow-root; width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
           @media print {
             html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; }
@@ -134,52 +135,61 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
             .receipt { position: absolute !important; top: 0 !important; left: 0 !important; break-after: avoid-page; page-break-after: avoid; }
           }
           .center { text-align: center; }
-          .header { font-size: 15px; font-weight: 700; text-transform: uppercase; }
-          .muted { font-size: 10px; }
-          .hr { border-top: 1px dashed #000; margin: 8px 0; }
-          .row { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0; }
-          .label { font-weight: 700; text-transform: uppercase; }
+          .brand { display: block; width: 58mm; height: 27mm; object-fit: contain; margin: -3mm auto -5mm; mix-blend-mode: multiply; }
+          .store-name { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; }
+          .store-data { font-size: 9px; line-height: 1.35; }
+          .document-title { border: 1px solid #000; font-size: 12px; font-weight: 800; text-align: center; padding: 5px 4px; margin: 8px 0 6px; text-transform: uppercase; letter-spacing: .7px; }
+          .meta { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 10px; font-size: 9px; }
+          .meta b, .section-label, .table-head { font-size: 8px; text-transform: uppercase; letter-spacing: .45px; }
+          .rule { border-top: 1px dashed #000; margin: 7px 0; }
+          .section-label { font-weight: 800; margin-bottom: 3px; }
+          .customer-name { font-size: 11px; font-weight: 800; text-transform: uppercase; }
           .wrap { white-space: normal; word-break: break-word; }
-          .item { margin: 5px 0; }
-          .total { font-size: 15px; font-weight: 700; }
+          .customer-line { line-height: 1.35; }
+          table { width: 100%; border-collapse: collapse; font-size: 9px; }
+          th { text-align: left; font-size: 7px; text-transform: uppercase; padding: 3px 1px; border-bottom: 1px solid #000; }
+          td { vertical-align: top; padding: 4px 1px; border-bottom: 1px dotted #777; }
+          .qtd { width: 9mm; text-align: center; } .unit { width: 12mm; text-align: right; } .amount { width: 14mm; text-align: right; white-space: nowrap; }
+          .summary { margin-left: auto; width: 44mm; font-size: 10px; }
+          .summary-row { display: flex; justify-content: space-between; padding: 2px 0; }
+          .summary-total { border-top: 1px solid #000; margin-top: 3px; padding-top: 4px; font-size: 13px; font-weight: 800; }
+          .footer { text-align: center; margin-top: 10px; font-size: 9px; line-height: 1.35; }
         </style>
       </head>
       <body><main class="receipt">
         <div class="center">
-          <div class="header">${escapeHtml(storeSettings?.store_name || 'PETSHOP')}</div>
-          <div class="muted wrap">${escapeHtml(storeAddress || 'Endereco da loja nao configurado')}</div>
-          <div class="muted">Tel: ${escapeHtml(storeSettings?.store_phone || '-')}</div>
+          <img class="brand" src="${logoUrl}" alt="Quatro Patas Pet & Vet" />
+          <div class="store-name">${escapeHtml(storeSettings?.store_name || 'Quatro Patas Pet & Vet')}</div>
+          <div class="store-data wrap">${escapeHtml(storeAddress || 'Endereco da loja nao configurado')}</div>
+          <div class="store-data">Tel: ${escapeHtml(storeSettings?.store_phone || '-')}</div>
         </div>
-        <div class="hr"></div>
-        <div class="center label">ORDEM DE ${escapeHtml(order.order_type === 'servico' ? 'SERVICO' : 'ENTREGA')}</div>
-        <div class="row"><span>Ordem</span><span>#${escapeHtml(orderLabel)}</span></div>
-        <div class="row"><span>Venda</span><span>#${escapeHtml(saleLabel)}</span></div>
-        <div class="row"><span>Status</span><span>${escapeHtml(order.status || '-')}</span></div>
-        <div class="row"><span>Data</span><span>${escapeHtml(createdAt)}</span></div>
-        <div class="hr"></div>
-        <div class="label">Cliente</div>
-        <div class="wrap">${escapeHtml(order.client?.owner_name || order.sale?.customer_name || 'Cliente')}</div>
-        <div>Contato: ${escapeHtml(order.contact_phone || order.client?.phone || '-')}</div>
-        ${address ? `<div class="hr"></div><div class="label">Endereco</div><div class="wrap">${escapeHtml(address)}</div>` : ''}
-        <div class="hr"></div>
-        <div class="label">Itens</div>
-        ${items.length ? items.map((item) => item.raw ? `
-          <div class="item wrap">${escapeHtml(item.raw)}</div>
-        ` : `
-          <div class="item">
-            <div class="wrap">${escapeHtml(`${item.quantity}x ${item.name}`)}</div>
-            <div class="row"><span>${fmtCurrency(item.unitPrice)} un.</span><span>${fmtCurrency(item.subtotal)}</span></div>
-          </div>
-        `).join('') : '<div class="wrap">Sem itens vinculados nesta ordem.</div>'}
-        <div class="hr"></div>
-        ${subtotal > 0 ? `<div class="row"><span>Subtotal</span><span>${fmtCurrency(subtotal)}</span></div>` : ''}
-        ${discount > 0 ? `<div class="row"><span>Desconto</span><span>-${fmtCurrency(discount)}</span></div>` : ''}
-        <div class="row total"><span>Total</span><span>${fmtCurrency(total)}</span></div>
-        <div class="row"><span>Pagamento</span><span>${escapeHtml(order.sale?.payment_method || '-')}</span></div>
-        ${paymentStatus(order) !== 'nao_aplicavel' ? `<div class="row"><span>Status pgto.</span><span>${escapeHtml(paymentStatus(order))}</span></div>` : ''}
-        <div class="hr"></div>
-        <div class="muted wrap">Origem: ${escapeHtml(address || sourceLabel(order))}</div>
-        ${publicNotes ? `<div class="muted wrap">${escapeHtml(publicNotes)}</div>` : ''}
+        <div class="document-title">${escapeHtml(order.order_type === 'servico' ? 'Ordem de serviço' : 'Conferência / ordem de entrega')}</div>
+        <div class="meta"><span><b>Data</b><br>${escapeHtml(createdAt)}</span><span><b>Ordem</b><br>#${escapeHtml(orderLabel)}</span><span><b>Venda</b><br>#${escapeHtml(saleLabel)}</span><span><b>Status</b><br>${escapeHtml(order.status || '-')}</span></div>
+        <div class="rule"></div>
+        <div class="section-label">Cliente</div>
+        <div class="customer-name wrap">${escapeHtml(order.client?.owner_name || order.sale?.customer_name || 'Cliente')}</div>
+        <div class="customer-line">Telefone: ${escapeHtml(order.contact_phone || order.client?.phone || '-')}</div>
+        ${order.client?.owner_cpf ? `<div class="customer-line">CPF: ${escapeHtml(order.client.owner_cpf)}</div>` : ''}
+        ${address ? `<div class="customer-line wrap">Endereço: ${escapeHtml(address)}</div>` : ''}
+        <div class="rule"></div>
+        <div class="section-label">Itens</div>
+        <table><thead><tr><th class="qtd">Qtd</th><th>Descrição</th><th class="unit">Unit.</th><th class="amount">Total</th></tr></thead><tbody>
+          ${items.length ? items.map((item) => item.raw ? `
+            <tr><td class="qtd">1</td><td class="wrap">${escapeHtml(item.raw)}</td><td class="unit">-</td><td class="amount">-</td></tr>
+          ` : `
+            <tr><td class="qtd">${escapeHtml(item.quantity)}</td><td class="wrap">${escapeHtml(item.name)}</td><td class="unit">${fmtCurrency(item.unitPrice)}</td><td class="amount">${fmtCurrency(item.subtotal)}</td></tr>
+          `).join('') : '<tr><td colspan="4" class="wrap">Sem itens vinculados nesta ordem.</td></tr>'}
+        </tbody></table>
+        <div class="summary">
+          ${subtotal > 0 ? `<div class="summary-row"><span>Subtotal</span><span>${fmtCurrency(subtotal)}</span></div>` : ''}
+          ${discount > 0 ? `<div class="summary-row"><span>Desconto</span><span>-${fmtCurrency(discount)}</span></div>` : ''}
+          <div class="summary-row summary-total"><span>Total</span><span>${fmtCurrency(total)}</span></div>
+        </div>
+        <div class="rule"></div>
+        <div class="customer-line"><b>Pagamento:</b> ${escapeHtml(order.sale?.payment_method || '-')}</div>
+        ${paymentStatus(order) !== 'nao_aplicavel' ? `<div class="customer-line"><b>Status do pagamento:</b> ${escapeHtml(paymentStatus(order))}</div>` : ''}
+        ${publicNotes ? `<div class="customer-line wrap"><b>Observação:</b> ${escapeHtml(publicNotes)}</div>` : ''}
+        <div class="footer">Obrigado pela preferência.<br>Este documento não possui valor fiscal.</div>
       </main></body>
     </html>
   `

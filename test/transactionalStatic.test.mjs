@@ -116,6 +116,9 @@ test('ordem impressa usa a largura nativa da Print iD sem forcar altura', async 
   assert.match(source, /printThermalReceipt\(printWindow\)/)
   assert.match(source, /const width = '80mm'/)
   assert.match(source, /class="receipt"/)
+  assert.match(source, /quatro-patas-logo\.png/)
+  assert.match(source, /Conferência \/ ordem de entrega/)
+  assert.match(source, /<table><thead>/)
 })
 
 test('todos os comprovantes usam a largura 80mm da Print iD', async () => {
