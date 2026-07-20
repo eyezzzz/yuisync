@@ -1,4 +1,4 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useDeferredValue, useMemo, useRef, useState, useEffect } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Calendar, Plus, Search, ChevronLeft, ChevronRight,
@@ -275,7 +275,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [], onSearchClients }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [] }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -309,33 +309,57 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
+  const [clientPickerOpen, setClientPickerOpen] = useState(() => !form.pet_id)
+  const clientPickerRef = useRef(null)
+  const clientSearchRef = useRef(null)
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
   const petSearch = form.pet_search || ''
+  const deferredPetSearch = useDeferredValue(petSearch)
+  const searchablePets = useMemo(() => (pets || []).map((pet) => ({
+    pet,
+    searchText: safeLower([
+      pet.pet_name,
+      pet.owner_name,
+      pet.phone,
+      pet.email,
+      pet.breed,
+      pet.species,
+    ].filter(Boolean).join(' ')),
+  })), [pets])
   const filteredPets = useMemo(() => {
-    const q = safeLower(petSearch)
-    return (pets || []).filter((p) => {
-      if (!q) return true
-      const haystack = safeLower([
-        p.pet_name,
-        p.owner_name,
-        p.phone,
-        p.email,
-        p.breed,
-        p.species,
-      ].filter(Boolean).join(' '))
-      return haystack.includes(q)
-    })
-  }, [pets, petSearch])
+    const q = safeLower(deferredPetSearch)
+    return searchablePets
+      .filter(({ searchText }) => !q || searchText.includes(q))
+      .slice(0, 8)
+      .map(({ pet }) => pet)
+  }, [searchablePets, deferredPetSearch])
+  const selectedPet = useMemo(() => (
+    (pets || []).find((pet) => pet.id === form.pet_id)
+    || (appt?.pets?.id === form.pet_id ? appt.pets : null)
+  ), [pets, form.pet_id, appt?.pets])
 
   useEffect(() => {
-    if (!onSearchClients) return undefined
-    const q = petSearch.trim()
-    const timer = setTimeout(() => {
-      if (q.length >= 2 || q.length === 0) onSearchClients(q)
-    }, 250)
-    return () => clearTimeout(timer)
-  }, [petSearch, onSearchClients])
+    if (!clientPickerOpen) return undefined
+    const closePicker = (event) => {
+      if (clientPickerRef.current && !clientPickerRef.current.contains(event.target)) {
+        setClientPickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', closePicker)
+    return () => document.removeEventListener('mousedown', closePicker)
+  }, [clientPickerOpen])
+
+  const openClientPicker = () => {
+    setClientPickerOpen(true)
+    requestAnimationFrame(() => clientSearchRef.current?.focus())
+  }
+
+  const selectClient = (pet) => {
+    setForm((current) => ({ ...current, pet_id: pet.id, pet_search: '' }))
+    setErr('')
+    setClientPickerOpen(false)
+  }
 
   const handleServiceChange = (svc) => {
     const s = (services || SERVICES).find(x => x.value === svc)
@@ -381,36 +405,50 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
         <div className="modal-body">
           <div className="space-y-6">
             {/* Pet com Busca */}
-            <div className="bg-card border border-[var(--border)] rounded-2xl p-5 space-y-4">
+            <div ref={clientPickerRef} className="bg-card border border-[var(--border)] rounded-2xl p-5 space-y-4">
               <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar cliente</label>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <div className="relative">
-                  <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
-                  <input 
-                     aria-label="Buscar cliente ou pet"
-                     className="inp pl-9 py-2 text-xs" 
-                     placeholder="Buscar cliente, pet ou telefone..."
-                     value={form.pet_search}
-                     onChange={(e) => set('pet_search', e.target.value)}
-                  />
-                </div>
-                <select aria-label="Cliente ou pet selecionado" className="inp py-2 text-xs" value={form.pet_id} onChange={e => set('pet_id', e.target.value)}>
-                  <option value="">Lista de clientes...</option>
-                  {filteredPets.map(p => (
-                    <option key={p.id} value={p.id}>
-                      {p.owner_name || 'Cliente'}{p.pet_name ? ` - ${p.pet_name}` : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="rounded-xl border border-[var(--border2)] bg-surface/60 overflow-hidden">
-                {filteredPets.slice(0, 6).map((p) => {
+              {!clientPickerOpen && selectedPet ? (
+                <button
+                  type="button"
+                  onClick={openClientPicker}
+                  className="w-full rounded-xl border border-amber-400/30 bg-amber-500/10 px-4 py-3 text-left flex items-center justify-between gap-3 hover:bg-amber-500/15 transition-colors"
+                >
+                  <span className="min-w-0">
+                    <span className="block text-sm font-bold text-text truncate">{selectedPet.owner_name || 'Cliente sem nome'}</span>
+                    <span className="block text-xs text-muted truncate">
+                      {[selectedPet.pet_name, selectedPet.breed || selectedPet.species, selectedPet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
+                    </span>
+                  </span>
+                  <span className="text-[11px] font-bold text-amber-400 flex-shrink-0">Alterar</span>
+                </button>
+              ) : !clientPickerOpen ? (
+                <button type="button" onClick={openClientPicker} className="btn btn-secondary w-full justify-center">
+                  <Search size={14} /> Buscar cliente ou pet
+                </button>
+              ) : (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
+                    <input
+                      ref={clientSearchRef}
+                      aria-label="Buscar cliente ou pet"
+                      className="inp pl-9 py-2 text-xs"
+                      placeholder="Buscar cliente, pet ou telefone..."
+                      value={form.pet_search}
+                      onChange={(event) => set('pet_search', event.target.value)}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div role="listbox" aria-label="Resultados de clientes" className="max-h-64 rounded-xl border border-[var(--border2)] bg-surface/60 overflow-y-auto">
+                {filteredPets.map((p) => {
                   const active = form.pet_id === p.id
                   return (
                     <button
                       type="button"
+                      role="option"
+                      aria-selected={active}
                       key={p.id}
-                      onClick={() => set('pet_id', p.id)}
+                      onClick={() => selectClient(p)}
                       className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 border-b border-[var(--border2)] last:border-b-0 transition-colors ${
                         active ? 'bg-amber-500/15 text-text' : 'hover:bg-white/5 text-muted'
                       }`}
@@ -428,7 +466,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                 {filteredPets.length === 0 && (
                   <p className="px-3 py-3 text-xs text-muted">Nenhum cliente encontrado com essa busca.</p>
                 )}
-              </div>
+                  </div>
+                  <p className="text-[11px] text-muted">
+                    {deferredPetSearch ? 'Mostrando ate 8 resultados.' : 'Digite um nome, pet ou telefone para refinar a lista.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -1072,7 +1115,6 @@ export default function AgendaPage() {
           pets={pets}
           services={agendaServices}
           staff={staff}
-          onSearchClients={loadPets}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}

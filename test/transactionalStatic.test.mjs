@@ -56,3 +56,11 @@ test('historico de vendas desambigua o relacionamento com vendedor', async () =>
   assert.match(source, /profiles!sales_profile_id_fkey\s*\(/)
   assert.doesNotMatch(source, /['"]profiles\s*\(/)
 })
+
+test('seletor da agenda fecha ao escolher cliente e pesquisa localmente', async () => {
+  const source = await read('src/modules/petshop/pages/AgendaPage.jsx')
+  assert.match(source, /setClientPickerOpen\(false\)/)
+  assert.match(source, /useDeferredValue\(petSearch\)/)
+  assert.match(source, /\.slice\(0, 8\)/)
+  assert.doesNotMatch(source, /onSearchClients/)
+})
