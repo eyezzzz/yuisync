@@ -14,15 +14,45 @@ alter table public.sales
 alter table public.pets
   add column if not exists tenant_id uuid references public.tenants(id);
 
+-- A tabela legada de pets guarda os dados do tutor diretamente e nao possui
+-- client_id. Primeiro usa telefone/e-mail quando eles apontam para um unico
+-- tenant; depois usa o tenant unico do modulo, sem escolher entre candidatos.
+with pet_tenants as (
+  select
+    pet.id as pet_id,
+    min(client.tenant_id::text)::uuid as tenant_id
+  from public.pets pet
+  join public.clients client
+    on client.module_id = pet.module_id
+   and (
+     nullif(trim(client.phone), '') = nullif(trim(pet.phone), '')
+     or (pet.email is not null and lower(trim(client.email)) = lower(trim(pet.email)))
+   )
+  where client.tenant_id is not null
+  group by pet.id
+  having count(distinct client.tenant_id) = 1
+)
 update public.pets pet
-set tenant_id = client.tenant_id
-from public.clients client
-where client.id = pet.id and pet.tenant_id is null;
+set tenant_id = pet_tenants.tenant_id
+from pet_tenants
+where pet.id = pet_tenants.pet_id and pet.tenant_id is null;
+
+with module_tenants as (
+  select module_id, min(tenant_id::text)::uuid as tenant_id
+  from public.clients
+  where tenant_id is not null
+  group by module_id
+  having count(distinct tenant_id) = 1
+)
+update public.pets pet
+set tenant_id = module_tenants.tenant_id
+from module_tenants
+where pet.module_id = module_tenants.module_id and pet.tenant_id is null;
 
 do $$
 begin
   if exists (select 1 from public.pets where tenant_id is null) then
-    raise exception 'Existem pets sem tenant_id; relacione-os a clientes antes de aplicar a migracao.';
+    raise exception 'Existem pets cujo tenant nao pode ser determinado sem ambiguidade.';
   end if;
 end $$;
 

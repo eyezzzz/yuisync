@@ -75,7 +75,7 @@ $$;
 
 do $$
 declare
-  table_name text;
+  scoped_table_name text;
   policy_name text;
   scoped_tables text[] := array[
     'settings', 'clients', 'appointments', 'products', 'sales', 'sale_items',
@@ -89,58 +89,58 @@ declare
   ];
   null_count bigint;
 begin
-  foreach table_name in array scoped_tables loop
-    if to_regclass(format('public.%I', table_name)) is null then
+  foreach scoped_table_name in array scoped_tables loop
+    if to_regclass(format('public.%I', scoped_table_name)) is null then
       continue;
     end if;
 
     if not exists (
       select 1 from information_schema.columns c
       where c.table_schema = 'public'
-        and c.table_name = table_name
+        and c.table_name = scoped_table_name
         and c.column_name = 'tenant_id'
     ) then
-      raise exception 'Tabela operacional %.% sem tenant_id', 'public', table_name;
+      raise exception 'Tabela operacional %.% sem tenant_id', 'public', scoped_table_name;
     end if;
 
-    execute format('select count(*) from public.%I where tenant_id is null', table_name)
+    execute format('select count(*) from public.%I where tenant_id is null', scoped_table_name)
       into null_count;
     if null_count > 0 then
-      raise exception 'Tabela %.% possui % registros sem tenant_id', 'public', table_name, null_count;
+      raise exception 'Tabela %.% possui % registros sem tenant_id', 'public', scoped_table_name, null_count;
     end if;
 
-    execute format('alter table public.%I alter column tenant_id set not null', table_name);
-    execute format('create index if not exists %I on public.%I (tenant_id)', 'idx_' || table_name || '_tenant', table_name);
-    execute format('alter table public.%I enable row level security', table_name);
+    execute format('alter table public.%I alter column tenant_id set not null', scoped_table_name);
+    execute format('create index if not exists %I on public.%I (tenant_id)', 'idx_' || scoped_table_name || '_tenant', scoped_table_name);
+    execute format('alter table public.%I enable row level security', scoped_table_name);
 
     for policy_name in
       select p.policyname from pg_policies p
-      where p.schemaname = 'public' and p.tablename = table_name
+      where p.schemaname = 'public' and p.tablename = scoped_table_name
     loop
-      execute format('drop policy if exists %I on public.%I', policy_name, table_name);
+      execute format('drop policy if exists %I on public.%I', policy_name, scoped_table_name);
     end loop;
 
     execute format(
       'create policy %I on public.%I for select to authenticated using (public.has_tenant_access(tenant_id))',
-      table_name || '_tenant_select', table_name
+      scoped_table_name || '_tenant_select', scoped_table_name
     );
     execute format(
       'create policy %I on public.%I for insert to authenticated with check (public.has_tenant_access(tenant_id))',
-      table_name || '_tenant_insert', table_name
+      scoped_table_name || '_tenant_insert', scoped_table_name
     );
     execute format(
       'create policy %I on public.%I for update to authenticated using (public.has_tenant_access(tenant_id)) with check (public.has_tenant_access(tenant_id))',
-      table_name || '_tenant_update', table_name
+      scoped_table_name || '_tenant_update', scoped_table_name
     );
     execute format(
       'create policy %I on public.%I for delete to authenticated using (public.has_tenant_access(tenant_id))',
-      table_name || '_tenant_delete', table_name
+      scoped_table_name || '_tenant_delete', scoped_table_name
     );
 
-    execute format('drop trigger if exists prevent_tenant_reassignment on public.%I', table_name);
+    execute format('drop trigger if exists prevent_tenant_reassignment on public.%I', scoped_table_name);
     execute format(
       'create trigger prevent_tenant_reassignment before update of tenant_id on public.%I for each row execute function public.prevent_tenant_reassignment()',
-      table_name
+      scoped_table_name
     );
   end loop;
 end $$;
@@ -154,8 +154,8 @@ declare
   provider_name text;
 begin
   provider_name := case
-    when tg_table_name = 'fiscal_documents' then coalesce(new.provider, '')
-    else coalesce(new.settings->>'provider', '')
+    when tg_table_name = 'fiscal_documents' then coalesce(to_jsonb(new)->>'provider', '')
+    else coalesce(to_jsonb(new)->'settings'->>'provider', '')
   end;
 
   if provider_name = 'mock_local' and not exists (
