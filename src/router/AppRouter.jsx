@@ -9,6 +9,7 @@ import { Sidebar } from '../components/Sidebar'
 import { SupportWidget } from '../components/SupportWidget'
 import { SystemSupportPriorityAlert } from '../components/SystemSupportPriorityAlert'
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary'
+import { LoadingState } from '../components/PageState'
 
 const LoginPage = lazy(() => import('../shared/pages/LoginPage'))
 const LauncherPage = lazy(() => import('../shared/pages/LauncherPage'))
@@ -136,7 +137,7 @@ function AppLayout() {
 
         <main className="flex-1 overflow-y-auto">
           <RouteErrorBoundary key={location.pathname}>
-            <Suspense fallback={<LoadingScreen />}>
+            <Suspense fallback={<LoadingState label="Abrindo area..." />}>
               <PageComponent setPage={setPage} />
             </Suspense>
           </RouteErrorBoundary>
