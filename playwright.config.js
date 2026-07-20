@@ -1,6 +1,6 @@
 import { defineConfig, devices } from '@playwright/test'
 
-const baseURL = process.env.E2E_BASE_URL || 'http://127.0.0.1:3080'
+const baseURL = process.env.E2E_BASE_URL || 'http://localhost:3080'
 
 export default defineConfig({
   testDir: './test/e2e',

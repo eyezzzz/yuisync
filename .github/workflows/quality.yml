@@ -20,6 +20,17 @@ jobs:
       - run: npm run test
       - run: npm run test:petbot
       - run: npm run test:transactions
+      - run: npm run test:tenant
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TENANT_A_EMAIL: ${{ secrets.TENANT_A_EMAIL }}
+          TENANT_A_PASSWORD: ${{ secrets.TENANT_A_PASSWORD }}
+          TENANT_A_ID: ${{ secrets.TENANT_A_ID }}
+          TENANT_B_EMAIL: ${{ secrets.TENANT_B_EMAIL }}
+          TENANT_B_PASSWORD: ${{ secrets.TENANT_B_PASSWORD }}
+          TENANT_B_ID: ${{ secrets.TENANT_B_ID }}
+          REQUIRE_TENANT_ISOLATION_TESTS: '1'
       - run: npm run build
 
   e2e:
@@ -34,5 +45,10 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:e2e -- --project=desktop
         env:
+          E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
           E2E_EMAIL: ${{ secrets.E2E_EMAIL }}
           E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+          E2E_COMMON_EMAIL: ${{ secrets.E2E_COMMON_EMAIL }}
+          E2E_COMMON_PASSWORD: ${{ secrets.E2E_COMMON_PASSWORD }}
+          E2E_MANAGER_EMAIL: ${{ secrets.E2E_MANAGER_EMAIL }}
+          E2E_MANAGER_PASSWORD: ${{ secrets.E2E_MANAGER_PASSWORD }}
