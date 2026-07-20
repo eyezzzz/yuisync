@@ -357,7 +357,15 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
 // ── Página Principal ──────────────────────────────────────────────────────────
 export default function VendasPage() {
   const { products, loading: prodLoading, load: loadProducts, error: prodError } = useProducts()
-  const { sales, load: loadSales, createSale, issueSaleFiscal, getDailyStats }  = useSales()
+  const {
+    sales,
+    loading: salesLoading,
+    error: salesError,
+    load: loadSales,
+    createSale,
+    issueSaleFiscal,
+    getDailyStats,
+  } = useSales()
   const { clients: pets, load: loadPets }                                = useClients()
   const { loadSalesStaff } = usePetshopAdvanced()
   const auth = useAuthCtx()
@@ -729,7 +737,26 @@ export default function VendasPage() {
                 </tr>
               </thead>
               <tbody>
-                {sales.length === 0 ? (
+                {salesLoading ? (
+                  <tr>
+                    <td colSpan={5} className="text-center text-sm text-muted py-8">
+                      Carregando vendas...
+                    </td>
+                  </tr>
+                ) : salesError ? (
+                  <tr>
+                    <td colSpan={5} className="text-center py-8">
+                      <p className="text-sm text-red-400">Nao foi possivel carregar o historico: {salesError}</p>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm mt-3"
+                        onClick={() => loadSales({ date: historyDate })}
+                      >
+                        <RefreshCw size={12} /> Tentar novamente
+                      </button>
+                    </td>
+                  </tr>
+                ) : sales.length === 0 ? (
                   <tr>
                     <td colSpan={5} className="text-center text-sm text-muted py-8">
                       Nenhuma venda encontrada para {new Date(`${historyDate}T00:00:00`).toLocaleDateString('pt-BR')}.

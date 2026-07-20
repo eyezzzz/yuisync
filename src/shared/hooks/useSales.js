@@ -71,7 +71,7 @@ function salesSelect({ includeFulfillment = true, includeProfiles = true, includ
     'source',
     includeFulfillment ? 'fulfillment_type' : null,
     'created_at',
-    includeProfiles ? 'profiles ( id, full_name )' : null,
+    includeProfiles ? 'profiles!sales_profile_id_fkey ( id, full_name )' : null,
     includeClients ? 'clients ( id, name, details )' : null,
     'sale_items ( id, quantity, unit_price, subtotal, upsell, products ( id, name, category ) )',
   ].filter(Boolean)

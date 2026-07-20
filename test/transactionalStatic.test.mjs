@@ -50,3 +50,9 @@ test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () =>
     `O deploy possui ${serverlessFunctions.length} funcoes serverless; o limite do Hobby e 12.`,
   )
 })
+
+test('historico de vendas desambigua o relacionamento com vendedor', async () => {
+  const source = await read('src/shared/hooks/useSales.js')
+  assert.match(source, /profiles!sales_profile_id_fkey\s*\(/)
+  assert.doesNotMatch(source, /['"]profiles\s*\(/)
+})
