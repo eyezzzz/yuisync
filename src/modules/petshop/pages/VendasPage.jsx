@@ -40,6 +40,21 @@ const DEFAULT_PAYMENT_SPLITS = [
   createPaymentSplit(2, 'credito', ''),
 ]
 const PRODUCT_PAGE_SIZE_OPTIONS = [50, 100, 200]
+const normalizeProductSearch = (value) => (value || '')
+  .toString()
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim()
+const parseCashierEntry = (value, fallbackQuantity = 1) => {
+  const entry = String(value || '').trim()
+  const quantityPrefix = entry.match(/^(\d+)\s*\*\s*(.*)$/)
+  const quantity = Math.min(999, Math.max(1, Number(quantityPrefix?.[1] || fallbackQuantity) || 1))
+  return {
+    query: (quantityPrefix ? quantityPrefix[2] : entry).trim(),
+    quantity,
+  }
+}
 
 const CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -142,8 +157,12 @@ function CashierWorkspace({
   scannerCode,
   scannerInputRef,
   scannerFeedback,
+  searchResults,
+  quantity,
   onScannerCodeChange,
+  onQuantityChange,
   onScan,
+  onChooseProduct,
   onQty,
   onRemove,
   subtotal,
@@ -166,7 +185,7 @@ function CashierWorkspace({
                 <MonitorUp size={18} className="text-primary" />
                 Caixa em operacao
               </div>
-              <p className="mt-1 text-xs text-muted">Leia o codigo de barras e pressione Enter. Atalho para voltar ao leitor: F2.</p>
+              <p className="mt-1 text-xs text-muted">Leia o codigo de barras ou pesquise pelo nome. Atalho para voltar à busca: F2.</p>
             </div>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-[var(--primary-border)] bg-[var(--primary-bg-light)] px-3 py-1.5 text-xs font-bold text-primary">
@@ -175,19 +194,50 @@ function CashierWorkspace({
           </div>
         </div>
 
-        <form onSubmit={onScan} className="relative">
-          <ScanBarcode size={26} className="absolute left-4 top-1/2 -translate-y-1/2 text-primary" />
-          <input
-            ref={scannerInputRef}
-            aria-label="Leitor de codigo de barras"
-            autoComplete="off"
-            inputMode="numeric"
-            className="inp h-16 border-[var(--primary-border)] bg-white pl-14 pr-28 text-xl font-bold tracking-wide shadow-sm focus:ring-2"
-            placeholder="Leia ou digite o codigo de barras"
-            value={scannerCode}
-            onChange={(event) => onScannerCodeChange(event.target.value)}
-          />
-          <button type="submit" className="btn btn-primary absolute right-2 top-2 h-12 px-5">
+        <form onSubmit={onScan} className="grid grid-cols-[minmax(0,1fr)_120px_132px] gap-2">
+          <div className="relative">
+            <Search size={24} className="absolute left-4 top-1/2 -translate-y-1/2 text-primary" />
+            <input
+              ref={scannerInputRef}
+              aria-label="Buscar produto ou ler codigo de barras"
+              autoComplete="off"
+              className="inp h-16 border-[var(--primary-border)] bg-white pl-14 text-xl font-bold tracking-wide shadow-sm focus:ring-2"
+              placeholder="Nome, codigo ou 2*codigo"
+              value={scannerCode}
+              onChange={(event) => onScannerCodeChange(event.target.value)}
+            />
+            {parseCashierEntry(scannerCode).query.length >= 2 && searchResults.length > 0 && (
+              <div className="absolute left-0 right-0 top-full z-[70] mt-2 max-h-80 overflow-y-auto rounded-2xl border border-[var(--border)] bg-card p-2 shadow-2xl">
+                {searchResults.map((product) => (
+                  <button
+                    key={product.id}
+                    type="button"
+                    onClick={() => onChooseProduct(product)}
+                    className="flex w-full items-center justify-between gap-4 rounded-xl px-4 py-3 text-left transition-colors hover:bg-[var(--primary-bg-light)]"
+                  >
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-semibold text-text">{product.name}</div>
+                      <div className="mt-0.5 text-xs text-muted">EAN {product.barcode || 'nao cadastrado'} · Estoque {product.stock_quantity}</div>
+                    </div>
+                    <strong className="flex-shrink-0 text-sm text-primary">{fmtCurrency(product.price)}</strong>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          <label className="flex h-16 flex-col justify-center rounded-xl border border-[var(--border)] bg-white px-3 shadow-sm">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-muted">Quantidade</span>
+            <input
+              aria-label="Quantidade do produto"
+              type="number"
+              min="1"
+              max="999"
+              value={quantity}
+              onChange={(event) => onQuantityChange(event.target.value)}
+              className="w-full bg-transparent text-xl font-bold text-text outline-none"
+            />
+          </label>
+          <button type="submit" className="btn btn-primary h-16 justify-center px-5">
             Adicionar
           </button>
         </form>
@@ -218,7 +268,7 @@ function CashierWorkspace({
               <ScanBarcode size={32} />
             </div>
             <h3 className="font-bold text-text">Aguardando o primeiro produto</h3>
-            <p className="mt-1 max-w-sm text-sm text-muted">O produto aparecerá aqui automaticamente após a leitura do código de barras.</p>
+            <p className="mt-1 max-w-sm text-sm text-muted">Leia o código de barras ou pesquise pelo nome para adicionar um produto.</p>
           </div>
         ) : (
           <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-card shadow-sm">
@@ -523,6 +573,7 @@ export default function VendasPage() {
   const [historyDate, setHistoryDate] = useState(todayISO())
   const [upsellCandidate, setUpsellCandidate] = useState(null)
   const [scannerCode, setScannerCode] = useState('')
+  const [scannerQuantity, setScannerQuantity] = useState(1)
   const [scannerFeedback, setScannerFeedback] = useState(null)
   const scannerInputRef = useRef(null)
 
@@ -587,6 +638,20 @@ export default function VendasPage() {
     const matchesCat = !catFilter || p.category === catFilter
     return matchesSearch && matchesCat
   }), [products, search, catFilter])
+
+  const cashierProductResults = useMemo(() => {
+    const rawQuery = parseCashierEntry(scannerCode, scannerQuantity).query
+    const query = normalizeProductSearch(rawQuery)
+    if (tab !== 'caixa' || query.length < 2) return []
+
+    return (products || [])
+      .filter((product) => {
+        if (Number(product.stock_quantity || 0) <= 0) return false
+        const barcode = String(product.barcode || '').trim()
+        return normalizeProductSearch(product.name).includes(query) || (barcode && barcode.includes(rawQuery))
+      })
+      .slice(0, 8)
+  }, [products, scannerCode, scannerQuantity, tab])
   
   const cartProductIds = useMemo(() => new Set(cart.map((item) => item.product_id)), [cart])
   const cartByProductId = useMemo(() => new Map(cart.map((item) => [item.product_id, item])), [cart])
@@ -614,11 +679,11 @@ export default function VendasPage() {
   const breakdownTotal = paymentBreakdown.reduce((sum, item) => sum + Number(item.amount || 0), 0)
   const breakdownRemaining = Math.max(0, total - breakdownTotal)
 
-  const addToCart = (product) => {
+  const addToCart = (product, quantity = 1) => {
     setCart(prev => {
       const exists = prev.find(i => i.product_id === product.id)
-      if (exists) return prev.map(i => i.product_id === product.id ? { ...i, quantity: i.quantity + 1 } : i)
-      return [...prev, { product_id: product.id, product, name: product.name, unit_price: product.price, quantity: 1 }]
+      if (exists) return prev.map(i => i.product_id === product.id ? { ...i, quantity: i.quantity + quantity } : i)
+      return [...prev, { product_id: product.id, product, name: product.name, unit_price: product.price, quantity }]
     })
     
     // Verificamos se há um Upsell vinculado
@@ -634,17 +699,26 @@ export default function VendasPage() {
 
   const handleScannerSubmit = (event) => {
     event.preventDefault()
-    const code = scannerCode.trim()
+    const entry = parseCashierEntry(scannerCode, scannerQuantity)
+    const code = entry.query
+    const quantity = entry.quantity
     if (!code) {
       setScannerFeedback({ type: 'error', message: 'Leia ou digite um codigo de barras.' })
       scannerInputRef.current?.focus()
       return
     }
 
-    const product = products.find((item) => String(item.barcode || '').trim() === code)
+    let product = products.find((item) => String(item.barcode || '').trim() === code)
+    if (!product && cashierProductResults.length === 1) {
+      product = cashierProductResults[0]
+    }
     if (!product) {
-      setScannerFeedback({ type: 'error', message: `Nenhum produto encontrado para o codigo ${code}.` })
-      setScannerCode('')
+      setScannerFeedback({
+        type: cashierProductResults.length > 1 ? 'success' : 'error',
+        message: cashierProductResults.length > 1
+          ? 'Selecione um dos produtos encontrados abaixo.'
+          : `Nenhum produto encontrado para "${code}".`,
+      })
       scannerInputRef.current?.focus()
       return
     }
@@ -654,10 +728,31 @@ export default function VendasPage() {
       scannerInputRef.current?.focus()
       return
     }
+    const quantityInCart = Number(cart.find((item) => item.product_id === product.id)?.quantity || 0)
+    if (quantityInCart + quantity > Number(product.stock_quantity || 0)) {
+      setScannerFeedback({ type: 'error', message: `Estoque insuficiente. Disponivel: ${product.stock_quantity}.` })
+      scannerInputRef.current?.focus()
+      return
+    }
 
-    addToCart(product)
-    setScannerFeedback({ type: 'success', message: `${product.name} adicionado ao carrinho.` })
+    addToCart(product, quantity)
+    setScannerFeedback({ type: 'success', message: `${quantity}x ${product.name} adicionado ao carrinho.` })
     setScannerCode('')
+    setScannerQuantity(1)
+    requestAnimationFrame(() => scannerInputRef.current?.focus())
+  }
+
+  const handleChooseCashierProduct = (product) => {
+    const quantity = parseCashierEntry(scannerCode, scannerQuantity).quantity
+    const quantityInCart = Number(cart.find((item) => item.product_id === product.id)?.quantity || 0)
+    if (quantityInCart + quantity > Number(product.stock_quantity || 0)) {
+      setScannerFeedback({ type: 'error', message: `Estoque insuficiente. Disponivel: ${product.stock_quantity}.` })
+      return
+    }
+    addToCart(product, quantity)
+    setScannerFeedback({ type: 'success', message: `${quantity}x ${product.name} adicionado ao carrinho.` })
+    setScannerCode('')
+    setScannerQuantity(1)
     requestAnimationFrame(() => scannerInputRef.current?.focus())
   }
 
@@ -1005,11 +1100,19 @@ export default function VendasPage() {
                 scannerCode={scannerCode}
                 scannerInputRef={scannerInputRef}
                 scannerFeedback={scannerFeedback}
+                searchResults={cashierProductResults}
+                quantity={scannerQuantity}
                 onScannerCodeChange={(value) => {
                   setScannerCode(value)
+                  const quantityPrefix = value.match(/^(\d+)\s*\*/)
+                  if (quantityPrefix) {
+                    setScannerQuantity(Math.min(999, Math.max(1, Number(quantityPrefix[1]) || 1)))
+                  }
                   if (scannerFeedback) setScannerFeedback(null)
                 }}
+                onQuantityChange={(value) => setScannerQuantity(Math.min(999, Math.max(1, Number(value) || 1)))}
                 onScan={handleScannerSubmit}
+                onChooseProduct={handleChooseCashierProduct}
                 onQty={changeQty}
                 onRemove={removeFromCart}
                 subtotal={subtotal}
