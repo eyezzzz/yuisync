@@ -219,9 +219,9 @@ function LegacyClientsImportModal({ onClose, moduleId, tenantId, onDone }) {
         <div className="modal-body space-y-4">
           <p className="text-sm text-muted">Importacao isolada para admin global. Aceita o XLS de clientes do sistema antigo.</p>
           <label className="flex items-center justify-between gap-3 border border-[var(--border)] rounded-xl p-4 cursor-pointer hover:bg-white/5 transition-colors">
-            <div><p className="text-sm font-semibold text-text">Clientes GABRIEL.xls</p><p className="text-xs text-muted">{file ? file.name : 'Clientes legado (.xls/.xlsx)'}</p></div>
+            <div><p className="text-sm font-semibold text-text">Importar clientes</p><p className="text-xs text-muted">{file ? file.name : 'Clientes (.xlsx/.csv)'}</p></div>
             <Upload size={18} className="text-emerald-500" />
-            <input type="file" accept=".xls,.xlsx" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+            <input type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)} />
           </label>
           {importing && <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden"><div className="bg-emerald-500 h-full transition-all duration-300" style={{ width: `${progress}%` }} /></div>}
           {error && <p className="text-sm text-red-500">{error}</p>}

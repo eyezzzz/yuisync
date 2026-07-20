@@ -1,21 +1,21 @@
-import React, { useState, useEffect } from 'react'
+import React, { Suspense, lazy, useState, useEffect } from 'react'
 import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-dom'
 import { Menu } from 'lucide-react'
 import { useAuthCtx } from '../context/AuthContext'
 import { useModuleCtx } from '../context/ModuleContext'
-import LoginPage from '../shared/pages/LoginPage'
-import LauncherPage from '../shared/pages/LauncherPage'
-import PublicHomePage from '../public/pages/PublicHomePage'
-import PublicSalesPage from '../public/pages/PublicSalesPage'
-import PublicCheckoutPage from '../public/pages/PublicCheckoutPage'
-import PublicBookingPage from '../public/pages/PublicBookingPage'
-import PublicClientPortalPage from '../public/pages/PublicClientPortalPage'
-import DashboardPage from '../modules/petshop/pages/DashboardPage'
 import StarField from '../shared/components/StarField'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { Sidebar } from '../components/Sidebar'
 import { SupportWidget } from '../components/SupportWidget'
 import { SystemSupportPriorityAlert } from '../components/SystemSupportPriorityAlert'
+
+const LoginPage = lazy(() => import('../shared/pages/LoginPage'))
+const LauncherPage = lazy(() => import('../shared/pages/LauncherPage'))
+const PublicHomePage = lazy(() => import('../public/pages/PublicHomePage'))
+const PublicSalesPage = lazy(() => import('../public/pages/PublicSalesPage'))
+const PublicCheckoutPage = lazy(() => import('../public/pages/PublicCheckoutPage'))
+const PublicBookingPage = lazy(() => import('../public/pages/PublicBookingPage'))
+const PublicClientPortalPage = lazy(() => import('../public/pages/PublicClientPortalPage'))
 
 function getModuleNavItems(activeModule) {
   if (!activeModule) return []
@@ -97,7 +97,7 @@ function AppLayout() {
     return <Navigate to={`/${activeModuleId}/${fallbackPage}`} replace />
   }
 
-  const PageComponent = activeModule.pages[currentPath] || activeModule.pages[fallbackPage] || DashboardPage
+  const PageComponent = activeModule.pages[currentPath] || activeModule.pages[fallbackPage]
   
   const setPage = (pageName) => navigate(`/${activeModuleId}/${pageName}`)
 
@@ -114,7 +114,7 @@ function AppLayout() {
       />
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 z-10">
         <header className="lg:hidden flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border2)] bg-surface flex-shrink-0">
-          <button onClick={() => setOpen(true)} className="text-muted hover:text-text">
+          <button type="button" aria-label="Abrir menu" onClick={() => setOpen(true)} className="text-muted hover:text-text">
             <Menu size={19} />
           </button>
           <span className="font-display font-bold text-sm text-text">
@@ -123,7 +123,9 @@ function AppLayout() {
         </header>
 
         <main className="flex-1 overflow-y-auto">
-          <PageComponent setPage={setPage} />
+          <Suspense fallback={<LoadingScreen />}>
+            <PageComponent setPage={setPage} />
+          </Suspense>
         </main>
       </div>
       {activeModuleId === 'system' && <SystemSupportPriorityAlert />}
@@ -139,6 +141,7 @@ export function AppRouter() {
 
   if (!session) {
     return (
+      <Suspense fallback={<LoadingScreen />}>
       <Routes>
         <Route path="/loading" element={<LoadingScreen />} />
         <Route path="/" element={<PublicHomePage />} />
@@ -151,10 +154,12 @@ export function AppRouter() {
         <Route path="/:moduleId/*" element={<Navigate to="/entrar" replace />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
+      </Suspense>
     )
   }
 
   return (
+    <Suspense fallback={<LoadingScreen />}>
     <Routes>
       <Route path="/loading" element={<LoadingScreen />} />
       <Route path="/" element={<LauncherPage />} />
@@ -167,5 +172,6 @@ export function AppRouter() {
       <Route path="/:moduleId/*" element={<AppLayout />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+    </Suspense>
   )
 }

@@ -172,11 +172,42 @@ function mapClientRow(row) {
 }
 
 async function parseWorkbook(file) {
-  const XLSX = await import('xlsx')
-  const buffer = await file.arrayBuffer()
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: true })
-  const sheet = workbook.Sheets[workbook.SheetNames[0]]
-  return XLSX.utils.sheet_to_json(sheet, { defval: null, raw: false })
+  const extension = String(file?.name || '').toLowerCase().split('.').pop()
+
+  if (extension === 'xls') {
+    throw new Error('O formato .xls nao e mais aceito por seguranca. Converta o arquivo para .xlsx ou .csv.')
+  }
+
+  if (extension === 'csv') {
+    const [{ default: Papa }, text] = await Promise.all([
+      import('papaparse'),
+      file.text(),
+    ])
+    const parsed = Papa.parse(text, {
+      header: true,
+      skipEmptyLines: 'greedy',
+      transformHeader: (header) => cleanText(header),
+    })
+    if (parsed.errors?.length) {
+      throw new Error(`CSV invalido: ${parsed.errors[0].message}`)
+    }
+    return parsed.data
+  }
+
+  if (extension !== 'xlsx') {
+    throw new Error('Formato nao suportado. Envie um arquivo .xlsx ou .csv.')
+  }
+
+  const { default: readXlsxFile } = await import('read-excel-file/browser')
+  const matrix = await readXlsxFile(file)
+  const [headers = [], ...dataRows] = matrix
+  const normalizedHeaders = headers.map((header) => cleanText(header))
+
+  return dataRows
+    .filter((row) => row.some((value) => value !== null && cleanText(value) !== ''))
+    .map((row) => Object.fromEntries(
+      normalizedHeaders.map((header, index) => [header || `coluna_${index + 1}`, row[index] ?? null])
+    ))
 }
 
 export async function parseLegacyProducts(file) {

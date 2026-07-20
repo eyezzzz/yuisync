@@ -1,3 +1,4 @@
+import { lazy } from 'react'
 import {
   LayoutDashboard, Calendar, ShoppingCart, Package,
   PawPrint, MessageSquare, Users, Settings, TrendingUp,
@@ -5,29 +6,26 @@ import {
   Wallet, ClipboardList,
 } from 'lucide-react'
 
-// Paginas PetShop
-import DashboardPage from '../modules/petshop/pages/DashboardPage'
-import AgendaPage from '../modules/petshop/pages/AgendaPage'
-import VendasPage from '../modules/petshop/pages/VendasPage'
-import EstoquePage from '../modules/petshop/pages/EstoquePage'
-import PetsPage from '../modules/petshop/pages/PetsPage'
-import ChatPage from '../modules/petshop/pages/ChatPage'
-import PlanosPage from '../modules/petshop/pages/PlanosPage'
-import FidelidadePage from '../modules/petshop/pages/FidelidadePage'
-import StatusLivePage from '../modules/petshop/pages/StatusLivePage'
-import EquipePage from '../modules/petshop/pages/EquipePage'
-import CampanhasPage from '../modules/petshop/pages/CampanhasPage'
-import CaixaPage from '../modules/petshop/pages/CaixaPage'
-import OrdensEntregaPage from '../modules/petshop/pages/OrdensEntregaPage'
-import GrowthPage from '../modules/petshop/pages/GrowthPage'
-
-// Paginas Compartilhadas
-import UsersPage from '../shared/pages/UsersPage'
-import SettingsPage from '../shared/pages/SettingsPage'
-import ReportsSharedPage from '../shared/pages/ReportsSharedPage'
-import BillingPage from '../shared/pages/BillingPage'
-import LogsPage from '../shared/pages/LogsPage'
-import SupportHubPage from '../shared/pages/SupportHubPage'
+const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
+const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPage'))
+const VendasPage = lazy(() => import('../modules/petshop/pages/VendasPage'))
+const EstoquePage = lazy(() => import('../modules/petshop/pages/EstoquePage'))
+const PetsPage = lazy(() => import('../modules/petshop/pages/PetsPage'))
+const ChatPage = lazy(() => import('../modules/petshop/pages/ChatPage'))
+const PlanosPage = lazy(() => import('../modules/petshop/pages/PlanosPage'))
+const FidelidadePage = lazy(() => import('../modules/petshop/pages/FidelidadePage'))
+const StatusLivePage = lazy(() => import('../modules/petshop/pages/StatusLivePage'))
+const EquipePage = lazy(() => import('../modules/petshop/pages/EquipePage'))
+const CampanhasPage = lazy(() => import('../modules/petshop/pages/CampanhasPage'))
+const CaixaPage = lazy(() => import('../modules/petshop/pages/CaixaPage'))
+const OrdensEntregaPage = lazy(() => import('../modules/petshop/pages/OrdensEntregaPage'))
+const GrowthPage = lazy(() => import('../modules/petshop/pages/GrowthPage'))
+const UsersPage = lazy(() => import('../shared/pages/UsersPage'))
+const SettingsPage = lazy(() => import('../shared/pages/SettingsPage'))
+const ReportsSharedPage = lazy(() => import('../shared/pages/ReportsSharedPage'))
+const BillingPage = lazy(() => import('../shared/pages/BillingPage'))
+const LogsPage = lazy(() => import('../shared/pages/LogsPage'))
+const SupportHubPage = lazy(() => import('../shared/pages/SupportHubPage'))
 
 export const MODULES = {
   petshop: {

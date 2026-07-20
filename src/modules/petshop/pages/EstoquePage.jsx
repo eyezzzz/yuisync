@@ -716,7 +716,7 @@ function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
         <p className="text-xs text-muted">{file ? file.name : hint}</p>
       </div>
       <Upload size={18} className="text-primary"/>
-      <input type="file" accept=".xls,.xlsx" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)}/>
+      <input type="file" accept=".xlsx,.csv" className="hidden" onChange={(e) => setFile(e.target.files?.[0] || null)}/>
     </label>
   )
 
@@ -732,7 +732,7 @@ function LegacyImportModal({ onClose, moduleId, tenantId, onDone }) {
           <p className="text-sm text-muted">
             Importacao isolada para admin global. Aceita o XLS de produtos do sistema antigo e cria/atualiza o estoque.
           </p>
-          <FilePicker file={productFile} setFile={setProductFile} label="Produtos GABRIEL.xls" hint="Estoque legado (.xls/.xlsx)"/>
+          <FilePicker file={productFile} setFile={setProductFile} label="Importar produtos" hint="Estoque (.xlsx/.csv)"/>
 
           {importing && (
             <div className="w-full bg-white/5 rounded-full h-1.5 overflow-hidden">
