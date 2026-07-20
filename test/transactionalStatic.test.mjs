@@ -94,3 +94,12 @@ test('modo caixa do PDV usa scanner e preserva o checkout transacional', async (
   assert.match(routerSource, /!focusMode && \(\s*<Sidebar/)
   assert.match(routerSource, /activeModuleId !== 'system' && !focusMode && <SupportWidget/)
 })
+
+test('cards de clientes preservam nomes legiveis e acoes separadas', async () => {
+  const source = await read('src/modules/petshop/pages/PetsPage.jsx')
+  assert.match(source, /function formatPersonName/)
+  assert.match(source, /replace\(\/\^\[\\s:;,\.=_-\]\+\//)
+  assert.match(source, /line-clamp-2 text-base font-bold leading-snug/)
+  assert.match(source, /flex min-h-\[250px\] flex-col/)
+  assert.match(source, /mt-auto border-t/)
+})

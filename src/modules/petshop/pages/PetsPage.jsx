@@ -31,6 +31,15 @@ function digits(value) { return String(value || '').replace(/\D/g, '') }
 function normalize(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() }
 function formatPhone(value) { const d = digits(value); if (d.length === 11) return `(${d.slice(0, 2)}) ${d.slice(2, 7)}-${d.slice(7)}`; if (d.length === 10) return `(${d.slice(0, 2)}) ${d.slice(2, 6)}-${d.slice(6)}`; return value || '-' }
 function formatCpf(value) { const d = digits(value); if (d.length === 11) return `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}`; return value || '-' }
+function formatPersonName(value) {
+  const clean = String(value || '').replace(/^[\s:;,.=_-]+/, '').replace(/\s+/g, ' ').trim()
+  if (!clean) return 'Tutor sem nome'
+  if (clean !== clean.toUpperCase()) return clean
+  const lowercaseWords = new Set(['da', 'das', 'de', 'do', 'dos', 'e'])
+  return clean.toLocaleLowerCase('pt-BR').split(' ').map((word, index) => (
+    index > 0 && lowercaseWords.has(word) ? word : `${word.charAt(0).toLocaleUpperCase('pt-BR')}${word.slice(1)}`
+  )).join(' ')
+}
 function getPlanTone(status) { return status === 'active' ? 'badge-green' : status === 'paused' ? 'badge-amber' : 'badge-gray' }
 function getServiceLabel(type) { return ({ banho: 'Banho', tosa: 'Tosa', banho_e_tosa: 'Banho e tosa', consulta: 'Consulta', vacina: 'Vacina', motodog: 'MotoDog' }[type] || type) }
 function getRegistrationBadge(pet = {}) {
@@ -339,33 +348,39 @@ export default function PetsPage() {
             const ageLabel = age(pet.birth_date)
             const registrationBadge = getRegistrationBadge(pet)
             return (
-              <div key={pet.id} className="bg-card border border-[var(--border)] rounded-2xl p-5 transition-all hover:-translate-y-1 hover:border-emerald-500/30 shadow-card">
-                <div className="flex items-start justify-between gap-3">
-                  <button type="button" onClick={() => setDrawerPet(pet)} className="flex items-start gap-4 text-left flex-1 min-w-0">
+              <div key={pet.id} className="flex min-h-[250px] flex-col rounded-2xl border border-[var(--border)] bg-card p-5 shadow-card transition-all hover:-translate-y-1 hover:border-emerald-500/30">
+                <div className="flex items-start gap-4">
+                  <button type="button" onClick={() => setDrawerPet(pet)} className="flex min-w-0 flex-1 items-start gap-4 text-left">
                     <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center flex-shrink-0">
                       <Icon size={24} />
                     </div>
                     <div className="min-w-0 flex-1">
-                      <p className="font-display font-bold text-lg text-text leading-tight break-words">
-                        {pet.owner_name || 'Tutor sem nome'}
-                      </p>
+                      <h3 className="line-clamp-2 text-base font-bold leading-snug text-text" title={pet.owner_name || 'Tutor sem nome'}>
+                        {formatPersonName(pet.owner_name)}
+                      </h3>
                       {subscription && (
-                        <p className="text-sm font-semibold text-emerald-600 mt-1 break-words">
+                        <p className="mt-1 truncate text-xs font-semibold text-emerald-600">
                           {subscription.subscription_plans?.name || 'Pacote ativo'}
                         </p>
                       )}
-                      <p className="text-sm text-muted mt-1 break-words">
+                      <p className="mt-1 truncate text-sm text-muted" title={`${pet.pet_name || 'Pet sem nome'}${pet.breed ? ` - ${pet.breed}` : ''}`}>
                         {pet.pet_name || 'Pet sem nome'}{pet.breed ? ` - ${pet.breed}` : ''}
                       </p>
                     </div>
                   </button>
-                  <div className="flex items-center gap-2 flex-shrink-0">
-                    <span className={`badge ${registrationBadge.cls}`}>{registrationBadge.label}</span>
-                    <button onClick={() => setModalPet(pet)} className="btn btn-ghost btn-sm">Editar</button>
+                  <span className={`badge flex-shrink-0 ${registrationBadge.cls}`}>{registrationBadge.label}</span>
+                </div>
+                <div className="mt-auto border-t border-[var(--border2)] pt-4">
+                  <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
+                    <div className="flex min-w-0 items-center gap-2 text-muted"><Phone size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{formatPhone(pet.phone)}</span></div>
+                    <div className="flex min-w-0 items-center gap-2 text-muted"><Weight size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{pet.weight_kg ? `${pet.weight_kg} kg` : 'Peso nao informado'}</span></div>
+                    {ageLabel && <div className="flex min-w-0 items-center gap-2 text-muted"><CalendarIcon size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{ageLabel}</span></div>}
+                  </div>
+                  <div className="mt-4 flex items-center justify-end gap-2">
+                    <button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar</button>
                     <button type="button" aria-label={`Excluir ${pet.pet_name || pet.owner_name}`} title="Excluir" onClick={() => handleDelete(pet.id)} className="btn btn-ghost btn-sm text-red-400"><Trash2 size={13} /></button>
                   </div>
                 </div>
-                <div className="mt-4 pt-4 border-t border-[var(--border2)] grid grid-cols-1 gap-2 text-sm"><div className="flex items-center gap-2 text-muted"><Phone size={13} className="text-emerald-500" /><span>{formatPhone(pet.phone)}</span></div><div className="flex items-center gap-2 text-muted"><Weight size={13} className="text-emerald-500" /><span>{pet.weight_kg ? `${pet.weight_kg} kg` : 'Peso nao informado'}</span></div>{ageLabel && <div className="flex items-center gap-2 text-muted"><CalendarIcon size={13} className="text-emerald-500" /><span>{ageLabel}</span></div>}</div>
               </div>
             )
           })}
