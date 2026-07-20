@@ -3,7 +3,8 @@ import { createPortal } from 'react-dom'
 import {
   ShoppingCart, Search, Plus, Minus, Trash2, X,
   CreditCard, Banknote, Smartphone, Check, Tag, Package,
-  RefreshCw, AlertCircle, Receipt, User, History, PawPrint, MessageSquare, Truck, FileText, ExternalLink
+  RefreshCw, AlertCircle, Receipt, User, History, PawPrint, MessageSquare, Truck, FileText, ExternalLink,
+  ScanBarcode, MonitorUp, Keyboard
 } from 'lucide-react'
 import { useProducts } from '../../../shared/hooks/useProducts'
 import { useSales }    from '../../../shared/hooks/useSales'
@@ -132,6 +133,124 @@ function ProductCard({ product, onAdd, cartItem, onRemove }) {
           <Minus size={12} strokeWidth={3} />
         </button>
       )}
+    </div>
+  )
+}
+
+function CashierWorkspace({
+  cart,
+  scannerCode,
+  scannerInputRef,
+  scannerFeedback,
+  onScannerCodeChange,
+  onScan,
+  onQty,
+  onRemove,
+  subtotal,
+  discount,
+  total,
+}) {
+  const itemCount = cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
+
+  return (
+    <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
+      <div className="border-b border-[var(--border)] bg-card px-5 py-4 lg:px-7">
+        <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-bold text-text">
+              <MonitorUp size={18} className="text-primary" />
+              Caixa em operacao
+            </div>
+            <p className="mt-1 text-xs text-muted">Leia o codigo de barras e pressione Enter. Atalho para voltar ao leitor: F2.</p>
+          </div>
+          <div className="flex items-center gap-2 rounded-full border border-[var(--primary-border)] bg-[var(--primary-bg-light)] px-3 py-1.5 text-xs font-bold text-primary">
+            <span className="h-2 w-2 rounded-full bg-[var(--primary)]" />
+            Scanner pronto
+          </div>
+        </div>
+
+        <form onSubmit={onScan} className="relative">
+          <ScanBarcode size={26} className="absolute left-4 top-1/2 -translate-y-1/2 text-primary" />
+          <input
+            ref={scannerInputRef}
+            aria-label="Leitor de codigo de barras"
+            autoComplete="off"
+            inputMode="numeric"
+            className="inp h-16 border-[var(--primary-border)] bg-white pl-14 pr-28 text-xl font-bold tracking-wide shadow-sm focus:ring-2"
+            placeholder="Leia ou digite o codigo de barras"
+            value={scannerCode}
+            onChange={(event) => onScannerCodeChange(event.target.value)}
+          />
+          <button type="submit" className="btn btn-primary absolute right-2 top-2 h-12 px-5">
+            Adicionar
+          </button>
+        </form>
+        {scannerFeedback && (
+          <div
+            role="status"
+            className={`mt-2 text-xs font-semibold ${scannerFeedback.type === 'error' ? 'text-red-500' : 'text-primary'}`}
+          >
+            {scannerFeedback.message}
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-5 py-4 lg:px-7">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="text-base font-bold text-text">Itens da venda</h2>
+            <p className="text-xs text-muted">{itemCount} {itemCount === 1 ? 'item registrado' : 'itens registrados'}</p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <Keyboard size={15} /> Leitura continua ativa
+          </div>
+        </div>
+
+        {cart.length === 0 ? (
+          <div className="flex min-h-64 flex-col items-center justify-center rounded-2xl border border-dashed border-[var(--border)] bg-card p-8 text-center">
+            <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-[var(--primary-bg-light)] text-primary">
+              <ScanBarcode size={32} />
+            </div>
+            <h3 className="font-bold text-text">Aguardando o primeiro produto</h3>
+            <p className="mt-1 max-w-sm text-sm text-muted">O produto aparecerá aqui automaticamente após a leitura do código de barras.</p>
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-2xl border border-[var(--border)] bg-card shadow-sm">
+            <div className="grid grid-cols-[minmax(0,1fr)_110px_150px_120px_48px] gap-3 border-b border-[var(--border)] bg-slate-50 px-5 py-3 text-[10px] font-bold uppercase tracking-widest text-muted">
+              <span>Produto</span><span>Unitario</span><span>Quantidade</span><span className="text-right">Subtotal</span><span />
+            </div>
+            {cart.map((item) => (
+              <div key={item.product_id} className="grid grid-cols-[minmax(0,1fr)_110px_150px_120px_48px] items-center gap-3 border-b border-[var(--border2)] px-5 py-4 last:border-0">
+                <div className="min-w-0">
+                  <div className="truncate font-semibold text-text">{item.product?.name || item.name}</div>
+                  <div className="mt-0.5 text-xs text-muted">EAN {item.product?.barcode || 'nao cadastrado'}</div>
+                </div>
+                <div className="text-sm text-muted">{fmtCurrency(item.unit_price)}</div>
+                <div className="inline-flex w-fit items-center rounded-xl border border-[var(--border)] bg-slate-50 p-1">
+                  <button type="button" aria-label={`Diminuir ${item.product?.name || item.name}`} onClick={() => onQty(item.product_id, -1)} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-white hover:text-text"><Minus size={14} /></button>
+                  <span className="w-10 text-center text-sm font-bold text-text">{item.quantity}</span>
+                  <button type="button" aria-label={`Aumentar ${item.product?.name || item.name}`} onClick={() => onQty(item.product_id, 1)} className="flex h-8 w-8 items-center justify-center rounded-lg text-muted hover:bg-white hover:text-text"><Plus size={14} /></button>
+                </div>
+                <div className="text-right text-base font-bold text-text">{fmtCurrency(item.unit_price * item.quantity)}</div>
+                <button type="button" aria-label={`Remover ${item.product?.name || item.name}`} onClick={() => onRemove(item.product_id)} className="flex h-9 w-9 items-center justify-center rounded-lg text-muted hover:bg-red-50 hover:text-red-500"><Trash2 size={16} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className="border-t border-[var(--border)] bg-card px-5 py-4 lg:px-7">
+        <div className="flex flex-wrap items-end justify-between gap-5">
+          <div className="flex gap-8 text-sm">
+            <div><span className="block text-xs text-muted">Subtotal</span><strong className="text-text">{fmtCurrency(subtotal)}</strong></div>
+            <div><span className="block text-xs text-muted">Desconto</span><strong className="text-text">{fmtCurrency(Number(discount) || 0)}</strong></div>
+          </div>
+          <div className="text-right">
+            <span className="block text-xs font-bold uppercase tracking-widest text-muted">Total da compra</span>
+            <strong className="font-display text-4xl font-bold text-primary">{fmtCurrency(total)}</strong>
+          </div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -272,7 +391,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
   }
 
   return createPortal(
-    <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-overlay theme-petshop-modal" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-box max-w-sm">
         <div className="modal-header">
            <h2 className="font-display font-bold text-xl text-text">Venda Registrada!</h2>
@@ -280,15 +399,15 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
         </div>
 
         <div className="modal-body text-center">
-          <div className="w-16 h-16 rounded-3xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 mx-auto mb-6 border border-emerald-500/10 shadow-inner">
+          <div className="w-16 h-16 rounded-3xl bg-[var(--primary-bg-light)] flex items-center justify-center text-primary mx-auto mb-6 border border-[var(--primary-border)] shadow-inner">
              <Check size={32} strokeWidth={3}/>
           </div>
           
           <div className="space-y-1 mb-8">
             <p className="text-muted text-[10px] uppercase font-black tracking-[0.2em]">Total da Venda</p>
-            <p className="font-display font-black text-4xl text-emerald-400 drop-shadow-[0_0_20px_rgba(52,211,153,0.4)]">
+            <div className="font-display font-bold text-4xl text-primary">
               {fmtCurrency(sale.total)}
-            </p>
+            </div>
           </div>
 
           <div className="bg-white/5 border border-white/5 rounded-2xl p-5 text-left space-y-3 mb-8">
@@ -397,6 +516,9 @@ export default function VendasPage() {
   const [tab, setTab]           = useState('pdv')
   const [historyDate, setHistoryDate] = useState(todayISO())
   const [upsellCandidate, setUpsellCandidate] = useState(null)
+  const [scannerCode, setScannerCode] = useState('')
+  const [scannerFeedback, setScannerFeedback] = useState(null)
+  const scannerInputRef = useRef(null)
 
   useEffect(() => {
     loadProducts({ activeOnly: true })
@@ -495,6 +617,49 @@ export default function VendasPage() {
 
     setSearch('')
   }
+
+  const handleScannerSubmit = (event) => {
+    event.preventDefault()
+    const code = scannerCode.trim()
+    if (!code) {
+      setScannerFeedback({ type: 'error', message: 'Leia ou digite um codigo de barras.' })
+      scannerInputRef.current?.focus()
+      return
+    }
+
+    const product = products.find((item) => String(item.barcode || '').trim() === code)
+    if (!product) {
+      setScannerFeedback({ type: 'error', message: `Nenhum produto encontrado para o codigo ${code}.` })
+      setScannerCode('')
+      scannerInputRef.current?.focus()
+      return
+    }
+    if (Number(product.stock_quantity || 0) <= 0) {
+      setScannerFeedback({ type: 'error', message: `${product.name} esta sem estoque.` })
+      setScannerCode('')
+      scannerInputRef.current?.focus()
+      return
+    }
+
+    addToCart(product)
+    setScannerFeedback({ type: 'success', message: `${product.name} adicionado ao carrinho.` })
+    setScannerCode('')
+    requestAnimationFrame(() => scannerInputRef.current?.focus())
+  }
+
+  useEffect(() => {
+    if (tab !== 'caixa') return undefined
+    scannerInputRef.current?.focus()
+
+    const focusScanner = (event) => {
+      if (event.key !== 'F2') return
+      event.preventDefault()
+      scannerInputRef.current?.focus()
+      scannerInputRef.current?.select()
+    }
+    window.addEventListener('keydown', focusScanner)
+    return () => window.removeEventListener('keydown', focusScanner)
+  }, [tab])
 
   const changeQty = (productId, delta) => {
     setCart(prev => prev.map(i => i.product_id === productId ? { ...i, quantity: Math.max(0, i.quantity + delta) } : i).filter(i => i.quantity > 0))
@@ -695,6 +860,14 @@ export default function VendasPage() {
           >
             <ShoppingCart size={14}/> PDV
           </button>
+          <button onClick={() => setTab('caixa')}
+            className={`flex items-center gap-2 px-5 py-2 text-xs font-bold rounded-lg transition-all ${
+              tab === 'caixa' ? 'bg-primary text-gray-950 shadow-lg' : 'text-muted hover:text-text'
+            }`}
+            style={tab === 'caixa' ? { backgroundColor: 'var(--primary)' } : {}}
+          >
+            <ScanBarcode size={14}/> Modo Caixa
+          </button>
           <button onClick={() => setTab('historico')}
             className={`flex items-center gap-2 px-5 py-2 text-xs font-bold rounded-lg transition-all ${
               tab === 'historico' ? 'bg-primary text-gray-950 shadow-lg' : 'text-muted hover:text-text'
@@ -810,6 +983,25 @@ export default function VendasPage() {
       ) : (
         <div className="flex-1 flex overflow-hidden min-h-0">
           <div className="flex-1 flex flex-col overflow-hidden border-r border-[var(--border2)]">
+            {tab === 'caixa' ? (
+              <CashierWorkspace
+                cart={cart}
+                scannerCode={scannerCode}
+                scannerInputRef={scannerInputRef}
+                scannerFeedback={scannerFeedback}
+                onScannerCodeChange={(value) => {
+                  setScannerCode(value)
+                  if (scannerFeedback) setScannerFeedback(null)
+                }}
+                onScan={handleScannerSubmit}
+                onQty={changeQty}
+                onRemove={removeFromCart}
+                subtotal={subtotal}
+                discount={discount}
+                total={total}
+              />
+            ) : (
+              <>
             <div className="px-4 py-3 border-b border-[var(--border2)] flex items-center gap-4">
               <div className="relative flex-1">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
@@ -940,12 +1132,16 @@ export default function VendasPage() {
                 )}
               </div>
             </div>
+              </>
+            )}
           </div>
 
           <div className="w-80 lg:w-96 flex flex-col bg-surface flex-shrink-0 border-l border-[var(--border2)]">
-            <div className="px-4 py-3 border-b border-[var(--border2)] font-display font-bold">Carrinho</div>
-            <div className="flex-1 overflow-y-auto px-4">{cart.map(item => <CartItem key={item.product_id} item={item} onQty={changeQty} onRemove={removeFromCart}/>)}</div>
-            <div className="p-4 border-t border-[var(--border2)] space-y-4">
+            <div className="px-4 py-3 border-b border-[var(--border2)] font-display font-bold">{tab === 'caixa' ? 'Fechamento da venda' : 'Carrinho'}</div>
+            {tab !== 'caixa' && (
+              <div className="flex-1 overflow-y-auto px-4">{cart.map(item => <CartItem key={item.product_id} item={item} onQty={changeQty} onRemove={removeFromCart}/>)}</div>
+            )}
+            <div className={`${tab === 'caixa' ? 'flex-1 overflow-y-auto' : ''} p-4 border-t border-[var(--border2)] space-y-4`}>
               <div className="relative" ref={searchRef}>
                 <div className="relative">
                   <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
@@ -1160,33 +1356,30 @@ export default function VendasPage() {
                   <span>{err || prodError}</span>
                 </div>
               )}
-              <div className="bg-black/20 rounded-xl p-3 border border-[var(--border2)]">
-                <div className="flex justify-between font-bold text-lg text-emerald-400"><span>Total</span><span>{fmtCurrency(total)}</span></div>
+              <div className="rounded-2xl border border-[var(--border)] bg-card p-4 shadow-sm">
+                <div className="flex items-end justify-between gap-3">
+                  <span className="text-sm font-semibold text-muted">Total da venda</span>
+                  <strong className="font-display text-2xl font-bold text-primary">{fmtCurrency(total)}</strong>
+                </div>
               </div>
               <button 
                 onClick={handleSell} 
                 disabled={saving || !cart.length || (paymentBreakdownEnabled && Math.abs(breakdownTotal - total) > 0.009)} 
                 className={`
-                  w-full relative overflow-hidden group
-                  py-4 rounded-2xl flex items-center justify-center gap-3
-                  font-display font-black text-sm uppercase tracking-[0.2em]
-                  transition-all duration-300 transform active:scale-95
+                  btn w-full py-4 rounded-xl flex items-center justify-center gap-2
+                  font-display font-bold text-sm transition-all active:scale-[0.99]
                   ${saving || !cart.length 
-                    ? 'bg-white/5 text-muted cursor-not-allowed border border-white/5' 
-                    : 'bg-emerald-500 text-gray-950 shadow-[0_0_30px_rgba(16,185,129,0.3)] hover:shadow-[0_0_45px_rgba(16,185,129,0.5)] hover:-translate-y-0.5'}
+                    ? 'bg-slate-100 text-muted cursor-not-allowed border border-[var(--border)]'
+                    : 'btn-primary'}
                 `}
               >
                 {saving ? (
                   <RefreshCw size={20} className="animate-spin" />
                 ) : (
                   <>
-                    <Check size={20} strokeWidth={3} className="group-hover:scale-125 transition-transform" />
-                    <span>FINALIZAR • {fmtCurrency(total)}</span>
+                    <Check size={19} strokeWidth={2.5} />
+                    <span>Finalizar venda · {fmtCurrency(total)}</span>
                   </>
-                )}
-                {/* Efeito de brilho que percorre o botão */}
-                {!saving && cart.length > 0 && (
-                  <div className="absolute inset-0 w-1/2 h-full bg-gradient-to-r from-transparent via-white/20 to-transparent -skew-x-[30deg] -translate-x-[200%] group-hover:animate-[shimmer_1.5s_infinite]" />
                 )}
               </button>
             </div>

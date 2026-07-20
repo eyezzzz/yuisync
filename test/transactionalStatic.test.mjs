@@ -69,3 +69,14 @@ test('seletor da agenda fecha ao escolher cliente e usa busca hibrida limitada',
   assert.match(clientsSource, /\.limit\(limit\)/)
   assert.doesNotMatch(source, /onSearchClients=\{loadPets\}/)
 })
+
+test('modo caixa do PDV usa scanner e preserva o checkout transacional', async () => {
+  const source = await read('src/modules/petshop/pages/VendasPage.jsx')
+  assert.match(source, /tab === 'caixa'/)
+  assert.match(source, /Leitor de codigo de barras/)
+  assert.match(source, /String\(item\.barcode \|\| ''\)\.trim\(\) === code/)
+  assert.match(source, /event\.key !== 'F2'/)
+  assert.match(source, /onScan=\{handleScannerSubmit\}/)
+  assert.match(source, /onClick=\{handleSell\}/)
+  assert.match(source, /modal-overlay theme-petshop-modal/)
+})
