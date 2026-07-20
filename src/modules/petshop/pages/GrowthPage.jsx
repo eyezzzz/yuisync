@@ -184,7 +184,6 @@ export default function GrowthPage() {
     channel: 'manual',
     transport_mode: 'dropoff',
     need_motodog: false,
-    motodog_fee: 0,
     pickup_address: '',
     pickup_neighborhood: '',
     pickup_city: '',
@@ -320,7 +319,6 @@ export default function GrowthPage() {
         channel: 'manual',
         transport_mode: 'dropoff',
         need_motodog: false,
-        motodog_fee: 0,
         pickup_address: '',
         pickup_neighborhood: '',
         pickup_city: '',
@@ -638,8 +636,8 @@ export default function GrowthPage() {
             ))}
           </div>
         </div>
-        <div className="h-72">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-72 min-w-0">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={260} debounce={50}>
             <AreaChart data={chartData}>
               <defs>
                 <linearGradient id="growthRevenue" x1="0" y1="0" x2="0" y2="1">
@@ -674,6 +672,8 @@ export default function GrowthPage() {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <label className="text-sm text-muted flex items-center gap-2">
               <input
+                aria-label="Exigir sinal para agendamento"
+                aria-label="Receber solicitacoes online"
                 type="checkbox"
                 checked={bookingSettings?.enabled || false}
                 onChange={(event) => setBookingSettings((prev) => ({ ...prev, enabled: event.target.checked }))}
@@ -682,6 +682,7 @@ export default function GrowthPage() {
             </label>
             <label className="text-sm text-muted flex items-center gap-2">
               <input
+                aria-label="Permitir fallback para WhatsApp"
                 type="checkbox"
                 checked={bookingSettings?.allow_whatsapp_fallback || false}
                 onChange={(event) => setBookingSettings((prev) => ({ ...prev, allow_whatsapp_fallback: event.target.checked }))}
@@ -691,6 +692,7 @@ export default function GrowthPage() {
             <div>
               <label className="inp-label">Slug publico</label>
               <input
+                aria-label="Slug publico"
                 className="inp"
                 value={bookingSettings?.public_slug || ''}
                 onChange={(event) => setBookingSettings((prev) => ({ ...prev, public_slug: event.target.value }))}
@@ -700,6 +702,7 @@ export default function GrowthPage() {
             <div>
               <label className="inp-label">Expirar lead (horas)</label>
               <input
+                aria-label="Expiracao do lead em horas"
                 className="inp"
                 type="number"
                 min="1"
@@ -710,6 +713,7 @@ export default function GrowthPage() {
             <div className="md:col-span-2">
               <label className="inp-label">Mensagem inicial</label>
               <textarea
+                aria-label="Mensagem inicial do agendamento"
                 className="inp h-20 resize-none"
                 value={bookingSettings?.intake_message || ''}
                 onChange={(event) => setBookingSettings((prev) => ({ ...prev, intake_message: event.target.value }))}
@@ -727,43 +731,27 @@ export default function GrowthPage() {
           <div className="pt-2 border-t border-[var(--border2)] space-y-3">
             <p className="text-xs uppercase tracking-[0.16em] text-muted font-bold">Nova solicitacao</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <input className="inp" placeholder="Tutor" value={bookingForm.customer_name} onChange={(e) => setBookingForm((prev) => ({ ...prev, customer_name: e.target.value }))} />
-              <input className="inp" placeholder="Pet" value={bookingForm.pet_name} onChange={(e) => setBookingForm((prev) => ({ ...prev, pet_name: e.target.value }))} />
-              <input className="inp" placeholder="Telefone" value={bookingForm.phone} onChange={(e) => setBookingForm((prev) => ({ ...prev, phone: e.target.value }))} />
-              <input className="inp" placeholder="Servico" value={bookingForm.service_interest} onChange={(e) => setBookingForm((prev) => ({ ...prev, service_interest: e.target.value }))} />
-              <input className="inp" type="date" value={bookingForm.preferred_date} onChange={(e) => setBookingForm((prev) => ({ ...prev, preferred_date: e.target.value }))} />
-              <select className="inp" value={bookingForm.preferred_period} onChange={(e) => setBookingForm((prev) => ({ ...prev, preferred_period: e.target.value }))}>
+              <input aria-label="Nome do tutor" className="inp" placeholder="Tutor" value={bookingForm.customer_name} onChange={(e) => setBookingForm((prev) => ({ ...prev, customer_name: e.target.value }))} />
+              <input aria-label="Nome do pet" className="inp" placeholder="Pet" value={bookingForm.pet_name} onChange={(e) => setBookingForm((prev) => ({ ...prev, pet_name: e.target.value }))} />
+              <input aria-label="Telefone do tutor" className="inp" placeholder="Telefone" value={bookingForm.phone} onChange={(e) => setBookingForm((prev) => ({ ...prev, phone: e.target.value }))} />
+              <input aria-label="Servico de interesse" className="inp" placeholder="Servico" value={bookingForm.service_interest} onChange={(e) => setBookingForm((prev) => ({ ...prev, service_interest: e.target.value }))} />
+              <input aria-label="Data preferencial" className="inp" type="date" value={bookingForm.preferred_date} onChange={(e) => setBookingForm((prev) => ({ ...prev, preferred_date: e.target.value }))} />
+              <select aria-label="Periodo preferencial" className="inp" value={bookingForm.preferred_period} onChange={(e) => setBookingForm((prev) => ({ ...prev, preferred_period: e.target.value }))}>
                 <option value="manha">Manha</option>
                 <option value="tarde">Tarde</option>
                 <option value="noite">Noite</option>
               </select>
-              <select className="inp" value={bookingForm.transport_mode} onChange={(e) => setBookingForm((prev) => ({ ...prev, transport_mode: e.target.value }))}>
+              <select aria-label="Forma de transporte" className="inp" value={bookingForm.transport_mode} onChange={(e) => setBookingForm((prev) => ({ ...prev, transport_mode: e.target.value, need_motodog: e.target.value === 'pickup' }))}>
                 <option value="dropoff">Vou levar ate o PetShop</option>
                 <option value="pickup">Precisa de MotoDog</option>
               </select>
-              <div className="flex items-center gap-2 text-sm text-muted">
-                <input
-                  type="checkbox"
-                  checked={bookingForm.need_motodog}
-                  onChange={(e) => setBookingForm((prev) => ({ ...prev, need_motodog: e.target.checked }))}
-                />
-                Precisa de MotoDog?
-              </div>
+              <p className="flex items-center text-xs text-muted">A taxa do MotoDog e calculada pela configuracao do PetShop.</p>
             </div>
             {bookingForm.need_motodog && (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <input
-                  className="inp"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  placeholder="Taxa MotoDog"
-                  value={bookingForm.motodog_fee}
-                  onChange={(e) => setBookingForm((prev) => ({ ...prev, motodog_fee: e.target.value }))}
-                />
-                <input className="inp" placeholder="Cidade" value={bookingForm.pickup_city} onChange={(e) => setBookingForm((prev) => ({ ...prev, pickup_city: e.target.value }))} />
-                <input className="inp" placeholder="Bairro" value={bookingForm.pickup_neighborhood} onChange={(e) => setBookingForm((prev) => ({ ...prev, pickup_neighborhood: e.target.value }))} />
-                <input className="inp" placeholder="Endereco completo" value={bookingForm.pickup_address} onChange={(e) => setBookingForm((prev) => ({ ...prev, pickup_address: e.target.value }))} />
+                <input aria-label="Cidade de retirada" className="inp" placeholder="Cidade" value={bookingForm.pickup_city} onChange={(e) => setBookingForm((prev) => ({ ...prev, pickup_city: e.target.value }))} />
+                <input aria-label="Bairro de retirada" className="inp" placeholder="Bairro" value={bookingForm.pickup_neighborhood} onChange={(e) => setBookingForm((prev) => ({ ...prev, pickup_neighborhood: e.target.value }))} />
+                <input aria-label="Endereco completo de retirada" className="inp" placeholder="Endereco completo" value={bookingForm.pickup_address} onChange={(e) => setBookingForm((prev) => ({ ...prev, pickup_address: e.target.value }))} />
               </div>
             )}
             <button onClick={handleCreateBookingRequest} className="btn btn-secondary" disabled={saving || loading}>
@@ -782,10 +770,10 @@ export default function GrowthPage() {
             Use quando o tutor demonstrou interesse mas ainda nao virou venda ou agendamento confirmado.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <input className="inp" placeholder="Nome do tutor" value={leadForm.owner_name} onChange={(e) => setLeadForm((prev) => ({ ...prev, owner_name: e.target.value }))} />
-            <input className="inp" placeholder="Pet" value={leadForm.pet_name} onChange={(e) => setLeadForm((prev) => ({ ...prev, pet_name: e.target.value }))} />
-            <input className="inp" placeholder="Telefone" value={leadForm.phone} onChange={(e) => setLeadForm((prev) => ({ ...prev, phone: e.target.value }))} />
-            <input className="inp" placeholder="Interesse" value={leadForm.interest} onChange={(e) => setLeadForm((prev) => ({ ...prev, interest: e.target.value }))} />
+            <input aria-label="Nome do tutor do lead" className="inp" placeholder="Nome do tutor" value={leadForm.owner_name} onChange={(e) => setLeadForm((prev) => ({ ...prev, owner_name: e.target.value }))} />
+            <input aria-label="Nome do pet do lead" className="inp" placeholder="Pet" value={leadForm.pet_name} onChange={(e) => setLeadForm((prev) => ({ ...prev, pet_name: e.target.value }))} />
+            <input aria-label="Telefone do lead" className="inp" placeholder="Telefone" value={leadForm.phone} onChange={(e) => setLeadForm((prev) => ({ ...prev, phone: e.target.value }))} />
+            <input aria-label="Interesse do lead" className="inp" placeholder="Interesse" value={leadForm.interest} onChange={(e) => setLeadForm((prev) => ({ ...prev, interest: e.target.value }))} />
           </div>
           <button onClick={handleCreateLead} className="btn btn-primary" disabled={saving || loading}>
             <UserPlus size={15} />
@@ -803,6 +791,7 @@ export default function GrowthPage() {
                   <p className="text-xs text-muted">{lead.pet_name || lead.client?.pet_name || 'Pet nao informado'} • {lead.phone || '-'}</p>
                   <p className="text-xs text-muted">{lead.interest || 'Interesse nao informado'}</p>
                   <select
+                    aria-label={`Etapa do lead ${lead.owner_name}`}
                     className="inp !h-9"
                     value={lead.stage}
                     onChange={(event) => handleLeadStage(lead, event.target.value)}
@@ -845,19 +834,19 @@ export default function GrowthPage() {
             </label>
             <div>
               <label className="inp-label">Valor sinal</label>
-              <input className="inp" type="number" min="0" step="0.01" value={noShowPolicy?.prepayment_amount || 0} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, prepayment_amount: Number(e.target.value || 0) }))} />
+              <input aria-label="Valor do sinal" className="inp" type="number" min="0" step="0.01" value={noShowPolicy?.prepayment_amount || 0} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, prepayment_amount: Number(e.target.value || 0) }))} />
             </div>
             <div>
               <label className="inp-label">Tolerancia (min)</label>
-              <input className="inp" type="number" min="0" value={noShowPolicy?.grace_minutes || 15} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, grace_minutes: Number(e.target.value || 15) }))} />
+              <input aria-label="Tolerancia em minutos" className="inp" type="number" min="0" value={noShowPolicy?.grace_minutes || 15} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, grace_minutes: Number(e.target.value || 15) }))} />
             </div>
             <div>
               <label className="inp-label">Max. faltas</label>
-              <input className="inp" type="number" min="1" value={noShowPolicy?.max_strikes || 2} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, max_strikes: Number(e.target.value || 2) }))} />
+              <input aria-label="Quantidade maxima de faltas" className="inp" type="number" min="1" value={noShowPolicy?.max_strikes || 2} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, max_strikes: Number(e.target.value || 2) }))} />
             </div>
             <div>
               <label className="inp-label">Lembrete antes (min)</label>
-              <input className="inp" type="number" min="15" value={noShowPolicy?.reminder_minutes_before || 90} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, reminder_minutes_before: Number(e.target.value || 90) }))} />
+              <input aria-label="Antecedencia do lembrete em minutos" className="inp" type="number" min="15" value={noShowPolicy?.reminder_minutes_before || 90} onChange={(e) => setNoShowPolicy((prev) => ({ ...prev, reminder_minutes_before: Number(e.target.value || 90) }))} />
             </div>
           </div>
           <button onClick={handleSaveNoShowPolicy} className="btn btn-primary" disabled={saving || loading}>
@@ -868,7 +857,7 @@ export default function GrowthPage() {
           <div className="pt-2 border-t border-[var(--border2)] space-y-3">
             <p className="text-xs uppercase tracking-[0.16em] text-muted font-bold">Registrar ocorrencia</p>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <select className="inp" value={noShowForm.client_id} onChange={(e) => setNoShowForm((prev) => ({ ...prev, client_id: e.target.value }))}>
+              <select aria-label="Cliente da ocorrencia" className="inp" value={noShowForm.client_id} onChange={(e) => setNoShowForm((prev) => ({ ...prev, client_id: e.target.value }))}>
                 <option value="">Cliente (opcional)</option>
                 {clients.map((client) => (
                   <option key={client.id} value={client.id}>
@@ -876,14 +865,14 @@ export default function GrowthPage() {
                   </option>
                 ))}
               </select>
-              <select className="inp" value={noShowForm.event_type} onChange={(e) => setNoShowForm((prev) => ({ ...prev, event_type: e.target.value }))}>
+              <select aria-label="Tipo de ocorrencia" className="inp" value={noShowForm.event_type} onChange={(e) => setNoShowForm((prev) => ({ ...prev, event_type: e.target.value }))}>
                 <option value="no_show">No-show</option>
                 <option value="late_cancel">Cancelamento tardio</option>
                 <option value="recovered">Recuperado</option>
                 <option value="fee_paid">Taxa paga</option>
               </select>
-              <input className="inp" type="number" step="0.01" min="0" value={noShowForm.fee_amount} onChange={(e) => setNoShowForm((prev) => ({ ...prev, fee_amount: e.target.value }))} placeholder="Taxa (opcional)" />
-              <input className="inp" value={noShowForm.notes} onChange={(e) => setNoShowForm((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Observacao" />
+              <input aria-label="Taxa da ocorrencia" className="inp" type="number" step="0.01" min="0" value={noShowForm.fee_amount} onChange={(e) => setNoShowForm((prev) => ({ ...prev, fee_amount: e.target.value }))} placeholder="Taxa (opcional)" />
+              <input aria-label="Observacao da ocorrencia" className="inp" value={noShowForm.notes} onChange={(e) => setNoShowForm((prev) => ({ ...prev, notes: e.target.value }))} placeholder="Observacao" />
             </div>
             <button onClick={handleRegisterNoShowEvent} className="btn btn-secondary" disabled={saving || loading}>
               <AlertTriangle size={15} />
@@ -921,7 +910,7 @@ export default function GrowthPage() {
             Funciona como um pos-atendimento: resumo do que foi feito, cuidados e proxima visita recomendada.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            <select className="inp" value={reportForm.client_id} onChange={(e) => setReportForm((prev) => ({ ...prev, client_id: e.target.value }))}>
+            <select aria-label="Cliente do report card" className="inp" value={reportForm.client_id} onChange={(e) => setReportForm((prev) => ({ ...prev, client_id: e.target.value }))}>
               <option value="">Cliente (opcional)</option>
               {clients.map((client) => (
                 <option key={client.id} value={client.id}>
@@ -929,11 +918,11 @@ export default function GrowthPage() {
                 </option>
               ))}
             </select>
-            <input className="inp" placeholder="Nome do pet" value={reportForm.pet_name} onChange={(e) => setReportForm((prev) => ({ ...prev, pet_name: e.target.value }))} />
-            <textarea className="inp md:col-span-2 h-20 resize-none" placeholder="Resumo do atendimento" value={reportForm.summary} onChange={(e) => setReportForm((prev) => ({ ...prev, summary: e.target.value }))} />
-            <textarea className="inp md:col-span-2 h-16 resize-none" placeholder="Cuidados recomendados" value={reportForm.care_tips} onChange={(e) => setReportForm((prev) => ({ ...prev, care_tips: e.target.value }))} />
-            <input className="inp" type="date" value={reportForm.next_visit_date} onChange={(e) => setReportForm((prev) => ({ ...prev, next_visit_date: e.target.value }))} />
-            <select className="inp" value={reportForm.delivery_channel} onChange={(e) => setReportForm((prev) => ({ ...prev, delivery_channel: e.target.value }))}>
+            <input aria-label="Nome do pet do report card" className="inp" placeholder="Nome do pet" value={reportForm.pet_name} onChange={(e) => setReportForm((prev) => ({ ...prev, pet_name: e.target.value }))} />
+            <textarea aria-label="Resumo do atendimento" className="inp md:col-span-2 h-20 resize-none" placeholder="Resumo do atendimento" value={reportForm.summary} onChange={(e) => setReportForm((prev) => ({ ...prev, summary: e.target.value }))} />
+            <textarea aria-label="Cuidados recomendados" className="inp md:col-span-2 h-16 resize-none" placeholder="Cuidados recomendados" value={reportForm.care_tips} onChange={(e) => setReportForm((prev) => ({ ...prev, care_tips: e.target.value }))} />
+            <input aria-label="Data da proxima visita" className="inp" type="date" value={reportForm.next_visit_date} onChange={(e) => setReportForm((prev) => ({ ...prev, next_visit_date: e.target.value }))} />
+            <select aria-label="Canal de entrega do report card" className="inp" value={reportForm.delivery_channel} onChange={(e) => setReportForm((prev) => ({ ...prev, delivery_channel: e.target.value }))}>
               <option value="whatsapp">WhatsApp</option>
               <option value="email">Email</option>
               <option value="manual">Manual</option>
@@ -984,7 +973,7 @@ export default function GrowthPage() {
             Libere somente quando quiser entregar uma experiencia mais premium, com link individual para o tutor acompanhar dados do pet.
           </p>
           <div className="flex items-center gap-3">
-            <select className="inp flex-1" value={portalClientId} onChange={(e) => setPortalClientId(e.target.value)}>
+            <select aria-label="Cliente para liberar portal" className="inp flex-1" value={portalClientId} onChange={(e) => setPortalClientId(e.target.value)}>
               <option value="">Selecione o cliente para liberar portal</option>
               {clients.map((client) => (
                 <option key={client.id} value={client.id}>

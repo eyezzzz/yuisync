@@ -92,7 +92,7 @@ export default function CampanhasPage() {
       </div>
 
       {error && (
-        <p className="text-sm rounded-xl px-4 py-3 bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-2">
+        <p role="alert" className="text-sm rounded-xl px-4 py-3 bg-red-500/10 text-red-400 border border-red-500/20 flex items-center gap-2">
           <ShieldAlert size={14} /> {error}
         </p>
       )}
@@ -112,12 +112,13 @@ export default function CampanhasPage() {
 
           <div>
             <label className="inp-label">Campanha ativa</label>
-            <input className="inp" value={template.label} readOnly />
+            <input aria-label="Campanha ativa" className="inp" value={template.label} readOnly />
           </div>
 
           <div>
             <label className="inp-label">Mensagem personalizada</label>
             <textarea
+              aria-label="Mensagem personalizada"
               className="inp h-36 resize-none p-4"
               placeholder={template.buildMessage({ owner_name: 'Tutor', pet_name: 'Pet' })}
               value={customMessage}

@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { motion } from 'framer-motion'
 import { Area, AreaChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import { Sparkles, Timer } from 'lucide-react'
-import { AI_HOURS_SAVED_MOCK, AI_HOURS_SAVED_SERIES } from '../constants/aiHoursSavedMock'
 import { calculateSavedPercentage, formatHours, formatPercentage } from '../utils/aiHoursSaved'
 
 function ChartTooltip({ active, payload, label }) {
@@ -17,9 +16,9 @@ function ChartTooltip({ active, payload, label }) {
 }
 
 export default function AIHoursSavedCard({
-  totalHours = AI_HOURS_SAVED_MOCK.totalHours,
-  savedHours = AI_HOURS_SAVED_MOCK.savedHours,
-  series = AI_HOURS_SAVED_SERIES,
+  totalHours = 0,
+  savedHours = 0,
+  series = [],
   className = '',
   onClick,
 }) {
@@ -31,6 +30,7 @@ export default function AIHoursSavedCard({
   )
 
   const latestSaved = series?.[series.length - 1]?.saved ?? savedHours
+  const hasMeasuredData = Number(savedHours || 0) > 0 && Array.isArray(series) && series.length > 0
   const helperText = `${formatHours(savedHours)} economizadas de ${formatHours(totalHours)} de operacao hoje`
   const lastIndex = Math.max((series?.length || 1) - 1, 0)
 
@@ -76,29 +76,29 @@ export default function AIHoursSavedCard({
             <p className="mt-1 text-sm text-emerald-50/90">Indicador de eficiencia operacional</p>
           </div>
 
-          <div className="inline-flex items-center gap-1 rounded-full border border-emerald-100/35 bg-emerald-50/15 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-emerald-50">
+          <div className="inline-flex items-center gap-1 rounded-full border border-emerald-100/35 bg-emerald-950/30 px-2.5 py-1 text-[10px] font-bold uppercase tracking-widest text-white">
             <span className="inline-block h-1.5 w-1.5 rounded-full bg-emerald-100 ai-live-dot" />
-            Tempo real
+            {hasMeasuredData ? 'Tempo real' : 'Sem amostra'}
           </div>
         </div>
 
         <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
           <div>
-            <p className="font-display text-5xl font-black leading-none text-white">{formatPercentage(savedPercentage)}</p>
-            <p className="mt-1 text-xs text-emerald-50/90">{helperText}</p>
+            <p className="font-display text-5xl font-black leading-none text-white">{hasMeasuredData ? formatPercentage(savedPercentage) : '—'}</p>
+            <p className="mt-1 text-xs text-white/90">{hasMeasuredData ? helperText : 'Dados insuficientes para calcular a economia de hoje.'}</p>
           </div>
 
           <div className="rounded-xl border border-emerald-100/30 bg-emerald-900/20 px-3 py-2 text-right">
             <p className="text-[10px] uppercase tracking-[0.16em] text-emerald-100/85">Hoje</p>
             <p className="mt-1 flex items-center justify-end gap-1 text-lg font-bold text-white">
               <Timer size={16} className="text-emerald-100/90" />
-              {formatHours(latestSaved)}
+              {hasMeasuredData ? formatHours(latestSaved) : '—'}
             </p>
           </div>
         </div>
 
-        <div className="h-40 rounded-xl border border-emerald-100/20 bg-emerald-900/20 p-2 backdrop-blur-[2px] sm:h-44">
-          <ResponsiveContainer width="100%" height="100%">
+        <div className="h-40 min-w-0 rounded-xl border border-emerald-100/20 bg-emerald-950/25 p-2 backdrop-blur-[2px] sm:h-44">
+          {hasMeasuredData ? <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={140} debounce={50}>
             <AreaChart data={series} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
               <defs>
                 <linearGradient id="aiHoursFill" x1="0" y1="0" x2="0" y2="1">
@@ -130,19 +130,22 @@ export default function AIHoursSavedCard({
                 className="ai-flow-line"
               />
             </AreaChart>
-          </ResponsiveContainer>
+          </ResponsiveContainer> : (
+            <div className="flex h-full items-center justify-center text-center text-sm font-semibold text-white/80">
+              O indicador sera exibido quando houver atendimentos da IA hoje.
+            </div>
+          )}
         </div>
 
         <div className="mt-3 flex items-center justify-between text-xs text-emerald-50/85">
           <span className="inline-flex items-center gap-1">
             <Sparkles size={12} />
-            IA operando em otimizacao continua
+            {hasMeasuredData ? 'IA operando em otimizacao continua' : 'Aguardando atividade da IA'}
           </span>
-          <span className="font-semibold">{formatHours(savedHours)} / {formatHours(totalHours)}</span>
+          <span className="font-semibold">{hasMeasuredData ? `${formatHours(savedHours)} / ${formatHours(totalHours)}` : 'Sem dados'}</span>
         </div>
       </div>
 
-      {/* TODO: Conectar com Supabase/API para receber `totalHours`, `savedHours` e `series` em tempo real */}
     </motion.article>
   )
 }

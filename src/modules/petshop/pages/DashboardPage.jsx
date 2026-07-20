@@ -1,24 +1,25 @@
 ﻿import { useEffect, useState, useCallback } from 'react'
-import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, X, CheckCircle, ShieldAlert, Star, UserCheck } from 'lucide-react'
+import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, ShieldAlert, Star, UserCheck } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
 import { useProducts }      from '../../../shared/hooks/useProducts'
 import { useAppointments }  from '../../../shared/hooks/useAppointments'
 import { useSales }         from '../../../shared/hooks/useSales'
 import { useChat }          from '../../../shared/hooks/useChat'
-import { useFinance }       from '../../../shared/hooks/useFinance'
-import { supabase, fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
+import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { useAnalytics } from '../../../shared/hooks/useAnalytics'
 import AIHoursSavedCard from '../components/AIHoursSavedCard'
-import { AI_HOURS_SAVED_MOCK, AI_HOURS_SAVED_SERIES } from '../constants/aiHoursSavedMock'
 import { buildAIHoursFromScopedSessions } from '../utils/aiHoursSaved'
+import { EmptyState, LoadingState } from '../../../components/PageState'
 
 // â”€â”€ KPI Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function KpiCard({ accent, icon: Icon, label, value, sub, onClick }) {
   return (
-    <div
-      className={`kpi-card kpi-${accent} h-full cursor-pointer`}
+    <button
+      type="button"
+      aria-label={`${label}: ${value}`}
+      className={`kpi-card kpi-${accent} h-full w-full cursor-pointer text-left`}
       onClick={onClick}
     >
       <div className="flex items-start justify-between mb-3">
@@ -29,7 +30,7 @@ function KpiCard({ accent, icon: Icon, label, value, sub, onClick }) {
       </div>
       <p className="font-display font-bold text-3xl text-text leading-none">{value}</p>
       {sub && <p className="text-xs text-muted mt-1.5">{sub}</p>}
-    </div>
+    </button>
   )
 }
 
@@ -38,7 +39,7 @@ function RevenueMixCard({ value, sub, mix = [], onClick }) {
   const piePalette = ['#10b981', '#06b6d4', '#f59e0b', '#8b5cf6', '#ef4444']
 
   return (
-    <div className="kpi-card kpi-primary h-full cursor-pointer revenue-mix-card" onClick={onClick}>
+    <button type="button" aria-label={`Faturamento hoje: ${value}`} className="kpi-card kpi-primary h-full w-full cursor-pointer text-left revenue-mix-card" onClick={onClick}>
       <div className="revenue-mix-card-glow" />
       <div className="mb-3 flex items-start justify-between">
         <p className="text-xs font-bold uppercase tracking-widest text-muted">Faturamento Hoje</p>
@@ -55,8 +56,8 @@ function RevenueMixCard({ value, sub, mix = [], onClick }) {
           <p className="text-xs text-muted">Sem vendas concluídas hoje.</p>
         ) : (
           <div className="flex items-center gap-3">
-            <div className="h-28 w-28 shrink-0 revenue-pie-wrap">
-              <ResponsiveContainer width="100%" height="100%">
+            <div className="h-28 w-28 min-w-0 shrink-0 revenue-pie-wrap">
+              <ResponsiveContainer width="100%" height="100%" minWidth={0} minHeight={112} debounce={50}>
                 <PieChart>
                   <Pie
                     data={chartData}
@@ -97,7 +98,7 @@ function RevenueMixCard({ value, sub, mix = [], onClick }) {
           </div>
         )}
       </div>
-    </div>
+    </button>
   )
 }
 // â”€â”€ Stock Alert Row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
@@ -149,13 +150,11 @@ export default function DashboardPage({ setPage }) {
   
   const isAdmin = auth?.profile?.role === 'admin' || 
                  (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
-  const isGlobalAdmin = auth?.profile?.role === 'admin'
 
   const { getCriticalStock }                        = useProducts()
   const { load, appointments, todayStats, serviceLabel, statusBadge } = useAppointments()
   const { loadMetrics, getDailyStats, dailyRevenue } = useSales()
   const { loadSessions, sessions }                  = useChat()
-  const { invoices, loadInvoices, deleteInvoice } = useFinance()
   const { getChatResolutionMetrics } = useAnalytics()
   // const { activeModuleId } = useModuleCtx()
 
@@ -163,9 +162,6 @@ export default function DashboardPage({ setPage }) {
   const [stats, setStats]           = useState({ revenue: 0, count: 0, upsells: 0, salesMix: [] })
   const [chatQuality, setChatQuality] = useState({ avgCsat: null, csatCount: 0, aiResolved: 0, humanResolved: 0, closedCount: 0, blockedReasons: {} })
   const [loading, setLoading]       = useState(true)
-  const [showResetModal, setShowResetModal] = useState(false)
-  const [isWiping, setIsWiping]     = useState(false)
-  const canWipeData = isGlobalAdmin
 
   const reloadAll = useCallback(async () => {
     setLoading(true)
@@ -173,13 +169,12 @@ export default function DashboardPage({ setPage }) {
       load({ date: todayISO() }),
       loadMetrics(),
       loadSessions('bot'),
-      loadInvoices(),
       getCriticalStock().then(setCritical),
       getDailyStats().then(setStats),
       getChatResolutionMetrics().then(setChatQuality),
     ])
     setLoading(false)
-  }, [load, loadMetrics, loadSessions, loadInvoices, getCriticalStock, getDailyStats, getChatResolutionMetrics])
+  }, [load, loadMetrics, loadSessions, getCriticalStock, getDailyStats, getChatResolutionMetrics])
 
   useEffect(() => {
     reloadAll()
@@ -187,45 +182,12 @@ export default function DashboardPage({ setPage }) {
     return () => clearInterval(interval)
   }, [reloadAll, activeModuleId])
 
-  const handleMasterWipe = async () => {
-    if (!activeModuleId || !canWipeData) return
-    setIsWiping(true)
-    try {
-      // 1. Excluir Notas (invoices)
-      const { data: invs } = await supabase.from('invoices').select('id').eq('module_id', activeModuleId)
-      if (invs?.length) {
-        for (const i of invs) await deleteInvoice(i.id)
-      }
-      // 2. Excluir Vendas e Itens (Garante integridade)
-      const { data: sids } = await supabase.from('sales').select('id').eq('module_id', activeModuleId)
-      if (sids?.length) {
-         const ids = sids.map(s => s.id)
-         await supabase.from('sale_items').delete().in('sale_id', ids)
-         await supabase.from('sales').delete().in('id', ids)
-      }
-      
-      setShowResetModal(false)
-      await reloadAll()
-    } catch (e) {
-      console.error(e)
-    } finally {
-      setIsWiping(false)
-    }
-  }
-
   const ts = todayStats()
   const openChats = sessions.filter(s => s.status !== 'closed').length
   const aiHoursScoped = buildAIHoursFromScopedSessions(sessions, {
-    totalHours: AI_HOURS_SAVED_MOCK.totalHours,
+    totalHours: 8,
     savingPerSession: 0.4,
   })
-  const aiHoursInput = aiHoursScoped.savedHours > 0
-    ? aiHoursScoped
-    : {
-        totalHours: AI_HOURS_SAVED_MOCK.totalHours,
-        savedHours: AI_HOURS_SAVED_MOCK.savedHours,
-        series: AI_HOURS_SAVED_SERIES,
-      }
   const topBlockedReasons = Object.entries(chatQuality.blockedReasons || {})
     .sort((a, b) => Number(b[1]) - Number(a[1]))
     .slice(0, 3)
@@ -252,9 +214,9 @@ export default function DashboardPage({ setPage }) {
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 items-stretch">
         <AIHoursSavedCard
           className="md:col-span-2 xl:col-span-8"
-          totalHours={aiHoursInput.totalHours}
-          savedHours={aiHoursInput.savedHours}
-          series={aiHoursInput.series}
+          totalHours={aiHoursScoped.totalHours}
+          savedHours={aiHoursScoped.savedHours}
+          series={aiHoursScoped.series}
         />
         <div className="xl:col-span-4 h-full">
           {isAdmin ? (
@@ -342,15 +304,13 @@ export default function DashboardPage({ setPage }) {
             </button>
           </div>
           {loading ? (
-            <div className="flex items-center justify-center py-10 text-muted text-sm">Carregando...</div>
+            <LoadingState label="Carregando agenda de hoje..." />
           ) : appointments.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12 gap-3">
-              <Calendar size={32} className="text-muted/30" />
-              <p className="text-muted text-sm">Nenhum agendamento para hoje</p>
-              <button onClick={() => setPage('agenda')} className="btn btn-secondary btn-sm">
-                + Novo agendamento
-              </button>
-            </div>
+            <EmptyState
+              title="Nenhum agendamento para hoje"
+              description="A agenda esta livre para novas reservas."
+              action={<button onClick={() => setPage('agenda')} className="btn btn-secondary btn-sm">+ Novo agendamento</button>}
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="tbl">
@@ -380,12 +340,9 @@ export default function DashboardPage({ setPage }) {
           </div>
           <div className="p-4 space-y-2.5 overflow-y-auto" style={{ maxHeight: 340 }}>
             {loading ? (
-              <p className="text-sm text-muted text-center py-4">Carregando...</p>
+              <LoadingState label="Verificando estoque..." />
             ) : critical.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-8 gap-2">
-                <CheckCircle size={28} className="text-emerald-400/40" />
-                <p className="text-sm text-muted">Estoque em dia! </p>
-              </div>
+              <EmptyState title="Estoque em dia" description="Nenhum produto esta abaixo do minimo." />
             ) : (
               critical.map(p => <StockAlert key={p.id} product={p} />)
             )}
@@ -410,43 +367,8 @@ export default function DashboardPage({ setPage }) {
             <MessageSquare size={16} /> Ver Chats
           </button>
           
-          {canWipeData && (
-            <button onClick={() => setShowResetModal(true)} className="btn bg-red-500/10 text-red-500 border border-red-500/20 hover:bg-red-500/20">
-              <X size={16} /> Resetar Ambiente (Teste)
-            </button>
-          )}
         </div>
       </div>
-
-      {/* Reset Modal Internal */}
-      {canWipeData && showResetModal && (
-        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-[200] flex items-center justify-center p-4 animate-in fade-in">
-           <div className="bg-surface border border-red-500/20 w-full max-w-sm rounded-3xl overflow-hidden shadow-2xl p-8 text-center animate-in zoom-in-95">
-              <div className="w-16 h-16 rounded-2xl bg-red-500/10 flex items-center justify-center mx-auto mb-6 border border-red-500/20">
-                 <AlertTriangle className="text-red-500" size={32} />
-              </div>
-              <h3 className="text-xl font-display font-bold text-text mb-2">Atenção Crítica</h3>
-              <p className="text-muted text-sm mb-8 leading-relaxed">Isso apagará **todas as vendas e notas** deste módulo permanentemente. Útil apenas para testes.</p>
-              
-              <div className="flex flex-col gap-3">
-                 <button 
-                   disabled={isWiping}
-                   onClick={handleMasterWipe}
-                   className="w-full py-4 bg-red-500 hover:bg-red-400 text-bg font-bold rounded-2xl transition-all shadow-lg shadow-red-500/20 flex items-center justify-center gap-2"
-                 >
-                   {isWiping ? 'Resetando...' : 'Sim, Resetar Tudo'}
-                 </button>
-                 <button 
-                   disabled={isWiping}
-                   onClick={() => setShowResetModal(false)}
-                   className="w-full py-4 bg-white/5 hover:bg-white/10 text-text font-bold rounded-2xl transition-all border border-white/10"
-                 >
-                   Cancelar
-                 </button>
-              </div>
-           </div>
-        </div>
-      )}
     </div>
   )
 }

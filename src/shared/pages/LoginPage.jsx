@@ -81,10 +81,13 @@ export default function LoginPage() {
 
           <form onSubmit={handleSubmit} className="space-y-4">
             <div>
-              <label className="inp-label">E-mail</label>
+              <label className="inp-label" htmlFor="login-email">E-mail</label>
               <div className="relative">
                 <Mail size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
                 <input
+                  id="login-email"
+                  name="email"
+                  autoComplete="email"
                   className="inp pl-9"
                   type="email"
                   placeholder="seu@email.com"
@@ -96,10 +99,13 @@ export default function LoginPage() {
             </div>
 
             <div>
-              <label className="inp-label">Senha</label>
+              <label className="inp-label" htmlFor="login-password">Senha</label>
               <div className="relative">
                 <Lock size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted" />
                 <input
+                  id="login-password"
+                  name="password"
+                  autoComplete="current-password"
                   className="inp pl-9 pr-10"
                   type={showPw ? 'text' : 'password'}
                   placeholder="••••••••"
@@ -110,6 +116,8 @@ export default function LoginPage() {
                 />
                 <button
                   type="button"
+                  aria-label={showPw ? 'Ocultar senha' : 'Mostrar senha'}
+                  title={showPw ? 'Ocultar senha' : 'Mostrar senha'}
                   onClick={() => setShowPw(!showPw)}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text"
                 >
@@ -119,7 +127,7 @@ export default function LoginPage() {
             </div>
 
             {err && (
-              <p className="text-sm rounded-xl px-3.5 py-2.5 bg-red-500/10 text-red-400 border border-red-500/20">
+              <p role="alert" className="text-sm rounded-xl px-3.5 py-2.5 bg-red-500/10 text-red-400 border border-red-500/20">
                 {err}
               </p>
             )}

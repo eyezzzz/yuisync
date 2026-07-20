@@ -136,7 +136,7 @@ function PetDrawer({ pet, subscription, onClose, onEdit, speciesIcon, serviceLab
       <div className="w-full max-w-lg bg-surface border-l border-[var(--border2)] flex flex-col overflow-hidden shadow-card">
         <div className="modal-header">
           <div className="flex items-center gap-3"><div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center"><Icon size={22} /></div><div><h2 className="font-display font-bold text-lg text-text">{pet.owner_name}</h2><p className="text-sm text-muted">{pet.pet_name || 'Pet sem nome'}{pet.breed ? ` - ${pet.breed}` : ''}</p><span className={`badge ${registrationBadge.cls} mt-2`}>{registrationBadge.label}</span></div></div>
-          <div className="flex items-center gap-2"><button onClick={() => onEdit(pet)} className="btn btn-secondary btn-sm">Editar</button><button onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button></div>
+          <div className="flex items-center gap-2"><button onClick={() => onEdit(pet)} className="btn btn-secondary btn-sm">Editar</button><button type="button" aria-label="Fechar detalhes" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button></div>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-2 gap-3 text-sm">
@@ -214,7 +214,7 @@ function LegacyClientsImportModal({ onClose, moduleId, tenantId, onDone }) {
       <div className="modal-box max-w-lg">
         <div className="modal-header">
           <h2 className="font-display font-bold text-xl text-text">Import Legado de Clientes</h2>
-          {!importing && <button onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button>}
+          {!importing && <button type="button" aria-label="Fechar importacao" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button>}
         </div>
         <div className="modal-body space-y-4">
           <p className="text-sm text-muted">Importacao isolada para admin global. Aceita o XLS de clientes do sistema antigo.</p>
@@ -323,7 +323,7 @@ export default function PetsPage() {
         <div className="relative flex-1 min-w-[220px]"><Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" /><input className="inp pl-9" placeholder="Buscar tutor, pet, raca, cidade ou plano..." value={search} onChange={(e) => setSearch(e.target.value)} /></div>
         <select className="inp w-auto" value={speciesFilter} onChange={(e) => setSpeciesFilter(e.target.value)}><option value="">Especies</option>{SPECIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select>
         <select className="inp w-auto" value={planFilter} onChange={(e) => setPlanFilter(e.target.value)}><option value="">Todos os planos</option><option value="active">Plano ativo</option><option value="paused">Plano pausado</option></select>
-        <div className="flex bg-surface border border-[var(--border)] rounded-xl p-1"><button onClick={() => setView('grid')} className={`px-3 py-2 rounded-lg ${view === 'grid' ? 'bg-emerald-500 text-white' : 'text-muted'}`}><Grid size={16} /></button><button onClick={() => setView('list')} className={`px-3 py-2 rounded-lg ${view === 'list' ? 'bg-emerald-500 text-white' : 'text-muted'}`}><ListIcon size={16} /></button></div>
+        <div className="flex bg-surface border border-[var(--border)] rounded-xl p-1"><button type="button" aria-label="Visualizacao em grade" onClick={() => setView('grid')} className={`px-3 py-2 rounded-lg ${view === 'grid' ? 'bg-emerald-500 text-white' : 'text-muted'}`}><Grid size={16} /></button><button type="button" aria-label="Visualizacao em lista" onClick={() => setView('list')} className={`px-3 py-2 rounded-lg ${view === 'list' ? 'bg-emerald-500 text-white' : 'text-muted'}`}><ListIcon size={16} /></button></div>
         <button onClick={reloadAll} className="btn btn-secondary"><RefreshCw size={14} /> Atualizar</button>
       </div>
 
@@ -362,7 +362,7 @@ export default function PetsPage() {
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <span className={`badge ${registrationBadge.cls}`}>{registrationBadge.label}</span>
                     <button onClick={() => setModalPet(pet)} className="btn btn-ghost btn-sm">Editar</button>
-                    <button onClick={() => handleDelete(pet.id)} className="btn btn-ghost btn-sm text-red-400"><Trash2 size={13} /></button>
+                    <button type="button" aria-label={`Excluir ${pet.pet_name || pet.owner_name}`} title="Excluir" onClick={() => handleDelete(pet.id)} className="btn btn-ghost btn-sm text-red-400"><Trash2 size={13} /></button>
                   </div>
                 </div>
                 <div className="mt-4 pt-4 border-t border-[var(--border2)] grid grid-cols-1 gap-2 text-sm"><div className="flex items-center gap-2 text-muted"><Phone size={13} className="text-emerald-500" /><span>{formatPhone(pet.phone)}</span></div><div className="flex items-center gap-2 text-muted"><Weight size={13} className="text-emerald-500" /><span>{pet.weight_kg ? `${pet.weight_kg} kg` : 'Peso nao informado'}</span></div>{ageLabel && <div className="flex items-center gap-2 text-muted"><CalendarIcon size={13} className="text-emerald-500" /><span>{ageLabel}</span></div>}</div>

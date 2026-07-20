@@ -8,6 +8,7 @@ import { LoadingScreen } from '../components/LoadingScreen'
 import { Sidebar } from '../components/Sidebar'
 import { SupportWidget } from '../components/SupportWidget'
 import { SystemSupportPriorityAlert } from '../components/SystemSupportPriorityAlert'
+import { RouteErrorBoundary } from '../components/RouteErrorBoundary'
 
 const LoginPage = lazy(() => import('../shared/pages/LoginPage'))
 const LauncherPage = lazy(() => import('../shared/pages/LauncherPage'))
@@ -49,7 +50,14 @@ function getAccessiblePages(activeModule, profile) {
 
 function AppLayout() {
   const { activeModule, activeModuleId, setActiveModuleId } = useModuleCtx()
-  const { profile, signOut, storeSettings, tenantEnabledModules = [] } = useAuthCtx()
+  const {
+    profile,
+    signOut,
+    storeSettings,
+    activeTenantId,
+    tenantLoading,
+    tenantEnabledModules = [],
+  } = useAuthCtx()
   const [open, setOpen] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
@@ -69,6 +77,10 @@ function AppLayout() {
   }, [location.pathname])
 
   if (!activeModule) return <LauncherPage />
+
+  // Direct URL loads restore the authenticated session before the tenant scope.
+  // Do not mount operational pages until a validated tenant is available.
+  if (tenantLoading || !activeTenantId) return <LoadingScreen />
 
   // Security Lock
   const isAdmin = profile?.role === 'admin'
@@ -123,9 +135,11 @@ function AppLayout() {
         </header>
 
         <main className="flex-1 overflow-y-auto">
-          <Suspense fallback={<LoadingScreen />}>
-            <PageComponent setPage={setPage} />
-          </Suspense>
+          <RouteErrorBoundary key={location.pathname}>
+            <Suspense fallback={<LoadingScreen />}>
+              <PageComponent setPage={setPage} />
+            </Suspense>
+          </RouteErrorBoundary>
         </main>
       </div>
       {activeModuleId === 'system' && <SystemSupportPriorityAlert />}

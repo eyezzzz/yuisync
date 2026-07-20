@@ -154,6 +154,7 @@ export default function CaixaPage({ setPage }) {
               <div>
                 <label className="inp-label">Valor inicial</label>
                 <input
+                  aria-label="Valor inicial do caixa"
                   className="inp"
                   type="number"
                   min="0"
@@ -195,6 +196,7 @@ export default function CaixaPage({ setPage }) {
               <div>
                 <label className="inp-label">Saldo contado</label>
                 <input
+                  aria-label="Saldo contado no fechamento"
                   className="inp"
                   type="number"
                   min="0"

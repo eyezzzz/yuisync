@@ -231,7 +231,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
       <div className="modal-box max-w-sm">
         <div className="modal-header">
            <h2 className="font-display font-bold text-xl text-text">Recibo de Serviço</h2>
-           <button onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
+           <button type="button" aria-label="Fechar recibo" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
 
         <div className="modal-body text-center">
@@ -375,7 +375,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
           <h2 className="font-display font-bold text-xl text-text">
             {isEdit ? 'Editar Agendamento' : 'Novo Agendamento'}
           </h2>
-          <button onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
+          <button type="button" aria-label="Fechar agendamento" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
 
         <div className="modal-body">
@@ -387,13 +387,14 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                 <div className="relative">
                   <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
                   <input 
+                     aria-label="Buscar cliente ou pet"
                      className="inp pl-9 py-2 text-xs" 
                      placeholder="Buscar cliente, pet ou telefone..."
                      value={form.pet_search}
                      onChange={(e) => set('pet_search', e.target.value)}
                   />
                 </div>
-                <select className="inp py-2 text-xs" value={form.pet_id} onChange={e => set('pet_id', e.target.value)}>
+                <select aria-label="Cliente ou pet selecionado" className="inp py-2 text-xs" value={form.pet_id} onChange={e => set('pet_id', e.target.value)}>
                   <option value="">Lista de clientes...</option>
                   {filteredPets.map(p => (
                     <option key={p.id} value={p.id}>
@@ -434,7 +435,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               {/* Serviço */}
               <div>
                 <label className="inp-label">{serviceGroupLabel}</label>
-                <select className="inp" value={form.service_type} onChange={e => handleServiceChange(e.target.value)}>
+                <select aria-label="Servico" className="inp" value={form.service_type} onChange={e => handleServiceChange(e.target.value)}>
                   {isEdit && form.service_type && !serviceOptions.some(s => s.value === form.service_type) && (
                     <option value={form.service_type}>{serviceLabelFallback(form.service_type, services)}</option>
                   )}
@@ -445,14 +446,14 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               {/* Status */}
               <div>
                 <label className="inp-label">Status da Visita</label>
-                <select className="inp" value={form.status} onChange={e => set('status', e.target.value)}>
+                <select aria-label="Status do agendamento" className="inp" value={form.status} onChange={e => set('status', e.target.value)}>
                   {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
                 </select>
               </div>
 
               <div className="md:col-span-2">
                 <label className="inp-label">Responsavel pelo servico</label>
-                <select className="inp" value={form.groomer_id} onChange={e => set('groomer_id', e.target.value)}>
+                <select aria-label="Responsavel pelo atendimento" className="inp" value={form.groomer_id} onChange={e => set('groomer_id', e.target.value)}>
                   <option value="">Sem responsavel</option>
                   {staffOptions.map((person) => (
                     <option key={person.id} value={person.id}>{person.full_name || person.email}</option>
@@ -467,25 +468,25 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               <div className="grid grid-cols-2 gap-3 md:col-span-2 bg-surface/80 border border-[var(--border)] rounded-2xl p-5">
                 <div>
                   <label className="inp-label">Data Reservada</label>
-                  <input className="inp" type="date" value={form.date} onChange={e => set('date', e.target.value)} />
+                  <input aria-label="Data do agendamento" className="inp" type="date" value={form.date} onChange={e => set('date', e.target.value)} />
                 </div>
                 <div>
                   <label className="inp-label">Início</label>
-                  <input className="inp" type="time" value={form.time} onChange={e => set('time', e.target.value)} />
+                  <input aria-label="Horario do agendamento" className="inp" type="time" value={form.time} onChange={e => set('time', e.target.value)} />
                 </div>
               </div>
 
               {/* Duração / Valor */}
               <div>
                 <label className="inp-label">Tempo Est. (min)</label>
-                <input className="inp" type="number" min="15" step="15"
+                <input aria-label="Duracao em minutos" className="inp" type="number" min="15" step="15"
                   value={form.duration_min} onChange={e => set('duration_min', e.target.value)} />
               </div>
               <div>
                 <label className="inp-label">Valor (R$)</label>
                 <div className="relative">
                   <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs text-muted font-bold">R$</span>
-                  <input className="inp pl-9" type="number" min="0" step="5"
+                  <input aria-label="Valor do atendimento" className="inp pl-9" type="number" min="0" step="5"
                     value={form.price} onChange={e => set('price', e.target.value)} />
                 </div>
               </div>
@@ -494,7 +495,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
             {/* Observações */}
             <div>
               <label className="inp-label">Instruções para o Profissional</label>
-              <textarea className="inp h-24 resize-none p-4" placeholder="Ex: Tem alergia a tal produto, ou é agressivo..."
+              <textarea aria-label="Observacoes do agendamento" className="inp h-24 resize-none p-4" placeholder="Ex: Tem alergia a tal produto, ou é agressivo..."
                 value={form.notes} onChange={e => set('notes', e.target.value)} />
             </div>
 
@@ -531,11 +532,11 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
         </div>
         <div className="flex items-center gap-1 mt-0.5">
           {appt.status === 'concluido' && (
-            <button onClick={() => onReceipt(appt)} className="text-muted hover:text-emerald-400" title="Imprimir Recibo">
+            <button type="button" aria-label="Imprimir recibo" onClick={() => onReceipt(appt)} className="text-muted hover:text-emerald-400" title="Imprimir Recibo">
               <Receipt size={13}/>
             </button>
           )}
-          <button onClick={() => onEdit(appt)} className="text-muted hover:text-amber-400">
+            <button type="button" aria-label="Editar agendamento" title="Editar" onClick={() => onEdit(appt)} className="text-muted hover:text-amber-400">
             <Edit2 size={13}/>
           </button>
         </div>
@@ -581,7 +582,7 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
           </button>
         )}
         {['agendado','confirmado'].includes(appt.status) && (
-          <button onClick={() => onStatus(appt.id, 'cancelado')}
+          <button type="button" aria-label="Cancelar agendamento" title="Cancelar agendamento" onClick={() => onStatus(appt.id, 'cancelado')}
             className="btn btn-danger btn-sm justify-center text-[10px] py-1 px-2">
             <X size={10}/>
           </button>
@@ -884,7 +885,7 @@ export default function AgendaPage() {
       <div className="flex flex-wrap items-center gap-3">
         {/* Date Navigator */}
         <div className="flex items-center gap-1 bg-card border border-[var(--border)] rounded-xl p-1">
-          <button onClick={() => setSelectedDate(d => addDays(d,-1))}
+          <button aria-label="Dia anterior" title="Dia anterior" onClick={() => setSelectedDate(d => addDays(d,-1))}
             className="btn btn-ghost btn-sm btn-icon">
             <ChevronLeft size={15}/>
           </button>
@@ -894,7 +895,7 @@ export default function AgendaPage() {
             }`}>
             {selectedDate.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
           </button>
-          <button onClick={() => setSelectedDate(d => addDays(d,1))}
+          <button aria-label="Próximo dia" title="Próximo dia" onClick={() => setSelectedDate(d => addDays(d,1))}
             className="btn btn-ghost btn-sm btn-icon">
             <ChevronRight size={15}/>
           </button>
@@ -903,12 +904,12 @@ export default function AgendaPage() {
         {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
-          <input className="inp pl-9 py-2" placeholder="Buscar pet, tutor..."
+          <input aria-label="Buscar pet ou tutor" className="inp pl-9 py-2" placeholder="Buscar pet, tutor..."
             value={search} onChange={e => setSearch(e.target.value)}/>
         </div>
 
         {/* Status filter */}
-        <select className="inp py-2 w-auto" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
+        <select aria-label="Filtrar por status" className="inp py-2 w-auto" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
           <option value="">Todos os status</option>
           {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
@@ -999,22 +1000,22 @@ export default function AgendaPage() {
                       <td><span className="text-xs text-muted truncate max-w-[120px] block">{a.notes || '—'}</span></td>
                       <td>
                         <div className="flex items-center gap-1">
-                          <button onClick={() => setModal(a)} className="btn btn-ghost btn-sm btn-icon">
+                          <button type="button" aria-label="Editar agendamento" title="Editar" onClick={() => setModal(a)} className="btn btn-ghost btn-sm btn-icon">
                             <Edit2 size={13}/>
                           </button>
                           {a.status === 'concluido' && (
-                            <button onClick={() => setReceipt(a)}
+                            <button type="button" aria-label="Imprimir recibo" onClick={() => setReceipt(a)}
                               className="btn btn-ghost btn-sm btn-icon text-emerald-400 border border-emerald-500/20" title="Imprimir Recibo">
                               <Receipt size={13}/>
                             </button>
                           )}
                           {['agendado','confirmado'].includes(a.status) && (
-                            <button onClick={() => updateStatus(a.id, 'concluido')}
+                            <button type="button" aria-label="Concluir agendamento" onClick={() => updateStatus(a.id, 'concluido')}
                               className="btn btn-success btn-sm btn-icon" title="Concluir">
                               <Check size={13}/>
                             </button>
                           )}
-                          <button onClick={() => remove(a.id)}
+                          <button type="button" aria-label="Excluir agendamento" onClick={() => remove(a.id)}
                             className="btn btn-danger btn-sm btn-icon" title="Excluir">
                             <Trash2 size={13}/>
                           </button>

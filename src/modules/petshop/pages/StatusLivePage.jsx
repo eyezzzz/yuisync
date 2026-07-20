@@ -129,7 +129,7 @@ export default function StatusLivePage() {
           <p className="page-sub">Operacao em tempo real, com check-in, banho, tosa e aviso de pet pronto.</p>
         </div>
         <div className="flex items-center gap-2">
-          <input className="inp w-auto" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
+          <input aria-label="Data do painel ao vivo" className="inp w-auto" type="date" value={selectedDate} onChange={(event) => setSelectedDate(event.target.value)} />
           <button onClick={() => reload()} className="btn btn-secondary">
             <RefreshCw size={15} /> Atualizar
           </button>

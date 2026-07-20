@@ -135,6 +135,24 @@ export function usePetshopGrowth() {
 
   const createBookingRequest = useCallback(async (payload) => {
     assertActiveTenant(activeTenantId, 'registrar a solicitacao')
+    let configuredMotodogFee = 0
+    if (payload.need_motodog === true || payload.transport_mode === 'pickup') {
+      const settingsResponse = await runScoped(async (includeTenant) => {
+        let query = supabase
+          .from('settings')
+          .select('pet_transport_fee,pet_transport_options')
+          .eq('module_id', moduleId)
+          .maybeSingle()
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query
+      })
+      if (settingsResponse.error) throw settingsResponse.error
+      const options = Array.isArray(settingsResponse.data?.pet_transport_options)
+        ? settingsResponse.data.pet_transport_options
+        : []
+      const pickupOption = options.find((option) => option?.id === 'somente_buscar' && option?.active !== false)
+      configuredMotodogFee = toNumber(pickupOption?.fee ?? settingsResponse.data?.pet_transport_fee, 0)
+    }
     const row = {
       module_id: moduleId,
       client_id: payload.client_id || null,
@@ -146,8 +164,8 @@ export function usePetshopGrowth() {
       preferred_date: payload.preferred_date || null,
       preferred_period: payload.preferred_period || null,
       transport_mode: payload.transport_mode || 'dropoff',
-      need_motodog: payload.need_motodog === true,
-      motodog_fee: toNumber(payload.motodog_fee, 0),
+      need_motodog: payload.need_motodog === true || payload.transport_mode === 'pickup',
+      motodog_fee: configuredMotodogFee,
       pickup_address: (payload.pickup_address || '').trim() || null,
       pickup_neighborhood: (payload.pickup_neighborhood || '').trim() || null,
       pickup_city: (payload.pickup_city || '').trim() || null,

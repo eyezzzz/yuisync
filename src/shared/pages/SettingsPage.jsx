@@ -143,6 +143,7 @@ export default function SettingsPage() {
   const isGlobalAdmin = auth?.profile?.role === 'admin'
   const isModuleAdmin = (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
   const canEdit = isGlobalAdmin || isModuleAdmin
+  const isTestTenant = Boolean(activeTenantId && activeTenantId === import.meta.env.VITE_TEST_TENANT_ID)
 
   const [form, setForm] = useState(INITIAL_FORM)
   const [loading, setLoading] = useState(true)
@@ -295,6 +296,10 @@ export default function SettingsPage() {
 
   async function handleSave() {
     if (!canEdit || !effectiveModId) return
+    if (effectiveModId === 'petshop' && form.fiscal_provider === 'mock_local' && !isTestTenant) {
+      setMsg({ type: 'error', text: 'Mock Local e permitido somente no tenant de testes configurado.' })
+      return
+    }
     setSaving(true)
     setMsg({ type: '', text: '' })
 
@@ -920,11 +925,14 @@ export default function SettingsPage() {
                         value={form.fiscal_provider}
                         onChange={(event) => setForm((prev) => ({ ...prev, fiscal_provider: event.target.value }))}
                       >
-                        <option value="mock_local">Mock Local (teste)</option>
+                        <option value="mock_local" disabled={!isTestTenant}>Mock Local (somente tenant de teste)</option>
                         <option value="focus_nfe">Focus NFe</option>
                         <option value="nfe_io">NFE.io</option>
                         <option value="plugnotas">PlugNotas</option>
                       </select>
+                      {!isTestTenant && form.fiscal_provider === 'mock_local' && (
+                        <p className="mt-2 text-xs text-red-400">Selecione um provedor fiscal real antes de salvar este tenant.</p>
+                      )}
                     </div>
                   </div>
 

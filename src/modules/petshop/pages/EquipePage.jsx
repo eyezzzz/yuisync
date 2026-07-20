@@ -474,11 +474,11 @@ export default function EquipePage() {
           <div className="flex items-end gap-3 flex-wrap">
             <div>
               <label className="inp-label">Inicio</label>
-              <input className="inp" type="date" value={range.startDate} onChange={(event) => setRange((prev) => ({ ...prev, startDate: event.target.value }))} />
+              <input aria-label="Data inicial das comissões" className="inp" type="date" value={range.startDate} onChange={(event) => setRange((prev) => ({ ...prev, startDate: event.target.value }))} />
             </div>
             <div>
               <label className="inp-label">Fim</label>
-              <input className="inp" type="date" value={range.endDate} onChange={(event) => setRange((prev) => ({ ...prev, endDate: event.target.value }))} />
+              <input aria-label="Data final das comissões" className="inp" type="date" value={range.endDate} onChange={(event) => setRange((prev) => ({ ...prev, endDate: event.target.value }))} />
             </div>
             <button onClick={() => reload(range)} className="btn btn-primary"><RefreshCw size={15} /> Recalcular</button>
           </div>

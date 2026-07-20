@@ -349,7 +349,7 @@ export function AuthProvider({ children }) {
   }, [loadTenantEnabledModules])
 
   useEffect(() => {
-    if (auth.session && auth.profile) {
+    if (auth.session && auth.profile && activeTenantId) {
       const parts = location.pathname.split('/').filter(Boolean)
       const routeModuleId = parts[0] || null
 
@@ -362,8 +362,10 @@ export function AuthProvider({ children }) {
       } else {
         setStoreSettings({ store_name: 'Carregando...', module_id: null })
       }
-    } else {
+    } else if (!auth.session || !auth.profile) {
       setStoreSettings({ store_name: '', module_id: null })
+    } else {
+      setStoreSettings({ store_name: 'Carregando...', module_id: null })
     }
   }, [auth.session, auth.profile, location.pathname, activeTenantId])
 

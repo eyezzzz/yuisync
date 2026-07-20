@@ -934,10 +934,10 @@ export default function EstoquePage() {
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
-          <input className="inp pl-9 py-2" placeholder="Buscar produto..."
+          <input aria-label="Buscar produto" className="inp pl-9 py-2" placeholder="Buscar produto..."
             value={search} onChange={e => setSearch(e.target.value)}/>
           {search && (
-            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text p-1">
+            <button type="button" aria-label="Limpar busca" title="Limpar busca" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text p-1">
               <X size={14}/>
             </button>
           )}
@@ -952,13 +952,13 @@ export default function EstoquePage() {
             allowEmpty
             emptyLabel="Categorias"
           />
-          <select className="inp py-2 w-auto" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          <select aria-label="Filtrar estoque por status" className="inp py-2 w-auto" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="">Status</option>
             <option value="ok">Normal</option>
             <option value="critico">Crítico</option>
             <option value="esgotado">Esgotado</option>
           </select>
-          <button onClick={() => load({ activeOnly: false })}
+          <button type="button" aria-label="Atualizar estoque" onClick={() => load({ activeOnly: false })}
             className="btn btn-ghost btn-sm btn-icon" title="Atualizar">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
           </button>
@@ -1133,18 +1133,18 @@ export default function EstoquePage() {
                       <td><span className={`badge ${sb.cls}`}>{sb.label}</span></td>
                       <td className="text-right">
                         <div className="flex justify-end gap-1">
-                          <button onClick={() => setAdjusting(p)}
+                          <button type="button" aria-label={`Ajustar estoque de ${p.name}`} onClick={() => setAdjusting(p)}
                             className="btn btn-ghost btn-sm btn-icon" title="Ajustar estoque">
                             <Package size={13}/>
                           </button>
                           {isAdmin && (
-                            <button onClick={() => setModal(p)}
+                            <button type="button" aria-label={`Editar ${p.name}`} onClick={() => setModal(p)}
                               className="btn btn-ghost btn-sm btn-icon" title="Editar">
                               <Edit2 size={13}/>
                             </button>
                           )}
                           {isAdmin && (
-                            <button onClick={() => remove(p.id)}
+                            <button type="button" aria-label={`Desativar ${p.name}`} onClick={() => remove(p.id)}
                               className="btn btn-danger btn-sm btn-icon" title="Desativar">
                               <Trash2 size={13}/>
                             </button>

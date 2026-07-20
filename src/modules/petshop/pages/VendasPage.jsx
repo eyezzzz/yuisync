@@ -381,6 +381,7 @@ export default function VendasPage() {
   const [sellers, setSellers] = useState([])
   const [sellerId, setSellerId] = useState(auth?.profile?.id || '')
   const [saving, setSaving]     = useState(false)
+  const checkoutAttemptRef = useRef({ fingerprint: '', key: '' })
   const [err, setErr]           = useState('')
   const [successSale, setSuccessSale] = useState(null)
   const [issuingFiscalSaleId, setIssuingFiscalSaleId] = useState('')
@@ -597,6 +598,19 @@ export default function VendasPage() {
     }
     setSaving(true); setErr('')
     try {
+      const checkoutFingerprint = JSON.stringify({
+        cart: cart.map((item) => [item.product_id, item.quantity, item.upsell === true]),
+        petId,
+        payment,
+        paymentBreakdownEnabled,
+        paymentBreakdown,
+        discount: Number(discount) || 0,
+        saleSource,
+        fulfillmentType,
+      })
+      if (checkoutAttemptRef.current.fingerprint !== checkoutFingerprint) {
+        checkoutAttemptRef.current = { fingerprint: checkoutFingerprint, key: crypto.randomUUID() }
+      }
       const paymentDescriptor = buildPaymentDescriptor()
       const paymentSplits = paymentBreakdownEnabled
         ? paymentBreakdown
@@ -617,6 +631,7 @@ export default function VendasPage() {
         fulfillment_type: saleSource === 'whatsapp' ? fulfillmentType : 'balcao',
         payment_splits:  paymentSplits,
         notes:           splitNotes,
+        idempotency_key: checkoutAttemptRef.current.key,
       }, cart)
       
       setSuccessSale({
@@ -631,6 +646,7 @@ export default function VendasPage() {
         fulfillmentType: createdSale?.fulfillment_type || (saleSource === 'whatsapp' ? fulfillmentType : 'balcao'),
       })
       clearCart()
+      checkoutAttemptRef.current = { fingerprint: '', key: '' }
       await reloadHistoryScope()
       getDailyStats().then(setDailyStats)
       void handleIssueFiscal(createdSale?.id, { updateSuccessModal: true, silentError: true })
@@ -687,6 +703,7 @@ export default function VendasPage() {
           <div className="mb-3 flex flex-wrap items-center gap-2">
             <p className="text-xs text-muted">Historico do dia</p>
             <input
+              aria-label="Data do historico de vendas"
               type="date"
               className="inp py-2 text-xs w-auto"
               value={historyDate}
@@ -769,7 +786,7 @@ export default function VendasPage() {
             <div className="px-4 py-3 border-b border-[var(--border2)] flex items-center gap-4">
               <div className="relative flex-1">
                 <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
-                <input className="inp pl-9" placeholder="Buscar produto..." value={search} onChange={e => setSearch(e.target.value)}/>
+                <input aria-label="Buscar produto" className="inp pl-9" placeholder="Buscar produto..." value={search} onChange={e => setSearch(e.target.value)}/>
               </div>
               <ProductCategorySelect
                 className="w-52"
@@ -906,6 +923,7 @@ export default function VendasPage() {
                 <div className="relative">
                   <User size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
                   <input 
+                    aria-label="Buscar cliente"
                     className="inp pl-9" 
                     placeholder="Cliente (Nome, Pet, CPF...)" 
                     value={customerSearch || customerName} 
@@ -919,6 +937,9 @@ export default function VendasPage() {
                   />
                   {(customerSearch || customerName) && (
                     <button 
+                      type="button"
+                      aria-label="Limpar cliente selecionado"
+                      title="Limpar cliente"
                       onClick={() => { setCustomerSearch(''); setCustomerName(''); setPetId(''); setShowResults(false); }}
                       className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-red-400 p-1"
                     >
@@ -964,7 +985,7 @@ export default function VendasPage() {
               </div>
               <div className="space-y-2">
                 <p className="text-[10px] font-black uppercase tracking-widest text-muted">Vendedor / caixa</p>
-                <select className="inp text-xs" value={sellerId} onChange={(event) => setSellerId(event.target.value)}>
+                <select aria-label="Vendedor ou caixa" className="inp text-xs" value={sellerId} onChange={(event) => setSellerId(event.target.value)}>
                   <option value={auth?.profile?.id || ''}>{auth?.profile?.full_name || auth?.profile?.email || 'Usuario atual'}</option>
                   {sellers
                     .filter((seller) => seller.id !== auth?.profile?.id)
@@ -1052,6 +1073,7 @@ export default function VendasPage() {
                     {paymentBreakdown.map((item, index) => (
                       <div key={item.id} className="grid grid-cols-[1fr_1fr_40px] gap-2">
                         <select
+                          aria-label={`Forma de pagamento ${index + 1}`}
                           className="inp text-xs"
                           value={item.method}
                           onChange={(event) => updatePaymentSplit(item.id, 'method', event.target.value)}
@@ -1061,6 +1083,7 @@ export default function VendasPage() {
                           ))}
                         </select>
                         <input
+                          aria-label={`Valor do pagamento ${index + 1}`}
                           className="inp text-xs"
                           type="number"
                           min="0"
@@ -1071,6 +1094,8 @@ export default function VendasPage() {
                         />
                         <button
                           type="button"
+                          aria-label={`Remover pagamento ${index + 1}`}
+                          title="Remover pagamento"
                           onClick={() => removePaymentSplit(item.id)}
                           disabled={paymentBreakdown.length <= 2}
                           className="btn btn-secondary btn-sm justify-center"
@@ -1103,7 +1128,7 @@ export default function VendasPage() {
                 )}
               </div>
               {(err || prodError) && (
-                <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-3 text-sm text-red-400 flex items-start gap-2">
+                <div role="alert" className="rounded-xl border border-red-500/20 bg-red-500/10 px-3 py-3 text-sm text-red-400 flex items-start gap-2">
                   <AlertCircle size={16} className="mt-0.5 flex-shrink-0" />
                   <span>{err || prodError}</span>
                 </div>
