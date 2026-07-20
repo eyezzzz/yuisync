@@ -26,6 +26,7 @@ const EMPTY_FORM = {
 }
 
 const PLAN_LABELS = { active: 'Ativo', paused: 'Pausado', cancelled: 'Encerrado' }
+const CLIENTS_PAGE_SIZE = 60
 
 function digits(value) { return String(value || '').replace(/\D/g, '') }
 function normalize(value) { return String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim() }
@@ -254,6 +255,7 @@ export default function PetsPage() {
   const [speciesFilter, setSpeciesFilter] = useState('')
   const [planFilter, setPlanFilter] = useState('')
   const [view, setView] = useState('grid')
+  const [page, setPage] = useState(1)
   const [modalPet, setModalPet] = useState(null)
   const [drawerPet, setDrawerPet] = useState(null)
   const [legacyImportModal, setLegacyImportModal] = useState(false)
@@ -287,13 +289,23 @@ export default function PetsPage() {
     const queryDigits = digits(search)
     return (pets || []).filter((pet) => {
       const subscription = latestSubscriptionByClient.get(pet.id)
-      const matchesText = !query || [pet.owner_name, pet.pet_name, pet.breed, pet.owner_address, pet.owner_neighborhood, pet.owner_city, subscription?.subscription_plans?.name].some((field) => normalize(field).includes(query))
-      const matchesDigits = !queryDigits || [pet.phone, pet.owner_cpf].some((field) => digits(field).includes(queryDigits))
+      const matchesText = Boolean(query) && [pet.owner_name, pet.pet_name, pet.breed, pet.owner_address, pet.owner_neighborhood, pet.owner_city, subscription?.subscription_plans?.name].some((field) => normalize(field).includes(query))
+      const matchesDigits = Boolean(queryDigits) && [pet.phone, pet.owner_cpf].some((field) => digits(field).includes(queryDigits))
+      const matchesSearch = (!query && !queryDigits) || matchesText || matchesDigits
       const matchesSpecies = !speciesFilter || pet.species === speciesFilter
       const matchesPlan = !planFilter || subscription?.status === planFilter
-      return (matchesText || matchesDigits) && matchesSpecies && matchesPlan
+      return matchesSearch && matchesSpecies && matchesPlan
     })
   }, [latestSubscriptionByClient, pets, planFilter, search, speciesFilter])
+
+  useEffect(() => {
+    setPage(1)
+  }, [search, speciesFilter, planFilter, view])
+
+  const totalPages = Math.max(1, Math.ceil(filteredPets.length / CLIENTS_PAGE_SIZE))
+  const currentPage = Math.min(page, totalPages)
+  const pageStart = (currentPage - 1) * CLIENTS_PAGE_SIZE
+  const visiblePets = filteredPets.slice(pageStart, pageStart + CLIENTS_PAGE_SIZE)
 
   async function handleSave({ petPayload, planId, subscriptionStatus }) {
     const currentSubscription = modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null
@@ -338,11 +350,24 @@ export default function PetsPage() {
 
       {pageError && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{pageError}</div>}
 
+      {!loading && filteredPets.length > 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
+          <span>Exibindo {pageStart + 1}-{Math.min(pageStart + CLIENTS_PAGE_SIZE, filteredPets.length)} de {filteredPets.length} clientes</span>
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2">
+              <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button>
+              <span>Pagina {currentPage} de {totalPages}</span>
+              <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage >= totalPages} onClick={() => setPage((value) => Math.min(totalPages, value + 1))}>Proxima</button>
+            </div>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <div className="rounded-2xl border border-[var(--border)] bg-card px-6 py-12 text-center text-muted"><RefreshCw size={18} className="animate-spin mx-auto mb-3" />Carregando clientes...</div>
       ) : view === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {filteredPets.map((pet) => {
+          {visiblePets.map((pet) => {
             const Icon = speciesIcon(pet.species)
             const subscription = latestSubscriptionByClient.get(pet.id)
             const ageLabel = age(pet.birth_date)
@@ -387,7 +412,7 @@ export default function PetsPage() {
           {filteredPets.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-[var(--border)] px-6 py-12 text-center"><p className="text-text font-semibold">Nenhum cadastro encontrado</p><p className="text-muted text-sm mt-2">Tente remover filtros ou criar um novo cliente.</p></div>}
         </div>
       ) : (
-        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pet</th><th>Telefone</th><th>Plano</th><th className="text-right">Acoes</th></tr></thead><tbody>{filteredPets.map((pet) => { const subscription = latestSubscriptionByClient.get(pet.id); return <tr key={pet.id} className="cursor-pointer" onClick={() => setDrawerPet(pet)}><td className="font-semibold text-text">{pet.owner_name}</td><td>{pet.pet_name || '-'}</td><td>{formatPhone(pet.phone)}</td><td>{subscription ? <span className={`badge ${getPlanTone(subscription.status)}`}>{subscription.subscription_plans?.name || 'Plano'}</span> : <span className="text-muted">Sem plano</span>}</td><td className="text-right"><div className="flex justify-end gap-2"><button onClick={(e) => { e.stopPropagation(); setModalPet(pet) }} className="btn btn-secondary btn-sm">Editar</button><button onClick={(e) => { e.stopPropagation(); handleDelete(pet.id) }} className="btn btn-danger btn-sm">Excluir</button></div></td></tr> })}{filteredPets.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
+        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pet</th><th>Telefone</th><th>Plano</th><th className="text-right">Acoes</th></tr></thead><tbody>{visiblePets.map((pet) => { const subscription = latestSubscriptionByClient.get(pet.id); return <tr key={pet.id} className="cursor-pointer" onClick={() => setDrawerPet(pet)}><td className="font-semibold text-text">{formatPersonName(pet.owner_name)}</td><td>{pet.pet_name || '-'}</td><td>{formatPhone(pet.phone)}</td><td>{subscription ? <span className={`badge ${getPlanTone(subscription.status)}`}>{subscription.subscription_plans?.name || 'Plano'}</span> : <span className="text-muted">Sem plano</span>}</td><td className="text-right"><div className="flex justify-end gap-2"><button onClick={(e) => { e.stopPropagation(); setModalPet(pet) }} className="btn btn-secondary btn-sm">Editar</button><button onClick={(e) => { e.stopPropagation(); handleDelete(pet.id) }} className="btn btn-danger btn-sm">Excluir</button></div></td></tr> })}{filteredPets.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
       )}
 
       {modalPet !== null && <PetModal pet={modalPet?.id ? modalPet : null} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onClose={() => setModalPet(null)} onSave={handleSave} />}

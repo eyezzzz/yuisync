@@ -97,9 +97,16 @@ test('modo caixa do PDV usa scanner e preserva o checkout transacional', async (
 
 test('cards de clientes preservam nomes legiveis e acoes separadas', async () => {
   const source = await read('src/modules/petshop/pages/PetsPage.jsx')
+  const clientsSource = await read('src/shared/hooks/useClients.js')
   assert.match(source, /function formatPersonName/)
   assert.match(source, /replace\(\/\^\[\\s:;,\.=_-\]\+\//)
   assert.match(source, /line-clamp-2 text-base font-bold leading-snug/)
   assert.match(source, /flex min-h-\[250px\] flex-col/)
   assert.match(source, /mt-auto border-t/)
+  assert.match(source, /const matchesSearch = \(!query && !queryDigits\) \|\| matchesText \|\| matchesDigits/)
+  assert.match(source, /const CLIENTS_PAGE_SIZE = 60/)
+  assert.match(source, /visiblePets\.map/)
+  assert.doesNotMatch(source, /\{filteredPets\.map/)
+  assert.match(clientsSource, /fetchAllClientPages/)
+  assert.match(clientsSource, /\.range\(from, from \+ CLIENT_PAGE_SIZE - 1\)/)
 })

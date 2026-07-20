@@ -6,6 +6,18 @@ import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
 const BASE_SELECT = 'id, module_id, type, name, document, phone, email, address, neighborhood, city, notes, active, details, created_at'
+const CLIENT_PAGE_SIZE = 1000
+
+async function fetchAllClientPages(buildQuery) {
+  const rows = []
+  for (let from = 0; ; from += CLIENT_PAGE_SIZE) {
+    const { data, error } = await buildQuery().range(from, from + CLIENT_PAGE_SIZE - 1)
+    if (error) return { data: null, error }
+    rows.push(...(data || []))
+    if (!data || data.length < CLIENT_PAGE_SIZE) break
+  }
+  return { data: rows, error: null }
+}
 
 const mapClientToPet = (c) => ({
   id: c.id,
@@ -149,12 +161,14 @@ export function useClients() {
     try {
       const term = sanitizeSearch(search)
       const runSearch = (includePetFields = true) => runWithTenantFallback(activeTenantId, async (includeTenant) => {
-        let q = supabase.from('clients').select(BASE_SELECT)
-          .eq('module_id', activeModuleId)
-          .order('name')
+        return fetchAllClientPages(() => {
+          let q = supabase.from('clients').select(BASE_SELECT)
+            .eq('module_id', activeModuleId)
+            .order('name')
 
-        q = applyTenantFilter(q, activeTenantId, includeTenant)
-        return applyClientSearch(q, term, includePetFields)
+          q = applyTenantFilter(q, activeTenantId, includeTenant)
+          return applyClientSearch(q, term, includePetFields)
+        })
       })
 
       let response = await runSearch(true)
