@@ -180,7 +180,7 @@ test('detalhes do cliente mostram endereco completo e complemento', async () => 
 test('estoque permite unidades e fracao para produtos por peso', async () => {
   const source = await read('src/modules/petshop/pages/EstoquePage.jsx')
   assert.match(source, /Quilograma \(KG\)/)
-  assert.match(source, /Milheiro \(MIL\)/)
+  assert.match(source, /MIL \(conforme planilha\)/)
   assert.match(source, /step=\{form\.unit === 'KG' \? '0\.001' : '1'\}/)
   assert.match(source, /formatStockQuantity/)
 })

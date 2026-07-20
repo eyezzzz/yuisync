@@ -77,7 +77,7 @@ const emptyForm = {
 const PRODUCT_UNITS = [
   { value: 'UN', label: 'Unidade (UN)' },
   { value: 'KG', label: 'Quilograma (KG)' },
-  { value: 'MIL', label: 'Milheiro (MIL)' },
+  { value: 'MIL', label: 'MIL (conforme planilha)' },
 ]
 
 function productUnit(product) {
