@@ -1189,7 +1189,9 @@ export default function VendasPage() {
                 </div>
 
                 {showResults && customerSearch && (
-                  <div className="absolute bottom-full mb-2 left-0 right-0 bg-card border border-[var(--border)] rounded-xl shadow-2xl max-h-60 overflow-y-auto z-50 animate-in fade-in slide-in-from-bottom-2">
+                  <div className={`absolute left-0 right-0 z-50 max-h-60 overflow-y-auto rounded-xl border border-[var(--border)] bg-card shadow-2xl animate-in fade-in ${
+                    tab === 'caixa' ? 'top-full mt-2 slide-in-from-top-2' : 'bottom-full mb-2 slide-in-from-bottom-2'
+                  }`}>
                     {filteredPets.length === 0 ? (
                       <div className="p-4 text-center">
                         <p className="text-xs text-muted">Novo cliente: <span className="font-bold text-[var(--primary)]">"{customerSearch}"</span></p>

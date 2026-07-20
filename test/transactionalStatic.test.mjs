@@ -82,6 +82,7 @@ test('modo caixa do PDV usa scanner e preserva o checkout transacional', async (
   assert.match(source, /modal-overlay theme-petshop-modal/)
   assert.match(source, /yuisync:focus-mode/)
   assert.match(source, /Sair do Modo Caixa/)
+  assert.match(source, /tab === 'caixa' \? 'top-full mt-2 slide-in-from-top-2'/)
   assert.match(routerSource, /!focusMode && \(\s*<Sidebar/)
   assert.match(routerSource, /activeModuleId !== 'system' && !focusMode && <SupportWidget/)
 })
