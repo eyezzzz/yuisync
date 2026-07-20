@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { Calendar, ClipboardList, MapPin, MessageSquare, Package, Printer, RefreshCw, Truck, UserCheck } from 'lucide-react'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { fmtCurrency, todayISO } from '../../../lib/supabase'
+import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { SERVICE_ORDER_FLOW, usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 
 const ALL_STATUS_STEPS = [
@@ -122,9 +123,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
       <head>
         <title>Ordem ${escapeHtml(orderLabel)}</title>
         <style>
-          /* A altura do rolo vem do driver da impressora. "32mm auto" e invalido
-             no Chrome e pode cair no tamanho A4, deixando uma grande area em branco. */
-          @page { size: auto; margin: 0; }
+          @page { size: 32mm 500mm; margin: 0; }
           * { box-sizing: border-box; }
           html { width: ${width}; height: auto !important; min-height: 0 !important; }
           body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 6px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; overflow: visible; }
@@ -186,10 +185,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
 
   printWindow.document.write(html)
   printWindow.document.close()
-  setTimeout(() => {
-    printWindow.print()
-    printWindow.close()
-  }, 350)
+  printThermalReceipt(printWindow)
 }
 
 function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackItems = [], setPage }) {

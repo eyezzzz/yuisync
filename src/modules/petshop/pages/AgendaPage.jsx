@@ -10,6 +10,7 @@ import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { useClients }         from '../../../shared/hooks/useClients'
 import { useAuthCtx }      from '../../../context/AuthContext'
 import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
+import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import {
   DEFAULT_PETSHOP_SERVICES,
@@ -169,7 +170,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
       <html>
         <head>
           <style>
-            @page { size: auto; margin: 0; }
+            @page { size: 32mm 500mm; margin: 0; }
             * { box-sizing: border-box; }
             html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
             body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
@@ -225,10 +226,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
     `
     printWindow.document.write(receiptHtml)
     printWindow.document.close()
-    setTimeout(() => {
-      printWindow.print()
-      printWindow.close()
-    }, 500)
+    printThermalReceipt(printWindow)
   }
 
   return createPortal(

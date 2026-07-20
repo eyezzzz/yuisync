@@ -12,6 +12,7 @@ import { useClients }     from '../../../shared/hooks/useClients'
 import { useAuthCtx }  from '../../../context/AuthContext'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency, todayISO } from '../../../lib/supabase'
+import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, resolveCategoryMeta } from '../../../shared/lib/productCategories'
 
@@ -347,7 +348,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
       <html>
         <head>
           <style>
-            @page { size: auto; margin: 0; }
+            @page { size: 32mm 500mm; margin: 0; }
             * { box-sizing: border-box; }
             html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
             body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
@@ -390,10 +391,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
     `
     printWindow.document.write(receiptHtml)
     printWindow.document.close()
-    setTimeout(() => {
-      printWindow.print()
-      printWindow.close()
-    }, 500)
+    printThermalReceipt(printWindow)
   }
 
   const handleOpenFiscalConsult = () => {
@@ -419,7 +417,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
       <html>
         <head>
           <style>
-            @page { size: auto; margin: 0; }
+            @page { size: 32mm 500mm; margin: 0; }
             * { box-sizing: border-box; }
             html, body { width: 32mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
             body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
@@ -450,10 +448,7 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
 
     printWindow.document.write(html)
     printWindow.document.close()
-    setTimeout(() => {
-      printWindow.print()
-      printWindow.close()
-    }, 500)
+    printThermalReceipt(printWindow)
   }
 
   return createPortal(
