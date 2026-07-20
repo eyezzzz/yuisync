@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { readFile } from 'node:fs/promises'
+import { readFile, readdir } from 'node:fs/promises'
 import test from 'node:test'
 
 const root = new URL('../', import.meta.url)
@@ -40,4 +40,13 @@ test('reset de estoque preserva itens e vendas historicas', async () => {
   const resetFlow = source.slice(source.indexOf('async function handleResetStock'), source.indexOf('function normalizeLegacyString'))
   assert.doesNotMatch(resetFlow, /from\(['"]sale_items['"]\)[\s\S]*?\.delete\(/)
   assert.match(resetFlow, /stock_quantity:\s*0/)
+})
+
+test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () => {
+  const apiFiles = await readdir(new URL('api/', root), { recursive: true })
+  const serverlessFunctions = apiFiles.filter((path) => path.endsWith('.ts'))
+  assert.ok(
+    serverlessFunctions.length <= 12,
+    `O deploy possui ${serverlessFunctions.length} funcoes serverless; o limite do Hobby e 12.`,
+  )
 })
