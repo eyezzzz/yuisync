@@ -117,6 +117,22 @@ test('PetBot usa LLM como interpretador antes do guardiao', () => {
   assert.match(webhook, /redraftPetbotReplyWithLlm/)
 })
 
+test('WhatsApp e painel usam o mesmo runtime auditavel do PetBot', () => {
+  const localChat = read('server/lib/chat.js')
+  const webhook = read('serverless/whatsappWebhook.ts')
+  const migration = read('supabase/migrations/20260720005000_petbot_autonomy_foundation.sql')
+
+  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
+  assert.match(webhook, /skipUserPersistence: true/)
+  assert.match(webhook, /shared_petbot_runtime/)
+  assert.match(localChat, /customInstructions/)
+  assert.match(localChat, /recordPetbotEvent/)
+  assert.match(localChat, /idempotency_key: `petbot:\$\{session\.id\}`/)
+  assert.match(migration, /create table if not exists public\.petbot_events/)
+  assert.match(migration, /payment_status := 'aguardando_comprovante'/)
+  assert.match(migration, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
+})
+
 test('fluxo legado do WhatsApp tem MotoDog, Pix e checklist configuraveis', () => {
   const migration = read('database/petshop_legacy_whatsapp_flow.sql')
   const settings = read('src/shared/pages/SettingsPage.jsx')

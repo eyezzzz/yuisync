@@ -1,6 +1,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import type { IncomingHttpHeaders, IncomingMessage, ServerResponse } from 'node:http'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
+// @ts-ignore The shared runtime is authored as ESM JavaScript for the Node API too.
+import { respondToChatMessage } from '../server/lib/chat.js'
 // @ts-ignore Shared runtime guard is authored as ESM JavaScript for the Node API too.
 import * as petbotGuard from '../server/lib/petbotGuard.js'
 
@@ -2780,6 +2782,26 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
     }
   }
 
+  // O WhatsApp e o painel interno passam pelo mesmo runtime. O webhook fica
+  // responsavel apenas por autenticar a Meta, persistir a entrada e entregar a
+  // resposta ao cliente; regras, contexto, handoff e transacoes vivem no core.
+  const sharedResult = await respondToChatMessage(supabase as any, session.id, event.text, {
+    source: 'whatsapp',
+    skipUserPersistence: true,
+    mediaContext: event.media?.description || '',
+    assistantMetadata: {
+      channel: 'whatsapp',
+      delivery_status: 'pending',
+      whatsapp_reply_to_message_id: event.messageId,
+      whatsapp_phone_number_id: event.phoneNumberId,
+    },
+  })
+  await sendAndMarkDelivered(supabase, env, event, sharedResult.savedMessage as SavedMessage)
+  return { sessionId: session.id, ai: false, guarded: true, engine: 'shared_petbot_runtime' }
+
+  /* Legacy duplicated runtime retained temporarily for source-history reference.
+     Production returns above through respondToChatMessage. */
+  /*
   const history = await loadRecentHistory(supabase, session.id)
   const debouncedMessage = buildDebouncedUserMessage(history, event, env)
   const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
@@ -2931,6 +2953,7 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   await sendAndMarkDelivered(supabase, env, event, savedReply)
 
   return { sessionId: session.id, ai: false, guarded: true, intent: guard.intent || detectConversationIntent(debouncedMessage) }
+  */
 }
 
 async function handleGet(req: IncomingMessage, res: ServerResponse) {

@@ -159,7 +159,7 @@ export function normalizePetbotInterpretation(input = {}) {
   }
 }
 
-function buildInterpreterMessages({ message, history = [], state = {}, customerContext = '', mediaContext = '' }) {
+function buildInterpreterMessages({ message, history = [], state = {}, customerContext = '', mediaContext = '', customInstructions = '' }) {
   return [
     {
       role: 'system',
@@ -177,6 +177,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Retorne apenas JSON valido, sem markdown.',
         'Campos permitidos: customer_name, intent, pet_name, species, breed, size, age_category, product_kind, brand, package_preference, package_kg, quantity, service_type, service_grooming_detail, service_notes, service_date, service_time_preference, service_preferred_time, symptom, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, confirmation, negation, confidence, raw_summary.',
         'Enums: intent produto|banho_tosa|veterinaria|multi; species dog|cat; size pequeno|medio|grande; age_category filhote|adulto|castrado|senior; product_kind food|flea|litter|specific; payment_method pix|dinheiro|cartao; fulfillment_type entrega|retirada.',
+        clean(customInstructions) ? `Instrucoes de atendimento publicadas para este tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
       ].join('\n'),
     },
     {
@@ -286,7 +287,7 @@ export function buildInterpretedPetbotSearchText(message = '', interpretation = 
   ].filter(Boolean).join(' ')
 }
 
-function buildRedraftMessages({ message, history = [], directive = {} }) {
+function buildRedraftMessages({ message, history = [], directive = {}, customInstructions = '' }) {
   return [
     {
       role: 'system',
@@ -296,6 +297,7 @@ function buildRedraftMessages({ message, history = [], directive = {} }) {
         'Nao mude a acao, nao adicione preco, produto, horario, desconto, endereco ou confirmacao fora da resposta autorizada.',
         'Se a resposta autorizada ja estiver boa, pode devolver quase igual.',
         'Responda apenas a mensagem final para o cliente.',
+        clean(customInstructions) ? `Estilo e instrucoes publicadas do tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
       ].join('\n'),
     },
     {

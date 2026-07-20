@@ -2891,22 +2891,39 @@ export function runPetbotGuard({
 
 export function buildPetbotConfirmationReply(state = {}, settings = {}) {
   const lines = ['Pedido confirmado! 🎉']
+  const templates = settings.messageTemplates || settings.message_templates || {}
+  const renderTemplate = (template, replacements = {}) => String(template || '')
+    .replace(/\[([A-Z_]+)\]/g, (_, key) => replacements[key] ?? `[${key}]`)
   const isPix = norm(state.payment?.method) === 'pix'
   if (isPix) {
     const pixKey = clean(settings.pixKey || settings.pix_key)
     const holder = clean(settings.pixHolderName || settings.pix_holder_name)
-    if (pixKey) {
-      lines.push(`Pagamento via Pix: ${pixKey}${holder ? ` (${holder})` : ''}.\nAssim que puder, envie o comprovante para a equipe dar baixa.`)
-    } else {
-      lines.push('Pagamento via Pix combinado.\nAssim que puder, envie o comprovante para a equipe dar baixa.')
-    }
+    const rawTemplate = String(templates.payment_proof_request || '')
+    const template = renderTemplate(rawTemplate, {
+      PIX_KEY: pixKey || 'chave Pix informada pela equipe',
+      PIX_TITULAR: holder,
+      NOME: state.customerName || 'cliente',
+    })
+    const pixDetails = pixKey ? `Pagamento via Pix: ${pixKey}${holder ? ` (${holder})` : ''}.` : ''
+    lines.push(template
+      ? `${rawTemplate.includes('[PIX_KEY]') ? '' : `${pixDetails}\n`}${template}`.trim()
+      : (pixKey
+      ? `Pagamento via Pix: ${pixKey}${holder ? ` (${holder})` : ''}.\nAssim que puder, envie o comprovante para a equipe dar baixa.`
+      : 'Pagamento via Pix combinado.\nAssim que puder, envie o comprovante para a equipe dar baixa.'))
   }
 
   const missing = Array.isArray(state.registrationChecklist?.missing)
     ? state.registrationChecklist.missing.filter(Boolean)
     : []
   if (missing.length) {
-    lines.push([
+    const rawTemplate = String(templates.registration_checklist || '')
+    const template = renderTemplate(rawTemplate, {
+      NOME: state.customerName || 'cliente',
+      CAMPOS: missing.map((item) => `â€¢ ${item}`).join('\n'),
+    })
+    lines.push(template
+      ? `${template}${rawTemplate.includes('[CAMPOS]') ? '' : `\n${missing.map((item) => `• ${item}`).join('\n')}`}`
+      : [
       'Para completar seu cadastro conosco, depois me envie:',
       ...missing.map((item) => `• ${item}`),
     ].join('\n'))

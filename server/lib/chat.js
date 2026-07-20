@@ -1442,6 +1442,7 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
     sale_id: sale.id,
     client_id: customer.client.id,
     session_id: session.id,
+    idempotency_key: `petbot:${session.id}`,
     source: 'whatsapp',
     order_type: orderType,
     status: orderType === 'servico' ? 'agendado' : 'separacao',
@@ -1707,7 +1708,7 @@ async function loadBotRuntimeConfig(supabase, tenantId, moduleId) {
   try {
     const { data: company, error: companyErr } = await supabase
       .from('companies')
-      .select('id, model_name, temperature')
+      .select('id, model_name, temperature, system_prompt')
       .eq('module_id', moduleId)
       .eq('tenant_id', tenantId)
       .eq('is_active', true)
@@ -1715,15 +1716,16 @@ async function loadBotRuntimeConfig(supabase, tenantId, moduleId) {
       .limit(1)
       .maybeSingle()
 
-    if (companyErr || !company) return { modelName: DEFAULT_BOT_MODEL, temperature: DEFAULT_BOT_TEMPERATURE }
+    if (companyErr || !company) return { modelName: DEFAULT_BOT_MODEL, temperature: DEFAULT_BOT_TEMPERATURE, systemPrompt: '' }
 
     return {
       modelName: company.model_name || DEFAULT_BOT_MODEL,
       temperature: Number(company.temperature ?? DEFAULT_BOT_TEMPERATURE),
+      systemPrompt: cleanText(company.system_prompt),
     }
   } catch (err) {
     logger.warn('Bot runtime config load failed', { tenantId, moduleId, error: err.message })
-    return { modelName: DEFAULT_BOT_MODEL, temperature: DEFAULT_BOT_TEMPERATURE }
+    return { modelName: DEFAULT_BOT_MODEL, temperature: DEFAULT_BOT_TEMPERATURE, systemPrompt: '' }
   }
 }
 
@@ -1818,6 +1820,19 @@ async function insertUserMessages(supabase, sessionId, userMessages) {
   }
 }
 
+async function recordPetbotEvent(supabase, payload) {
+  try {
+    const { error } = await supabase.from('petbot_events').insert(payload)
+    if (error) {
+      logger.warn('Unable to persist PetBot audit event', { code: error.code, message: error.message })
+    }
+  } catch (error) {
+    // The table is introduced by a migration. A missing audit table must never
+    // prevent an active WhatsApp conversation from receiving its reply.
+    logger.warn('PetBot audit event unavailable', { message: error instanceof Error ? error.message : String(error) })
+  }
+}
+
 export async function respondToChatMessage(supabase, sessionId, message, options = {}) {
   const trimmedMessage = typeof message === 'string' ? message.trim() : ''
 
@@ -1845,7 +1860,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const rating = parseRating(trimmedMessage)
   if (rating !== null && hasConfirmedOrderContext(session)) {
-    await insertUserMessages(supabase, sessionId, normalizeDashboardUserMessages(trimmedMessage, options))
+    if (!options.skipUserPersistence) {
+      await insertUserMessages(supabase, sessionId, normalizeDashboardUserMessages(trimmedMessage, options))
+    }
     await saveSatisfactionRating(supabase, sessionId, rating)
     const reply = `Obrigado pela nota ${rating}! Atendimento encerrado.`
     const botSentAt = new Date().toISOString()
@@ -1874,7 +1891,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   }
 
   if (hasConfirmedOrderContext(session) && await updateCustomerRegistrationFromMessage(supabase, session, trimmedMessage)) {
-    await insertUserMessages(supabase, sessionId, normalizeDashboardUserMessages(trimmedMessage, options))
+    if (!options.skipUserPersistence) {
+      await insertUserMessages(supabase, sessionId, normalizeDashboardUserMessages(trimmedMessage, options))
+    }
     const reply = 'Recebi os dados e atualizei o cadastro. Obrigado!\n\nDe 0 a 10, como avalia o atendimento?'
     const botSentAt = new Date().toISOString()
     const { data: savedReply, error: replyInsertError } = await supabase
@@ -1919,6 +1938,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     loadBotRuntimeConfig(supabase, session.tenant_id, moduleId),
     ensureCustomerProfile(supabase, sessionForGuard),
   ])
+  const customInstructions = [storeSettings.botPrompt, runtimeConfig.systemPrompt]
+    .filter(Boolean)
+    .join('\n\n')
   const llmInterpretation = await interpretPetbotMessageWithLlm({
     apiKey: serverEnv.openAiApiKey,
     model: runtimeConfig.modelName,
@@ -1928,6 +1950,8 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     history,
     state: recoveredContext,
     customerContext: buildCustomerContext(customer),
+    mediaContext: options.mediaContext || '',
+    customInstructions,
   })
   const catalogSearchText = buildPetbotSearchText(
     buildInterpretedPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), llmInterpretation),
@@ -1939,7 +1963,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   ])
 
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
-  await insertUserMessages(supabase, sessionId, userMessages)
+  if (!options.skipUserPersistence) {
+    await insertUserMessages(supabase, sessionId, userMessages)
+  }
 
   let guard = runPetbotGuard({
     message: trimmedMessage,
@@ -1984,6 +2010,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       history,
       directive: guard.guardDirective,
       fallbackReply: reply,
+      customInstructions,
     })
     if (redraftResult?.reply) reply = redraftResult.reply
   }
@@ -2076,6 +2103,24 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   if (replyInsertError) {
     throw new HttpError(500, 'Unable to save assistant response.')
   }
+
+  await recordPetbotEvent(supabase, {
+    tenant_id: session.tenant_id,
+    module_id: moduleId,
+    session_id: sessionId,
+    message_id: savedReply.id,
+    event_type: orderResult ? 'order_saved' : (guard.needsHuman ? 'handoff' : 'turn'),
+    engine_version: 'petbot_guard_v2',
+    intent: guard.intent || intent,
+    action: guard.action || null,
+    outcome: orderResult ? 'saved' : (guard.needsHuman ? 'handoff' : 'ok'),
+    handoff_target: guard.needsHuman ? (guard.handoffTarget || 'atendente') : null,
+    metadata: {
+      blocked_reasons: state?.blockedReasons || [],
+      order_saved: Boolean(orderResult),
+      source: options.source || 'dashboard_simulation',
+    },
+  })
 
   const { data: finalSession, error: finalSessionError } = await supabase
     .from('chat_sessions')
