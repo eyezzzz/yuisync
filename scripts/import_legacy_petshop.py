@@ -33,6 +33,19 @@ DEFAULT_PRODUCTS = Path.home() / 'Downloads' / 'Produtos.xls'
 DEFAULT_PEOPLE = Path.home() / 'Downloads' / 'Pessoas.xls'
 MODULE_ID = 'petshop'
 BATCH_SIZE = 250
+LEGACY_PRODUCT_CATEGORY_MAP = {
+    'acessorios': 'Acessório',
+    'racao': 'Ração',
+    'higiene limpeza': 'Higiene',
+    'medicamentos': 'Medicamento',
+    'brinquedos': 'Brinquedo',
+    'petiscos': 'Petisco',
+    'servico': 'Serviço',
+    'banho': 'Banho',
+    'jardinagem': 'Jardinagem',
+    'aquarismo': 'Aquarismo',
+    'bebidas': 'Bebidas',
+}
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -80,6 +93,10 @@ def safe_text(value, limit=500) -> str | None:
 
 def normalized_product_name(value) -> str:
     return unicodedata.normalize('NFD', clean(value)).encode('ascii', 'ignore').decode().casefold()
+
+
+def canonical_product_category(value) -> str:
+    return LEGACY_PRODUCT_CATEGORY_MAP.get(normalized_product_name(value), 'Outro')
 
 
 def chunks(items, size=BATCH_SIZE):
@@ -196,7 +213,7 @@ def parse_products(path: Path, tenant_id: str) -> tuple[list[dict], int]:
             'module_id': MODULE_ID,
             'name': name[:250],
             'barcode': barcode,
-            'category': safe_text(row.get('Descrição Grupo '), 120) or 'Sem categoria',
+            'category': canonical_product_category(row.get('Descrição Grupo')),
             'description': safe_text(row.get('Descrição Curta (Loja Virtual)'), 1000),
             'price': numeric(row.get('Preço Venda')),
             'cost_price': numeric(row.get('Custo Atual')),
@@ -237,6 +254,27 @@ def product_price_updates(db: SupabaseRest, tenant_id: str, products: list[dict]
                 'price': source['price'],
                 'cost_price': source['cost_price'],
             })
+    return updates, unmatched
+
+
+def product_category_updates(db: SupabaseRest, tenant_id: str, products: list[dict]) -> tuple[list[dict], list[dict]]:
+    current = db.all_rows('products', {
+        'select': '*',
+        'tenant_id': f'eq.{tenant_id}',
+        'module_id': f'eq.{MODULE_ID}',
+        'active': 'eq.true',
+    })
+    by_barcode = {product['barcode']: product for product in products if product['barcode']}
+    by_name = {normalized_product_name(product['name']): product for product in products}
+    updates = []
+    unmatched = []
+    for current_product in current:
+        source = by_barcode.get(current_product.get('barcode')) or by_name.get(normalized_product_name(current_product.get('name')))
+        if not source:
+            unmatched.append(current_product)
+            continue
+        if current_product.get('category') != source['category']:
+            updates.append({**current_product, 'category': source['category']})
     return updates, unmatched
 
 
@@ -298,9 +336,10 @@ def main():
     parser.add_argument('--products', type=Path, default=DEFAULT_PRODUCTS)
     parser.add_argument('--people', type=Path, default=DEFAULT_PEOPLE)
     parser.add_argument('--repair-product-prices', action='store_true', help='Corrige preço e custo dos produtos ativos a partir da planilha, sem alterar estoque ou clientes.')
+    parser.add_argument('--repair-product-categories', action='store_true', help='Corrige as categorias dos produtos ativos a partir da planilha, sem alterar preço, estoque ou clientes.')
     parser.add_argument('--execute', action='store_true', help='Aplica a substituição; sem esta flag apenas valida.')
     args = parser.parse_args()
-    if not args.products.exists() or (not args.repair_product_prices and not args.people.exists()):
+    if not args.products.exists() or (not (args.repair_product_prices or args.repair_product_categories) and not args.people.exists()):
         raise SystemExit('Planilhas não encontradas. Informe --products e --people com os caminhos corretos.')
 
     env = {**load_env(ROOT / '.env'), **os.environ}
@@ -348,6 +387,45 @@ def main():
             'products_corrected': len(updates),
             'active_products_without_sheet_match': len(unmatched),
             'preserved': ['stock_quantity', 'clients', 'sales', 'stock_movements'],
+        }, ensure_ascii=False, indent=2))
+        return
+
+    if args.repair_product_categories:
+        updates, unmatched = product_category_updates(db, tenant['id'], products)
+        print(json.dumps({
+            'tenant': tenant,
+            'product_rows_in_spreadsheet': len(products),
+            'categories_to_correct': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'mode': 'execute' if args.execute else 'dry-run',
+        }, ensure_ascii=False, indent=2))
+        if not args.execute:
+            return
+
+        backup_dir = ROOT / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        backup_path = backup_dir / f'product-category-repair-{datetime.now():%Y%m%d-%H%M%S}.json'
+        backup_path.write_text(json.dumps({
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'tenant': tenant,
+            'active_products_before_repair': db.all_rows('products', {
+                'select': '*',
+                'tenant_id': f'eq.{tenant["id"]}',
+                'module_id': f'eq.{MODULE_ID}',
+                'active': 'eq.true',
+            }),
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        for batch in chunks(updates):
+            db.request(
+                'POST', 'products', {'on_conflict': 'id'}, batch,
+                headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
+            )
+        print(json.dumps({
+            'status': 'completed',
+            'backup': str(backup_path),
+            'products_recategorized': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'preserved': ['price', 'cost_price', 'stock_quantity', 'clients', 'sales', 'stock_movements'],
         }, ensure_ascii=False, indent=2))
         return
 

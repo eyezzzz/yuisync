@@ -7,6 +7,9 @@ import {
   ToyBrick,
   Boxes,
   BriefcaseBusiness,
+  Fish,
+  Sprout,
+  CupSoda,
   Package,
 } from 'lucide-react'
 
@@ -19,6 +22,10 @@ export const BASE_PRODUCT_CATEGORIES = [
   'Brinquedo',
   'Genérico',
   'Serviço',
+  'Banho',
+  'Aquarismo',
+  'Jardinagem',
+  'Bebidas',
   'Outro',
 ]
 
@@ -87,6 +94,34 @@ const CATEGORY_META = {
     iconClassName: 'text-indigo-700',
     chipClassName: 'bg-indigo-500/10 text-indigo-700 border-indigo-500/20',
     tileClassName: 'bg-indigo-600 text-white',
+  },
+  banho: {
+    label: 'Banho',
+    icon: Droplets,
+    iconClassName: 'text-sky-700',
+    chipClassName: 'bg-sky-500/10 text-sky-700 border-sky-500/20',
+    tileClassName: 'bg-sky-600 text-white',
+  },
+  aquarismo: {
+    label: 'Aquarismo',
+    icon: Fish,
+    iconClassName: 'text-blue-700',
+    chipClassName: 'bg-blue-500/10 text-blue-700 border-blue-500/20',
+    tileClassName: 'bg-blue-600 text-white',
+  },
+  jardinagem: {
+    label: 'Jardinagem',
+    icon: Sprout,
+    iconClassName: 'text-lime-700',
+    chipClassName: 'bg-lime-500/10 text-lime-700 border-lime-500/20',
+    tileClassName: 'bg-lime-600 text-white',
+  },
+  bebidas: {
+    label: 'Bebidas',
+    icon: CupSoda,
+    iconClassName: 'text-orange-700',
+    chipClassName: 'bg-orange-500/10 text-orange-700 border-orange-500/20',
+    tileClassName: 'bg-orange-600 text-white',
   },
   outro: {
     label: 'Outro',
