@@ -46,6 +46,7 @@ LEGACY_PRODUCT_CATEGORY_MAP = {
     'aquarismo': 'Aquarismo',
     'bebidas': 'Bebidas',
 }
+PRODUCT_UNITS = {'UN', 'KG', 'MIL'}
 
 
 def load_env(path: Path) -> dict[str, str]:
@@ -97,6 +98,11 @@ def normalized_product_name(value) -> str:
 
 def canonical_product_category(value) -> str:
     return LEGACY_PRODUCT_CATEGORY_MAP.get(normalized_product_name(value), 'Outro')
+
+
+def canonical_product_unit(value) -> str:
+    unit = clean(value).upper()
+    return unit if unit in PRODUCT_UNITS else 'UN'
 
 
 def chunks(items, size=BATCH_SIZE):
@@ -222,7 +228,8 @@ def parse_products(path: Path, tenant_id: str) -> tuple[list[dict], int]:
             'active': True,
             'bot_metadata': {
                 'legacy_code': clean(row.get('Código')) or None,
-                'unit': clean(row.get('Unidade')) or None,
+                'unit': canonical_product_unit(row.get('Unidade')),
+                'is_bulk': canonical_product_unit(row.get('Unidade')) == 'KG',
                 'source': 'Produtos.xls',
             },
         })
@@ -275,6 +282,36 @@ def product_category_updates(db: SupabaseRest, tenant_id: str, products: list[di
             continue
         if current_product.get('category') != source['category']:
             updates.append({**current_product, 'category': source['category']})
+    return updates, unmatched
+
+
+def product_unit_updates(db: SupabaseRest, tenant_id: str, products: list[dict]) -> tuple[list[dict], list[dict]]:
+    current = db.all_rows('products', {
+        'select': '*',
+        'tenant_id': f'eq.{tenant_id}',
+        'module_id': f'eq.{MODULE_ID}',
+        'active': 'eq.true',
+    })
+    by_barcode = {product['barcode']: product for product in products if product['barcode']}
+    by_name = {normalized_product_name(product['name']): product for product in products}
+    updates = []
+    unmatched = []
+    for current_product in current:
+        source = by_barcode.get(current_product.get('barcode')) or by_name.get(normalized_product_name(current_product.get('name')))
+        if not source:
+            unmatched.append(current_product)
+            continue
+        current_metadata = current_product.get('bot_metadata') if isinstance(current_product.get('bot_metadata'), dict) else {}
+        source_unit = source['bot_metadata']['unit']
+        if canonical_product_unit(current_metadata.get('unit')) != source_unit:
+            updates.append({
+                **current_product,
+                'bot_metadata': {
+                    **current_metadata,
+                    'unit': source_unit,
+                    'is_bulk': source_unit == 'KG',
+                },
+            })
     return updates, unmatched
 
 
@@ -337,9 +374,10 @@ def main():
     parser.add_argument('--people', type=Path, default=DEFAULT_PEOPLE)
     parser.add_argument('--repair-product-prices', action='store_true', help='Corrige preço e custo dos produtos ativos a partir da planilha, sem alterar estoque ou clientes.')
     parser.add_argument('--repair-product-categories', action='store_true', help='Corrige as categorias dos produtos ativos a partir da planilha, sem alterar preço, estoque ou clientes.')
+    parser.add_argument('--repair-product-units', action='store_true', help='Registra as unidades dos produtos ativos a partir da planilha, sem alterar preço, estoque ou clientes.')
     parser.add_argument('--execute', action='store_true', help='Aplica a substituição; sem esta flag apenas valida.')
     args = parser.parse_args()
-    if not args.products.exists() or (not (args.repair_product_prices or args.repair_product_categories) and not args.people.exists()):
+    if not args.products.exists() or (not (args.repair_product_prices or args.repair_product_categories or args.repair_product_units) and not args.people.exists()):
         raise SystemExit('Planilhas não encontradas. Informe --products e --people com os caminhos corretos.')
 
     env = {**load_env(ROOT / '.env'), **os.environ}
@@ -424,6 +462,45 @@ def main():
             'status': 'completed',
             'backup': str(backup_path),
             'products_recategorized': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'preserved': ['price', 'cost_price', 'stock_quantity', 'clients', 'sales', 'stock_movements'],
+        }, ensure_ascii=False, indent=2))
+        return
+
+    if args.repair_product_units:
+        updates, unmatched = product_unit_updates(db, tenant['id'], products)
+        print(json.dumps({
+            'tenant': tenant,
+            'product_rows_in_spreadsheet': len(products),
+            'units_to_register': len(updates),
+            'active_products_without_sheet_match': len(unmatched),
+            'mode': 'execute' if args.execute else 'dry-run',
+        }, ensure_ascii=False, indent=2))
+        if not args.execute:
+            return
+
+        backup_dir = ROOT / 'backups'
+        backup_dir.mkdir(exist_ok=True)
+        backup_path = backup_dir / f'product-unit-repair-{datetime.now():%Y%m%d-%H%M%S}.json'
+        backup_path.write_text(json.dumps({
+            'created_at': datetime.now(timezone.utc).isoformat(),
+            'tenant': tenant,
+            'active_products_before_repair': db.all_rows('products', {
+                'select': '*',
+                'tenant_id': f'eq.{tenant["id"]}',
+                'module_id': f'eq.{MODULE_ID}',
+                'active': 'eq.true',
+            }),
+        }, ensure_ascii=False, indent=2), encoding='utf-8')
+        for batch in chunks(updates):
+            db.request(
+                'POST', 'products', {'on_conflict': 'id'}, batch,
+                headers={'Prefer': 'resolution=merge-duplicates,return=minimal'},
+            )
+        print(json.dumps({
+            'status': 'completed',
+            'backup': str(backup_path),
+            'products_with_unit_registered': len(updates),
             'active_products_without_sheet_match': len(unmatched),
             'preserved': ['price', 'cost_price', 'stock_quantity', 'clients', 'sales', 'stock_movements'],
         }, ensure_ascii=False, indent=2))

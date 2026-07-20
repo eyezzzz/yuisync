@@ -100,13 +100,18 @@ function compactObject(value) {
   )
 }
 
+function normalizeProductUnit(value) {
+  const unit = String(value || '').trim().toUpperCase()
+  return ['UN', 'KG', 'MIL'].includes(unit) ? unit : 'UN'
+}
+
 function mapProductRow(row) {
   const name = pick(row, PRODUCT_HEADER_ALIASES.name)
   const legacyCode = pick(row, PRODUCT_HEADER_ALIASES.legacyCode)
   if (!name || !legacyCode) return null
 
   const category = normalizeCategory(pick(row, PRODUCT_HEADER_ALIASES.category))
-  const unit = pick(row, PRODUCT_HEADER_ALIASES.unit)
+  const unit = normalizeProductUnit(pick(row, PRODUCT_HEADER_ALIASES.unit))
   const type = pick(row, PRODUCT_HEADER_ALIASES.type)
   const barcode = cleanDigits(pick(row, PRODUCT_HEADER_ALIASES.barcode)) || null
   const price = parseNumber(getByAliases(row, PRODUCT_HEADER_ALIASES.price))
@@ -121,6 +126,7 @@ function mapProductRow(row) {
     price,
     costPrice,
     stockQuantity,
+    unit,
     minStock: 0,
     speciesTarget: inferSpecies(name, category),
     active: isActiveStatus(pick(row, PRODUCT_HEADER_ALIASES.status)),

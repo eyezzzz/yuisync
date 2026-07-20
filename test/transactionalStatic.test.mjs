@@ -157,6 +157,7 @@ test('importacao legado preserva historico e oculta registros arquivados', async
   assert.match(script, /Soft-delete evita quebrar vendas, estoque e agendamentos legados vinculados/)
   assert.match(script, /BATCH_SIZE = 250/)
   assert.match(script, /repair-product-categories/)
+  assert.match(script, /repair-product-units/)
   assert.match(script, /canonical_product_category/)
   assert.match(script, /'active': False/)
   assert.match(script, /'on_conflict': 'barcode'/)
@@ -174,6 +175,14 @@ test('detalhes do cliente mostram endereco completo e complemento', async () => 
   assert.doesNotMatch(source, /pet\.address_number && `Nº \$\{pet\.address_number\}`/)
   assert.match(clients, /address_complement: c\.details\?\.address_complement/)
   assert.doesNotMatch(source, /Numero \/ referencia/)
+})
+
+test('estoque permite unidades e fracao para produtos por peso', async () => {
+  const source = await read('src/modules/petshop/pages/EstoquePage.jsx')
+  assert.match(source, /Quilograma \(KG\)/)
+  assert.match(source, /Milheiro \(MIL\)/)
+  assert.match(source, /step=\{form\.unit === 'KG' \? '0\.001' : '1'\}/)
+  assert.match(source, /formatStockQuantity/)
 })
 
 test('modo noturno e persistido e tem alternancia no menu', async () => {

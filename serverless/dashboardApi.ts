@@ -720,6 +720,15 @@ async function importLegacyProduct(moduleId: string, tenantId: string, row: Reco
   const name = normalizeLegacyString(row.name)
   if (!name) return { skipped: true, reason: 'Produto sem nome.' }
 
+  const existingId = await findLegacyProduct(moduleId, tenantId, row)
+  const unit = normalizeLegacyString(row.unit).toUpperCase()
+  const productUnit = ['UN', 'KG', 'MIL'].includes(unit) ? unit : 'UN'
+  let existingMetadata: Record<string, unknown> = {}
+  if (existingId) {
+    const { data } = await adminSupabase.from('products').select('bot_metadata').eq('id', existingId).maybeSingle()
+    if (data?.bot_metadata && typeof data.bot_metadata === 'object') existingMetadata = data.bot_metadata as Record<string, unknown>
+  }
+
   const payload = buildLegacyTenantPayload({
     module_id: moduleId,
     name,
@@ -732,10 +741,10 @@ async function importLegacyProduct(moduleId: string, tenantId: string, row: Reco
     min_stock: normalizeLegacyNumber(row.minStock),
     species_target: normalizeLegacyString(row.speciesTarget) || null,
     active: normalizeLegacyBoolean(row.active, true),
+    bot_metadata: { ...existingMetadata, unit: productUnit, is_bulk: productUnit === 'KG' },
     updated_at: new Date().toISOString(),
   }, tenantId)
 
-  const existingId = await findLegacyProduct(moduleId, tenantId, row)
   if (existingId) {
     const { error } = await adminSupabase
       .from('products')

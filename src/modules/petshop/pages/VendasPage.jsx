@@ -24,6 +24,17 @@ const PAYMENT_METHODS = [
   { value:'pix',      label:'Pix',       icon: Smartphone },
 ]
 
+function productUnit(product) {
+  const unit = product?.bot_metadata?.unit || 'UN'
+  return ['UN', 'KG', 'MIL'].includes(unit) ? unit : 'UN'
+}
+
+function formatProductStock(product) {
+  const unit = productUnit(product)
+  const quantity = Number(product?.stock_quantity || 0)
+  return `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: unit === 'KG' ? 3 : 0 })} ${unit}`
+}
+
 const SALE_SOURCES = [
   { value:'pdv', label:'PDV', icon: ShoppingCart },
   { value:'whatsapp', label:'WhatsApp', icon: MessageSquare },
@@ -137,7 +148,7 @@ function ProductCard({ product, onAdd, cartItem, onRemove }) {
         </p>
         <div className="mt-auto pt-2 border-t border-[var(--border2)]/50">
           <p className="font-display font-bold text-base text-[var(--primary)]">{fmtCurrency(product.price)}</p>
-          <p className="text-[10px] mt-0.5 font-medium text-muted">Stock: {product.stock_quantity}</p>
+          <p className="text-[10px] mt-0.5 font-medium text-muted">Estoque: {formatProductStock(product)}</p>
         </div>
       </button>
 

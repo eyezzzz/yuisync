@@ -62,7 +62,7 @@ function formatProductName(value = '') {
 
 const emptyForm = {
   name: '', barcode: '', category: 'Ração', description: '', price: '',
-  cost_price: '', stock_quantity: '', min_stock: 1,
+  cost_price: '', stock_quantity: '', min_stock: 1, unit: 'UN',
   species_target: 'all', image_url: '', active: true,
   bot_product_type: '',
   bot_species: '',
@@ -72,6 +72,23 @@ const emptyForm = {
   bot_breed: '',
   bot_package_kg: '',
   bot_is_bulk: false,
+}
+
+const PRODUCT_UNITS = [
+  { value: 'UN', label: 'Unidade (UN)' },
+  { value: 'KG', label: 'Quilograma (KG)' },
+  { value: 'MIL', label: 'Milheiro (MIL)' },
+]
+
+function productUnit(product) {
+  const unit = product?.bot_metadata?.unit || 'UN'
+  return PRODUCT_UNITS.some((option) => option.value === unit) ? unit : 'UN'
+}
+
+function formatStockQuantity(value, unit = 'UN') {
+  const quantity = Number(value || 0)
+  const digits = unit === 'UN' || unit === 'MIL' ? 0 : 3
+  return `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: digits })} ${unit}`
 }
 
 // ── Product Modal ─────────────────────────────────────────────────────────────
@@ -86,6 +103,7 @@ function metadataToForm(product) {
     bot_breed: Array.isArray(metadata.breed) ? metadata.breed.join(', ') : metadata.breed || '',
     bot_package_kg: metadata.package_kg || '',
     bot_is_bulk: Boolean(metadata.is_bulk),
+    unit: PRODUCT_UNITS.some((option) => option.value === metadata.unit) ? metadata.unit : 'UN',
   }
 }
 
@@ -121,7 +139,8 @@ function buildBotMetadata(form, product) {
     brand: form.bot_brand ? String(form.bot_brand).trim().toLowerCase() : current.brand || null,
     breed,
     package_kg: form.bot_package_kg ? Number(form.bot_package_kg) : null,
-    is_bulk: Boolean(form.bot_is_bulk),
+    unit: form.unit || 'UN',
+    is_bulk: form.unit === 'KG' || Boolean(form.bot_is_bulk),
     source: 'dashboard_manual',
   }
 }
@@ -445,14 +464,21 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
             )}
 
             <div>
-              <label className="inp-label">Estoque Atual</label>
-              <input className="inp" type="number" min="0"
+              <label className="inp-label">Unidade de estoque</label>
+              <select className="inp" value={form.unit} onChange={e => set('unit', e.target.value)}>
+                {PRODUCT_UNITS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+            </div>
+
+            <div>
+              <label className="inp-label">Estoque Atual ({form.unit})</label>
+              <input className="inp" type="number" min="0" step={form.unit === 'KG' ? '0.001' : '1'}
                 value={form.stock_quantity} onChange={e => set('stock_quantity', e.target.value)}/>
             </div>
 
             <div>
-              <label className="inp-label">Estoque Mínimo</label>
-              <input className="inp" type="number" min="0"
+              <label className="inp-label">Estoque Mínimo ({form.unit})</label>
+              <input className="inp" type="number" min="0" step={form.unit === 'KG' ? '0.001' : '1'}
                 value={form.min_stock} onChange={e => set('min_stock', e.target.value)}/>
             </div>
 
@@ -509,6 +535,7 @@ function AdjustModal({ product, onClose, onAdjust }) {
   const [delta, setDelta] = useState('')
   const [saving, setSaving] = useState(false)
   const current = product.stock_quantity
+  const unit = productUnit(product)
   const newQty = current + Number(delta)
 
   const submit = async () => {
@@ -530,15 +557,15 @@ function AdjustModal({ product, onClose, onAdjust }) {
           <p className="text-sm text-muted mb-4">Produto: <span className="text-text font-semibold">{product.name}</span></p>
           <div className="bg-surface rounded-xl p-4 text-center mb-4 border border-[var(--border)]">
             <p className="text-xs text-muted mb-1">Estoque atual</p>
-            <p className="font-display font-bold text-3xl text-text">{current} <span className="text-muted text-lg">un.</span></p>
+            <p className="font-display font-bold text-3xl text-text">{formatStockQuantity(current, unit)}</p>
           </div>
           <div className="mb-4">
             <label className="inp-label">Ajuste (positivo = entrada, negativo = saída)</label>
-            <input className="inp text-center text-lg font-bold" type="number"
+            <input className="inp text-center text-lg font-bold" type="number" step={unit === 'KG' ? '0.001' : '1'}
               placeholder="+10 ou -5" value={delta} onChange={e => setDelta(e.target.value)}/>
             {delta && (
               <p className={`text-center text-sm mt-2 font-semibold ${newQty < 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                → Novo estoque: {Math.max(0, newQty)} un.
+                → Novo estoque: {formatStockQuantity(Math.max(0, newQty), unit)}
               </p>
             )}
           </div>
@@ -1126,7 +1153,7 @@ export default function EstoquePage() {
                       )}
                       <td>
                         <span className={`font-bold font-display text-lg ${sb.cellCls}`}>
-                          {p.stock_quantity}
+                          {formatStockQuantity(p.stock_quantity, productUnit(p))}
                         </span>
                       </td>
                       <td className="text-muted">{p.min_stock}</td>
