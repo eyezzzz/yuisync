@@ -101,7 +101,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
   const printWindow = window.open('', '_blank')
   if (!printWindow) return
 
-  const width = '32mm'
+  const width = '80mm'
   const storeAddress = [
     storeSettings?.store_address,
     storeSettings?.store_neighborhood,
@@ -123,7 +123,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
       <head>
         <title>Ordem ${escapeHtml(orderLabel)}</title>
         <style>
-          @page { size: 32mm 140mm; margin: 0; }
+          @page { margin: 0; }
           * { box-sizing: border-box; }
           html { width: ${width}; height: auto !important; min-height: 0 !important; }
           body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 6px; color: #000; font-family: "Courier New", Courier, monospace; font-size: 12px; overflow: visible; }

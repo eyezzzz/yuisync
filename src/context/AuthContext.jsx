@@ -104,7 +104,7 @@ export function AuthProvider({ children }) {
     store_neighborhood: '',
     store_city: '',
     store_phone: '',
-    printer_width: '32',
+    printer_width: '80',
     module_id: null,
   })
 
@@ -398,7 +398,7 @@ export function AuthProvider({ children }) {
         setStoreSettings({
           store_name: moduleFallbackName[moduleId] || 'YUI Sync',
           module_id: moduleId,
-          printer_width: '32',
+          printer_width: '80',
         })
       }
     } catch (error) {

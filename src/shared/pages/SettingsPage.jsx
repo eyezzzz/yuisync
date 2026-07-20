@@ -31,7 +31,7 @@ const INITIAL_FORM = {
   store_neighborhood: '',
   store_city: '',
   store_phone: '',
-  printer_width: '32',
+  printer_width: '80',
   fiscal_id: '',
   fiscal_regime: 'simples_nacional',
   nfe_environment: 'homologacao',
@@ -214,7 +214,7 @@ export default function SettingsPage() {
           store_neighborhood: data.store_neighborhood || '',
           store_city: data.store_city || '',
           store_phone: data.store_phone || '',
-          printer_width: data.printer_width || '32',
+          printer_width: data.printer_width === '58' ? '58' : '80',
           fiscal_id: data.fiscal_id || '',
           bot_prompt: data.bot_prompt || DEFAULT_PETBOT_PROMPT,
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
@@ -724,8 +724,8 @@ export default function SettingsPage() {
                 {isPet ? (
                   <div>
                     <label className="inp-label">Largura da bobina</label>
-                    <div className="grid grid-cols-3 gap-3">
-                      {['32', '58', '80'].map((width) => (
+                    <div className="grid grid-cols-2 gap-3">
+                      {['80', '58'].map((width) => (
                         <button
                           key={width}
                           onClick={() => canEdit && setForm((prev) => ({ ...prev, printer_width: width }))}

@@ -111,14 +111,14 @@ test('cards de clientes preservam nomes legiveis e acoes separadas', async () =>
   assert.match(clientsSource, /\.range\(from, from \+ CLIENT_PAGE_SIZE - 1\)/)
 })
 
-test('ordem impressa mede a folha termica sem altura vazia', async () => {
+test('ordem impressa usa a largura nativa da Print iD sem forcar altura', async () => {
   const source = await read('src/modules/petshop/pages/OrdensEntregaPage.jsx')
   assert.match(source, /printThermalReceipt\(printWindow\)/)
-  assert.match(source, /height: auto !important; min-height: 0 !important/)
+  assert.match(source, /const width = '80mm'/)
   assert.match(source, /class="receipt"/)
 })
 
-test('todos os comprovantes medem altura pelo conteudo antes de imprimir', async () => {
+test('todos os comprovantes usam a largura 80mm da Print iD', async () => {
   const receiptFiles = [
     'src/shared/pages/BillingPage.jsx',
     'src/modules/petshop/pages/AgendaPage.jsx',
@@ -128,15 +128,15 @@ test('todos os comprovantes medem altura pelo conteudo antes de imprimir', async
   for (const file of receiptFiles) {
     const source = await read(file)
     assert.match(source, /printThermalReceipt\(printWindow\)/)
-    assert.match(source, /@page \{ size: 32mm 140mm; margin: 0; \}/)
+    assert.match(source, /@page \{ margin: 0; \}/)
     assert.match(source, /class="receipt"/)
     assert.doesNotMatch(source, /size: 80mm auto/)
-    assert.match(source, /width: 32mm/)
+    assert.match(source, /width: 80mm/)
   }
 
   const utility = await read('src/lib/thermalPrint.js')
-  assert.match(utility, /@page \{ size: \$\{widthMm\}mm \$\{heightMm\}mm; margin: 0; \}/)
-  assert.match(utility, /MAX_RECEIPT_HEIGHT_MM = 140/)
+  assert.match(utility, /Print iD controla avanço e corte pelo próprio driver/)
+  assert.doesNotMatch(utility, /@page/)
 })
 
 test('importacao legado preserva historico e oculta registros arquivados', async () => {
