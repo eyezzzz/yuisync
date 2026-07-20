@@ -78,14 +78,14 @@ function CartItem({ item, onQty, onRemove }) {
   if (!item || !item.product) return null
   const p = item.product
   return (
-    <div className="flex items-start gap-3 py-3 border-b border-[var(--border2)] last:border-0">
-      <div className="flex-1 min-w-0">
+    <div className="flex flex-wrap items-start gap-x-3 gap-y-2 py-3 border-b border-[var(--border2)] last:border-0">
+      <div className="min-w-0 flex-1 basis-[9rem]">
         <p className="text-xs font-bold text-text line-clamp-2 leading-tight mb-0.5">{p.name}</p>
         <div className="flex items-center gap-1.5">
           <p className="text-[10px] text-muted font-medium">{fmtCurrency(p.price)} un.</p>
         </div>
       </div>
-      <div className="flex items-center gap-1.5 flex-shrink-0 bg-black/20 p-0.5 rounded-lg border border-[var(--border2)]">
+      <div className="flex items-center gap-1.5 flex-shrink-0 bg-black/20 p-0.5 rounded-lg border border-[var(--border2)] self-start">
         <button onClick={() => onQty(item.product_id, -1)}
           className="w-6 h-6 rounded-md hover:bg-white/5 text-muted hover:text-text flex items-center justify-center">
           <Minus size={11}/>
@@ -96,7 +96,7 @@ function CartItem({ item, onQty, onRemove }) {
           <Plus size={11}/>
         </button>
       </div>
-      <div className="text-right flex-shrink-0 w-20">
+      <div className="text-right flex-shrink-0 min-w-[4.5rem] ml-auto">
         <p className="text-sm font-black text-text font-display">{fmtCurrency(p.price * item.quantity)}</p>
         <button onClick={() => onRemove(item.product_id)}
           className="text-[9px] text-red-500/40 hover:text-red-400 font-bold uppercase tracking-tighter">
