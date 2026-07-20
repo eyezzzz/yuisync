@@ -159,13 +159,13 @@ function PetDrawer({ pet, subscription, onClose, onEdit, speciesIcon, serviceLab
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">CEP</p><p className="text-text font-semibold mt-1">{pet.zip_code || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Nascimento</p><p className="text-text font-semibold mt-1">{fmtDate(pet.birth_date) || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Peso</p><p className="text-text font-semibold mt-1">{pet.weight_kg ? `${pet.weight_kg} kg` : '-'}</p></div>
-            <div className="col-span-2"><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Numero / referencia</p><p className="text-text font-semibold mt-1">{[pet.address_number, pet.address_reference].filter(Boolean).join(' - ') || '-'}</p></div>
           </div>
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3">
             <p className="text-xs uppercase tracking-widest text-muted font-bold">Endereco</p>
             <div className="text-sm text-text font-semibold leading-relaxed">
               {[pet.owner_address, pet.address_number && `Nº ${pet.address_number}`, pet.address_complement].filter(Boolean).join(', ') || 'Endereco nao informado'}
             </div>
+            <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Numero</p><p className="text-text font-semibold mt-1">{pet.address_number || '-'}</p></div>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Bairro</p><p className="text-text font-semibold mt-1">{pet.owner_neighborhood || '-'}</p></div>
               <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Cidade</p><p className="text-text font-semibold mt-1">{pet.owner_city || '-'}</p></div>

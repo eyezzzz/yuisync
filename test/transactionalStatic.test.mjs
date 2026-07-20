@@ -157,4 +157,5 @@ test('detalhes do cliente mostram endereco completo e complemento', async () => 
   assert.match(source, /pet\.address_complement/)
   assert.match(source, /pet\.owner_neighborhood/)
   assert.match(clients, /address_complement: c\.details\?\.address_complement/)
+  assert.doesNotMatch(source, /Numero \/ referencia/)
 })
