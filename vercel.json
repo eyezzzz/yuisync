@@ -38,6 +38,9 @@
     },
     "api/products/image-suggestions.ts": {
       "maxDuration": 20
+    },
+    "api/petshop/checkout.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [

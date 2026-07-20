@@ -14,7 +14,6 @@ export default function PublicBookingPage() {
     preferred_period: 'manha',
     transport_mode: 'dropoff',
     need_motodog: false,
-    motodog_fee: '',
     pickup_address: '',
     pickup_neighborhood: '',
     pickup_city: '',
@@ -40,11 +39,10 @@ export default function PublicBookingPage() {
         p_preferred_date: form.preferred_date || null,
         p_preferred_period: form.preferred_period || null,
         p_transport_mode: form.transport_mode || 'dropoff',
-        p_need_motodog: form.need_motodog === true,
-        p_motodog_fee: form.need_motodog ? Number(form.motodog_fee || 0) : 0,
-        p_pickup_address: form.need_motodog ? (form.pickup_address.trim() || null) : null,
-        p_pickup_neighborhood: form.need_motodog ? (form.pickup_neighborhood.trim() || null) : null,
-        p_pickup_city: form.need_motodog ? (form.pickup_city.trim() || null) : null,
+        p_need_motodog: form.transport_mode === 'pickup',
+        p_pickup_address: form.transport_mode === 'pickup' ? (form.pickup_address.trim() || null) : null,
+        p_pickup_neighborhood: form.transport_mode === 'pickup' ? (form.pickup_neighborhood.trim() || null) : null,
+        p_pickup_city: form.transport_mode === 'pickup' ? (form.pickup_city.trim() || null) : null,
         p_notes: form.notes.trim() || null,
         p_channel: 'site',
       }
@@ -65,7 +63,6 @@ export default function PublicBookingPage() {
         preferred_period: 'manha',
         transport_mode: 'dropoff',
         need_motodog: false,
-        motodog_fee: '',
         pickup_address: '',
         pickup_neighborhood: '',
         pickup_city: '',
@@ -176,36 +173,23 @@ export default function PublicBookingPage() {
               <select
                 className="inp"
                 value={form.transport_mode}
-                onChange={(event) => setForm((prev) => ({ ...prev, transport_mode: event.target.value }))}
+                onChange={(event) => setForm((prev) => ({
+                  ...prev,
+                  transport_mode: event.target.value,
+                  need_motodog: event.target.value === 'pickup',
+                }))}
               >
                 <option value="dropoff">Vou levar ate o PetShop</option>
                 <option value="pickup">Preciso de MotoDog</option>
               </select>
             </div>
-            <div className="flex items-center gap-2 mt-7">
-              <input
-                type="checkbox"
-                checked={form.need_motodog}
-                onChange={(event) => setForm((prev) => ({ ...prev, need_motodog: event.target.checked }))}
-              />
-              <span className="text-sm text-white/80">Precisa de MotoDog?</span>
-            </div>
           </div>
 
           {form.need_motodog && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div>
-                <label className="inp-label">Taxa MotoDog (R$)</label>
-                <input
-                  className="inp"
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={form.motodog_fee}
-                  onChange={(event) => setForm((prev) => ({ ...prev, motodog_fee: event.target.value }))}
-                  placeholder="Ex.: 15.00"
-                />
-              </div>
+              <p className="md:col-span-2 rounded-xl border border-emerald-400/20 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-100">
+                A taxa do MotoDog sera calculada pelo PetShop conforme a opcao configurada.
+              </p>
               <div>
                 <label className="inp-label">Cidade</label>
                 <input

@@ -100,6 +100,7 @@ async function ensurePetRecordForClient(activeModuleId, activeTenantId, clientId
 
   const petPayload = {
     id: client.id,
+    tenant_id: activeTenantId,
     module_id: activeModuleId,
     owner_name: client.name || 'Cliente',
     owner_cpf: client.document || null,
@@ -345,38 +346,18 @@ export function useAppointments() {
       apiPayload.pet_id = await ensurePetRecordForClient(activeModuleId, activeTenantId, apiPayload.client_id)
     }
 
-    const benefit = await findAvailableSubscriptionBenefit(
-      activeModuleId,
-      activeTenantId,
-      apiPayload.client_id,
-      apiPayload.service_type,
-    )
-
-    if (benefit) {
-      apiPayload.subscription_id = benefit.subscriptionId
-      apiPayload.subscription_benefit_used = true
-      apiPayload.price = 0
-      apiPayload.notes = [apiPayload.notes, `Plano ativo aplicado em ${apiPayload.service_type}`]
-        .filter(Boolean)
-        .join(' | ')
-    }
-
-    const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-      const insertPayload = buildTenantPayload(apiPayload, activeTenantId, includeTenant)
-      return supabase
-        .from('appointments')
-        .insert(insertPayload)
-        .select('id')
-        .single()
+    const response = await supabase.rpc('book_petshop_appointment_transaction', {
+      p_payload: {
+        ...apiPayload,
+        tenant_id: activeTenantId,
+        module_id: activeModuleId,
+        idempotency_key: payload.idempotency_key || crypto.randomUUID(),
+      },
     })
 
     if (response.error) throw response.error
 
-    if (benefit) {
-      await consumeSubscriptionBenefit(activeModuleId, activeTenantId, benefit)
-    }
-
-    const created = await fetchAppointmentById(response.data?.id)
+    const created = await fetchAppointmentById(response.data?.appointment_id)
     setAppointments((prev) => [...prev, created].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
     return created
   }, [activeModuleId, activeTenantId, fetchAppointmentById])

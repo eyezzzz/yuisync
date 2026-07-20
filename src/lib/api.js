@@ -26,10 +26,17 @@ async function apiRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}))
 
   if (!response.ok) {
-    throw new Error(payload.error || 'Erro ao processar a solicitação.')
+    throw new Error(payload.error?.message || payload.error || 'Erro ao processar a solicitação.')
   }
 
   return payload
+}
+
+export function checkoutPetshop(payload) {
+  return apiRequest('/petshop/checkout', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  }).then((response) => response.data)
 }
 
 export function requestChatReply(sessionId, message, options = {}) {

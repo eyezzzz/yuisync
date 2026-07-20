@@ -12,9 +12,10 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:petbot": "node --test test/petbotGuard.test.mjs test/petbotStatic.test.mjs",
+    "test:transactions": "node --test test/transactionalStatic.test.mjs",
     "test:e2e": "playwright test",
     "test:tenant": "node scripts/test-tenant-isolation.mjs",
-    "test:all": "npm run audit && npm run typecheck && npm run test && npm run test:petbot && npm run build",
+    "test:all": "npm run audit && npm run typecheck && npm run test && npm run test:petbot && npm run test:transactions && npm run build",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview"

@@ -1,5 +1,6 @@
 import 'dotenv/config'
 import { createServer } from 'node:http'
+import { randomUUID } from 'node:crypto'
 import { URL } from 'node:url'
 import { adminSupabase, createUserSupabase } from './lib/supabase.js'
 import { serverEnv } from './lib/env.js'
@@ -20,6 +21,7 @@ import {
 import { respondToChatMessage } from './lib/chat.js'
 import { handleFocusWebhook, issueFiscalForSale } from './lib/fiscal.js'
 import { searchProductImageCandidates } from './lib/productImages.js'
+import { executeCheckout } from './lib/checkout.js'
 import {
   processWhatsappWebhook,
   readWhatsappWebhookBody,
@@ -594,6 +596,23 @@ async function handleFiscalIssueSale(req, res, saleId) {
   sendJson(res, 200, result, getCorsHeaders(origin))
 }
 
+async function handlePetshopCheckout(req, res) {
+  const requestId = randomUUID()
+  try {
+    const result = await executeCheckout(getBearerToken(req), await readJsonBody(req))
+    sendJson(res, 201, { success: true, data: result, error: null, requestId }, getCorsHeaders(req.headers.origin))
+  } catch (error) {
+    const status = error instanceof HttpError ? error.status : 500
+    const message = error instanceof Error ? error.message : 'Falha ao concluir venda.'
+    sendJson(res, status, {
+      success: false,
+      data: null,
+      error: { code: `CHECKOUT_${status}`, message },
+      requestId,
+    }, getCorsHeaders(req.headers.origin))
+  }
+}
+
 async function handleFiscalFocusWebhook(req, res, url) {
   const body = await readJsonBody(req)
   const token = url.searchParams.get('token') || ''
@@ -683,6 +702,12 @@ const server = createServer(async (req, res) => {
     if (req.method === 'POST' && url.pathname === '/api/products/image-suggestions') {
       apiLimiter.consume(`api:${clientIp}`)
       await handleProductImageSuggestions(req, res)
+      return
+    }
+
+    if (req.method === 'POST' && url.pathname === '/api/petshop/checkout') {
+      apiLimiter.consume(`checkout:${clientIp}`)
+      await handlePetshopCheckout(req, res)
       return
     }
 

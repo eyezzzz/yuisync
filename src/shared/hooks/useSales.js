@@ -1,6 +1,6 @@
 import { useState, useCallback } from 'react'
 import { supabase, todayISO, fmtCurrency, getTimezoneOffset } from '../../lib/supabase'
-import { issueFiscalForSale as issueFiscalForSaleApi } from '../../lib/api'
+import { checkoutPetshop, issueFiscalForSale as issueFiscalForSaleApi } from '../../lib/api'
 import { useModuleCtx } from '../../context/ModuleContext'
 import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
@@ -380,7 +380,7 @@ export function useSales() {
     return { faturamento_hoje: dRev, faturamento_mes: mRev }
   }, [activeModuleId, activeTenantId])
 
-  const createSale = useCallback(async (saleData, cartItems) => {
+  const createSaleLegacy = useCallback(async (saleData, cartItems) => {
     if (!cartItems?.length) throw new Error('Carrinho vazio')
     if (!activeModuleId) throw new Error('Modulo nao identificado')
     assertActiveTenant(activeTenantId, 'salvar a venda')
@@ -520,6 +520,43 @@ export function useSales() {
       }
     }
 
+    try {
+      await syncSaleToChatTimeline(activeModuleId, activeTenantId, sale, cartItems)
+    } catch (chatSyncError) {
+      console.warn('Falha ao sincronizar venda com o chat:', chatSyncError)
+    }
+
+    await load({ date: todayISO() })
+    await loadMetrics()
+    return sale
+  }, [activeModuleId, activeTenantId, load, loadMetrics])
+
+  const createSale = useCallback(async (saleData, cartItems) => {
+    if (!cartItems?.length) throw new Error('Carrinho vazio')
+    if (!activeModuleId) throw new Error('Modulo nao identificado')
+    assertActiveTenant(activeTenantId, 'salvar a venda')
+
+    const result = await checkoutPetshop({
+      tenantId: activeTenantId,
+      moduleId: activeModuleId,
+      clientId: saleData.pet_id || saleData.client_id || null,
+      customerName: saleData.customer_name || 'Balcao',
+      customerPhone: saleData.customer_phone || null,
+      paymentMethod: saleData.payment_method,
+      paymentSplits: saleData.payment_splits || [],
+      discount: Number(saleData.discount || 0),
+      source: saleData.source || 'pdv',
+      fulfillmentType: saleData.fulfillment_type || 'balcao',
+      notes: saleData.notes || null,
+      idempotencyKey: saleData.idempotency_key || crypto.randomUUID(),
+      items: cartItems.map((item) => ({
+        productId: item.product_id,
+        quantity: Number(item.quantity || 0),
+        upsell: item.upsell === true,
+      })),
+    })
+
+    const sale = { ...result.sale, fiscal_queue: result.fiscal }
     try {
       await syncSaleToChatTimeline(activeModuleId, activeTenantId, sale, cartItems)
     } catch (chatSyncError) {
