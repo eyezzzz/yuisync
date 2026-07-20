@@ -164,6 +164,7 @@ export function useClients() {
         return fetchAllClientPages(() => {
           let q = supabase.from('clients').select(BASE_SELECT)
             .eq('module_id', activeModuleId)
+            .eq('active', true)
             .order('name')
 
           q = applyTenantFilter(q, activeTenantId, includeTenant)
@@ -196,6 +197,7 @@ export function useClients() {
         .from('clients')
         .select(BASE_SELECT)
         .eq('module_id', activeModuleId)
+        .eq('active', true)
         .order('name')
         .limit(limit)
 
@@ -218,6 +220,7 @@ export function useClients() {
         .select(`${BASE_SELECT}, appointments(id,service_type,scheduled_at,status)`)
         .eq('id', id)
         .eq('module_id', activeModuleId)
+        .eq('active', true)
         .single()
 
       q = applyTenantFilter(q, activeTenantId, includeTenant)

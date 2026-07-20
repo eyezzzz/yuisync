@@ -406,6 +406,7 @@ export function useSales() {
           .select('name, phone')
           .eq('id', apiSaleData.client_id)
           .eq('module_id', activeModuleId)
+          .eq('active', true)
           .maybeSingle()
 
         query = applyTenantFilter(query, activeTenantId, includeTenant)

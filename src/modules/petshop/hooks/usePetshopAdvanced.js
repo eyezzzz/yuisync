@@ -795,7 +795,7 @@ export function usePetshopAdvanced() {
 
   const loadCampaignAudience = useCallback(async (campaignId) => {
     const res = await runScoped(async (includeTenant) => {
-      let q = supabase.from('clients').select(`id,name,phone,email,address,neighborhood,city,details,appointments(id,scheduled_at,service_type,status)`).eq('module_id', moduleId).order('name')
+      let q = supabase.from('clients').select(`id,name,phone,email,address,neighborhood,city,details,appointments(id,scheduled_at,service_type,status)`).eq('module_id', moduleId).eq('active', true).order('name')
       return applyTenantFilter(q, activeTenantId, includeTenant)
     })
     if (res.error) throw res.error

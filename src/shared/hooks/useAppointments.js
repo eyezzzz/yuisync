@@ -88,6 +88,7 @@ async function ensurePetRecordForClient(activeModuleId, activeTenantId, clientId
       .select('id, name, phone, email, document, address, neighborhood, city, notes, details')
       .eq('module_id', activeModuleId)
       .eq('id', clientId)
+      .eq('active', true)
       .single()
 
     query = applyTenantFilter(query, activeTenantId, includeTenant)

@@ -138,3 +138,13 @@ test('todos os comprovantes medem altura pelo conteudo antes de imprimir', async
   assert.match(utility, /@page \{ size: \$\{widthMm\}mm \$\{heightMm\}mm; margin: 0; \}/)
   assert.match(utility, /MAX_RECEIPT_HEIGHT_MM = 140/)
 })
+
+test('importacao legado preserva historico e oculta registros arquivados', async () => {
+  const script = await read('scripts/import_legacy_petshop.py')
+  const clients = await read('src/shared/hooks/useClients.js')
+  assert.match(script, /Soft-delete evita quebrar vendas, estoque e agendamentos legados vinculados/)
+  assert.match(script, /BATCH_SIZE = 250/)
+  assert.match(script, /'active': False/)
+  assert.match(script, /'on_conflict': 'barcode'/)
+  assert.match(clients, /\.eq\('active', true\)/)
+})
