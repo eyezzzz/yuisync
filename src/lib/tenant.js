@@ -18,14 +18,16 @@ export function buildTenantPayload(payload, tenantId, includeTenant = true) {
 }
 
 export async function runWithTenantFallback(tenantId, runner) {
-  if (!tenantId) return runner(false)
-
-  const response = await runner(true)
-  if (response?.error && isTenantSchemaError(response.error)) {
-    return runner(false)
+  if (!tenantId) {
+    return {
+      data: null,
+      error: new Error('Selecione uma empresa ativa antes de acessar dados operacionais.'),
+    }
   }
 
-  return response
+  // Compatibilidade temporaria do nome: a operacao agora e sempre tenant-scoped.
+  // Nunca repita a consulta sem tenant_id quando o schema estiver divergente.
+  return runner(true)
 }
 
 export function buildTenantSlug(name) {

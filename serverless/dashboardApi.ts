@@ -535,8 +535,18 @@ function getMaintenanceScope(body: JsonBody) {
     ? body.tenantId.trim()
     : ''
 
-  if (tenantId) validateUUID(tenantId, 'tenantId')
+  if (!tenantId) {
+    throw new HttpError(400, 'tenantId e obrigatorio para operacoes administrativas.')
+  }
+  validateUUID(tenantId, 'tenantId')
   return { moduleId, tenantId }
+}
+
+function requireTestTenant(tenantId: string) {
+  const allowedTenantId = String(process.env.MAINTENANCE_TEST_TENANT_ID || '').trim()
+  if (!allowedTenantId || tenantId !== allowedTenantId) {
+    throw new HttpError(403, 'Esta manutencao so pode ser executada no tenant de testes configurado.')
+  }
 }
 
 function chunkArray<T>(items: T[], size = 100) {
@@ -571,6 +581,7 @@ async function handleResetChatHistory(req: IncomingMessage, res: ServerResponse)
   }
 
   const { moduleId, tenantId } = getMaintenanceScope(body)
+  requireTestTenant(tenantId)
   let sessionQuery = adminSupabase
     .from('chat_sessions')
     .select('id')
@@ -611,6 +622,7 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
   }
 
   const { moduleId, tenantId } = getMaintenanceScope(body)
+  requireTestTenant(tenantId)
   let products: Array<{ id: string }> = []
   try {
     products = await fetchAllRows(() => {
@@ -634,40 +646,22 @@ async function handleResetStock(req: IncomingMessage, res: ServerResponse) {
     return
   }
 
-  for (const batch of chunkArray(productIds)) {
-    const { error: upsellError } = await adminSupabase
-      .from('products')
-      .update({ upsell_link_id: null })
-      .in('upsell_link_id', batch)
+  const { error: resetError } = await adminSupabase
+    .from('products')
+    .update({
+      stock_quantity: 0,
+      active: false,
+      upsell_link_id: null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('tenant_id', tenantId)
+    .eq('module_id', moduleId)
 
-    if (upsellError) {
-      throw new HttpError(500, `Falha ao remover vinculos de upsell: ${upsellError.message}`)
-    }
+  if (resetError) {
+    throw new HttpError(500, `Falha ao zerar estoque: ${resetError.message}`)
   }
 
-  for (const batch of chunkArray(productIds)) {
-    const { error: saleItemsError } = await adminSupabase
-      .from('sale_items')
-      .delete()
-      .in('product_id', batch)
-
-    if (saleItemsError) {
-      throw new HttpError(500, `Falha ao remover itens de vendas antigas ligados ao estoque: ${saleItemsError.message}`)
-    }
-  }
-
-  for (const batch of chunkArray(productIds)) {
-    const { error: deleteError } = await adminSupabase
-      .from('products')
-      .delete()
-      .in('id', batch)
-
-    if (deleteError) {
-      throw new HttpError(500, `Falha ao resetar estoque: ${deleteError.message}`)
-    }
-  }
-
-  sendJson(res, 200, { ok: true, deletedProducts: productIds.length })
+  sendJson(res, 200, { ok: true, deactivatedProducts: productIds.length })
 }
 
 function normalizeLegacyString(value: unknown) {

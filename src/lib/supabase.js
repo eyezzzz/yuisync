@@ -3,8 +3,22 @@ import { createClient } from '@supabase/supabase-js'
 const SUPABASE_URL  = import.meta.env.VITE_SUPABASE_URL
 const SUPABASE_KEY  = import.meta.env.VITE_SUPABASE_ANON_KEY
 
+function isPrivateSupabaseKey(key) {
+  if (String(key || '').startsWith('sb_secret_')) return true
+  try {
+    const payload = JSON.parse(atob(String(key || '').split('.')[1] || ''))
+    return payload?.role === 'service_role'
+  } catch {
+    return false
+  }
+}
+
 if (!SUPABASE_URL || !SUPABASE_KEY) {
-  console.error('[Supabase] Variáveis VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY não configuradas. Copie .env.example para .env')
+  throw new Error('[Supabase] Configure VITE_SUPABASE_URL e VITE_SUPABASE_ANON_KEY antes de iniciar a aplicacao.')
+}
+
+if (isPrivateSupabaseKey(SUPABASE_KEY)) {
+  throw new Error('[Supabase] Chave privada detectada no frontend. Use somente a anon/publishable key.')
 }
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
