@@ -148,3 +148,13 @@ test('importacao legado preserva historico e oculta registros arquivados', async
   assert.match(script, /'on_conflict': 'barcode'/)
   assert.match(clients, /\.eq\('active', true\)/)
 })
+
+test('detalhes do cliente mostram endereco completo e complemento', async () => {
+  const source = await read('src/modules/petshop/pages/PetsPage.jsx')
+  const clients = await read('src/shared/hooks/useClients.js')
+  assert.match(source, /Endereco<\/p>/)
+  assert.match(source, /pet\.owner_address/)
+  assert.match(source, /pet\.address_complement/)
+  assert.match(source, /pet\.owner_neighborhood/)
+  assert.match(clients, /address_complement: c\.details\?\.address_complement/)
+})

@@ -21,7 +21,7 @@ const SPECIES = [
 
 const EMPTY_FORM = {
   owner_name: '', owner_cpf: '', phone: '', email: '', owner_address: '', owner_neighborhood: '', owner_city: '',
-  tutor_birth_date: '', zip_code: '', address_number: '', address_reference: '',
+  tutor_birth_date: '', zip_code: '', address_number: '', address_complement: '', address_reference: '',
   pet_name: '', species: 'dog', breed: '', birth_date: '', weight_kg: '', color: '', notes: '',
 }
 
@@ -106,7 +106,8 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
               <div><label className="inp-label">CEP</label><input className="inp" value={form.zip_code || ''} onChange={(e) => setField('zip_code', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Email</label><input className="inp" value={form.email} onChange={(e) => setField('email', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Endereco</label><input className="inp" value={form.owner_address} onChange={(e) => setField('owner_address', e.target.value)} /></div>
-              <div><label className="inp-label">Numero</label><input className="inp" value={form.address_number || ''} onChange={(e) => setField('address_number', e.target.value)} /></div>
+            <div><label className="inp-label">Numero</label><input className="inp" value={form.address_number || ''} onChange={(e) => setField('address_number', e.target.value)} /></div>
+            <div><label className="inp-label">Complemento</label><input className="inp" value={form.address_complement || ''} onChange={(e) => setField('address_complement', e.target.value)} /></div>
               <div><label className="inp-label">Bairro</label><input className="inp" value={form.owner_neighborhood} onChange={(e) => setField('owner_neighborhood', e.target.value)} /></div>
               <div><label className="inp-label">Cidade</label><input className="inp" value={form.owner_city} onChange={(e) => setField('owner_city', e.target.value)} /></div>
               <div><label className="inp-label">Referencia</label><input className="inp" value={form.address_reference || ''} onChange={(e) => setField('address_reference', e.target.value)} /></div>
@@ -159,6 +160,17 @@ function PetDrawer({ pet, subscription, onClose, onEdit, speciesIcon, serviceLab
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Nascimento</p><p className="text-text font-semibold mt-1">{fmtDate(pet.birth_date) || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Peso</p><p className="text-text font-semibold mt-1">{pet.weight_kg ? `${pet.weight_kg} kg` : '-'}</p></div>
             <div className="col-span-2"><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Numero / referencia</p><p className="text-text font-semibold mt-1">{[pet.address_number, pet.address_reference].filter(Boolean).join(' - ') || '-'}</p></div>
+          </div>
+          <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3">
+            <p className="text-xs uppercase tracking-widest text-muted font-bold">Endereco</p>
+            <div className="text-sm text-text font-semibold leading-relaxed">
+              {[pet.owner_address, pet.address_number && `Nº ${pet.address_number}`, pet.address_complement].filter(Boolean).join(', ') || 'Endereco nao informado'}
+            </div>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Bairro</p><p className="text-text font-semibold mt-1">{pet.owner_neighborhood || '-'}</p></div>
+              <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Cidade</p><p className="text-text font-semibold mt-1">{pet.owner_city || '-'}</p></div>
+            </div>
+            <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Referencia</p><p className="text-text font-semibold mt-1 leading-relaxed">{pet.address_reference || '-'}</p></div>
           </div>
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3">
             <div className="flex items-center justify-between gap-3"><p className="text-xs uppercase tracking-widest text-muted font-bold">Plano vinculado</p>{subscription && <span className={`badge ${getPlanTone(subscription.status)}`}>{PLAN_LABELS[subscription.status] || 'Plano'}</span>}</div>

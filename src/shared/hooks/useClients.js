@@ -33,6 +33,7 @@ const mapClientToPet = (c) => ({
   tutor_birth_date: c.details?.tutor_birth_date || '',
   zip_code: c.details?.zip_code || '',
   address_number: c.details?.address_number || '',
+  address_complement: c.details?.address_complement || '',
   address_reference: c.details?.address_reference || '',
   registration_status: c.details?.registration_status || inferRegistrationStatus(c),
   pet_name: c.details?.pet_name || '',
@@ -64,6 +65,7 @@ const mapPetToClient = (p, moduleId) => ({
     tutor_birth_date: p.tutor_birth_date || null,
     zip_code: p.zip_code || null,
     address_number: p.address_number || null,
+    address_complement: p.address_complement || null,
     address_reference: p.address_reference || null,
     registration_status: p.registration_status || inferRegistrationStatus({
       document: p.owner_cpf,
@@ -73,6 +75,7 @@ const mapPetToClient = (p, moduleId) => ({
         tutor_birth_date: p.tutor_birth_date,
         zip_code: p.zip_code,
         address_number: p.address_number,
+        address_complement: p.address_complement,
         address_reference: p.address_reference,
         pet_name: p.pet_name,
         breed: p.breed,
