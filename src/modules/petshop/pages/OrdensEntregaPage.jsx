@@ -181,8 +181,8 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
         <div class="center">
           <img class="brand" src="${logoUrl}" alt="Quatro Patas Pet & Vet" />
           <div class="store-name">${escapeHtml(storeSettings?.store_name || 'Quatro Patas Pet & Vet')}</div>
-          <div class="store-data wrap">${escapeHtml(storeAddress || 'Endereco da loja nao configurado')}</div>
-          <div class="store-data">Tel: ${escapeHtml(storeSettings?.store_phone || '-')}</div>
+          <div class="store-data wrap">${escapeHtml(storeAddress || 'AV CONSTANTINO PINTO, 191')}</div>
+          <div class="store-data">${escapeHtml(storeSettings?.store_phone || '(32)98520-5279')}</div>
         </div>
         <div class="document-title">${escapeHtml(order.order_type === 'servico' ? 'Ordem de serviço' : 'Conferência / ordem de entrega')}</div>
         <div class="meta"><span><b>Data</b><br>${escapeHtml(createdAt)}</span><span><b>Ordem</b><br>#${escapeHtml(orderLabel)}</span><span><b>Venda</b><br>#${escapeHtml(saleLabel)}</span><span><b>Status</b><br>${escapeHtml(order.status || '-')}</span></div>
