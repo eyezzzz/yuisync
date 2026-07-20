@@ -115,6 +115,7 @@ test('ordem impressa usa a largura nativa da Print iD sem forcar altura', async 
   const source = await read('src/modules/petshop/pages/OrdensEntregaPage.jsx')
   assert.match(source, /printThermalReceipt\(printWindow\)/)
   assert.match(source, /const width = '80mm'/)
+  assert.match(source, /const printableWidth = '64mm'/)
   assert.match(source, /class="receipt"/)
   assert.match(source, /quatro-patas-logo-mono\.png/)
   assert.match(source, /Conferência \/ ordem de entrega/)

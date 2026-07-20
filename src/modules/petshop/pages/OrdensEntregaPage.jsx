@@ -117,6 +117,9 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
   if (!printWindow) return
 
   const width = '80mm'
+  // A bobina é 80 mm, mas o driver pode reservar margens laterais. Mantemos
+  // o conteúdo em uma largura segura para nenhuma coluna ser cortada.
+  const printableWidth = '64mm'
   const storeAddress = [
     storeSettings?.store_address,
     storeSettings?.store_neighborhood,
@@ -143,11 +146,11 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
           * { box-sizing: border-box; }
           html { width: ${width}; height: auto !important; min-height: 0 !important; }
           body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 5mm 6mm 4mm; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 10px; overflow: visible; }
-          .receipt { display: flow-root; width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
+          .receipt { display: flow-root; width: ${printableWidth}; max-width: 100%; height: auto; min-height: 0; margin: 0 auto; break-after: avoid-page; page-break-after: avoid; }
           @media print {
             html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; }
             body { position: absolute !important; top: 0 !important; left: 0 !important; }
-            .receipt { position: absolute !important; top: 0 !important; left: 0 !important; break-after: avoid-page; page-break-after: avoid; }
+            .receipt { position: absolute !important; top: 0 !important; left: 50% !important; transform: translateX(-50%); break-after: avoid-page; page-break-after: avoid; }
           }
           .center { text-align: center; }
           .brand { display: block; width: 52mm; height: 24mm; object-fit: contain; margin: -2mm auto -4mm; }
@@ -164,11 +167,11 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
           .address-box { border: 1px solid #000; padding: 4px 5px; margin-top: 6px; }
           .address-box .section-label { margin-bottom: 2px; }
           .address-value { font-size: 10px; font-weight: 700; line-height: 1.35; }
-          table { width: 100%; border-collapse: collapse; font-size: 9px; }
+          table { width: 100%; border-collapse: collapse; table-layout: fixed; font-size: 8px; }
           th { text-align: left; font-size: 7px; text-transform: uppercase; padding: 3px 1px; border-bottom: 1px solid #000; }
           td { vertical-align: top; padding: 4px 1px; border-bottom: 1px dotted #777; }
-          .qtd { width: 9mm; text-align: center; } .unit { width: 12mm; text-align: right; } .amount { width: 14mm; text-align: right; white-space: nowrap; }
-          .summary { margin-left: auto; width: 44mm; font-size: 10px; }
+          .qtd { width: 8mm; text-align: center; } .unit { width: 11mm; text-align: right; } .amount { width: 13mm; text-align: right; white-space: nowrap; }
+          .summary { margin-left: auto; width: 40mm; max-width: 100%; font-size: 10px; }
           .summary-row { display: flex; justify-content: space-between; padding: 2px 0; }
           .summary-total { border-top: 1px solid #000; margin-top: 3px; padding-top: 4px; font-size: 13px; font-weight: 800; }
           .footer { text-align: center; margin-top: 10px; font-size: 9px; line-height: 1.35; }
