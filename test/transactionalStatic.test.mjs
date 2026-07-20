@@ -72,6 +72,7 @@ test('seletor da agenda fecha ao escolher cliente e usa busca hibrida limitada',
 
 test('modo caixa do PDV usa scanner e preserva o checkout transacional', async () => {
   const source = await read('src/modules/petshop/pages/VendasPage.jsx')
+  const routerSource = await read('src/router/AppRouter.jsx')
   assert.match(source, /tab === 'caixa'/)
   assert.match(source, /Leitor de codigo de barras/)
   assert.match(source, /String\(item\.barcode \|\| ''\)\.trim\(\) === code/)
@@ -79,4 +80,8 @@ test('modo caixa do PDV usa scanner e preserva o checkout transacional', async (
   assert.match(source, /onScan=\{handleScannerSubmit\}/)
   assert.match(source, /onClick=\{handleSell\}/)
   assert.match(source, /modal-overlay theme-petshop-modal/)
+  assert.match(source, /yuisync:focus-mode/)
+  assert.match(source, /Sair do Modo Caixa/)
+  assert.match(routerSource, /!focusMode && \(\s*<Sidebar/)
+  assert.match(routerSource, /activeModuleId !== 'system' && !focusMode && <SupportWidget/)
 })

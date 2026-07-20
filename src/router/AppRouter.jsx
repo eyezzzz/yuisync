@@ -60,8 +60,19 @@ function AppLayout() {
     tenantEnabledModules = [],
   } = useAuthCtx()
   const [open, setOpen] = useState(false)
+  const [focusMode, setFocusMode] = useState(false)
   const location = useLocation()
   const navigate = useNavigate()
+
+  useEffect(() => {
+    const handleFocusMode = (event) => setFocusMode(Boolean(event.detail))
+    window.addEventListener('yuisync:focus-mode', handleFocusMode)
+    return () => window.removeEventListener('yuisync:focus-mode', handleFocusMode)
+  }, [])
+
+  useEffect(() => {
+    setFocusMode(false)
+  }, [location.pathname])
 
   useEffect(() => {
     // Determine active module based on URL instead of manually tracking strings
@@ -117,23 +128,25 @@ function AppLayout() {
   return (
     <div className={`flex h-screen bg-bg overflow-hidden font-body theme-${activeModuleId} relative`}>
       {activeModuleId !== 'petshop' && <StarField count={80} className="text-emerald-500" />}
-      <Sidebar
-        profile={profile}
-        onLogout={signOut}
-        open={open} setOpen={setOpen}
-        storeSettings={storeSettings}
-        activeModule={activeModule}
-        setActiveModuleId={setActiveModuleId}
-      />
+      {!focusMode && (
+        <Sidebar
+          profile={profile}
+          onLogout={signOut}
+          open={open} setOpen={setOpen}
+          storeSettings={storeSettings}
+          activeModule={activeModule}
+          setActiveModuleId={setActiveModuleId}
+        />
+      )}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 z-10">
-        <header className="lg:hidden flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border2)] bg-surface flex-shrink-0">
+        {!focusMode && <header className="lg:hidden flex items-center gap-3 px-4 py-2.5 border-b border-[var(--border2)] bg-surface flex-shrink-0">
           <button type="button" aria-label="Abrir menu" onClick={() => setOpen(true)} className="text-muted hover:text-text">
             <Menu size={19} />
           </button>
           <span className="font-display font-bold text-sm text-text">
             {storeSettings?.store_name || activeModule.name}
           </span>
-        </header>
+        </header>}
 
         <main className="flex-1 overflow-y-auto">
           <RouteErrorBoundary key={location.pathname}>
@@ -144,7 +157,7 @@ function AppLayout() {
         </main>
       </div>
       {activeModuleId === 'system' && <SystemSupportPriorityAlert />}
-      {activeModuleId !== 'system' && <SupportWidget />}
+      {activeModuleId !== 'system' && !focusMode && <SupportWidget />}
     </div>
   )
 }

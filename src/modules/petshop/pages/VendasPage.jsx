@@ -4,7 +4,7 @@ import {
   ShoppingCart, Search, Plus, Minus, Trash2, X,
   CreditCard, Banknote, Smartphone, Check, Tag, Package,
   RefreshCw, AlertCircle, Receipt, User, History, PawPrint, MessageSquare, Truck, FileText, ExternalLink,
-  ScanBarcode, MonitorUp, Keyboard
+  ScanBarcode, MonitorUp, Keyboard, ArrowLeft
 } from 'lucide-react'
 import { useProducts } from '../../../shared/hooks/useProducts'
 import { useSales }    from '../../../shared/hooks/useSales'
@@ -149,6 +149,7 @@ function CashierWorkspace({
   subtotal,
   discount,
   total,
+  onExit,
 }) {
   const itemCount = cart.reduce((sum, item) => sum + Number(item.quantity || 0), 0)
 
@@ -156,12 +157,17 @@ function CashierWorkspace({
     <div className="flex h-full min-h-0 flex-col bg-[var(--bg)]">
       <div className="border-b border-[var(--border)] bg-card px-5 py-4 lg:px-7">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-bold text-text">
-              <MonitorUp size={18} className="text-primary" />
-              Caixa em operacao
+          <div className="flex items-center gap-3">
+            <button type="button" onClick={onExit} className="btn btn-secondary btn-icon" aria-label="Sair do Modo Caixa" title="Sair do Modo Caixa">
+              <ArrowLeft size={18} />
+            </button>
+            <div>
+              <div className="flex items-center gap-2 text-sm font-bold text-text">
+                <MonitorUp size={18} className="text-primary" />
+                Caixa em operacao
+              </div>
+              <p className="mt-1 text-xs text-muted">Leia o codigo de barras e pressione Enter. Atalho para voltar ao leitor: F2.</p>
             </div>
-            <p className="mt-1 text-xs text-muted">Leia o codigo de barras e pressione Enter. Atalho para voltar ao leitor: F2.</p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-[var(--primary-border)] bg-[var(--primary-bg-light)] px-3 py-1.5 text-xs font-bold text-primary">
             <span className="h-2 w-2 rounded-full bg-[var(--primary)]" />
@@ -521,6 +527,14 @@ export default function VendasPage() {
   const scannerInputRef = useRef(null)
 
   useEffect(() => {
+    const enabled = tab === 'caixa'
+    window.dispatchEvent(new CustomEvent('yuisync:focus-mode', { detail: enabled }))
+    return () => {
+      if (enabled) window.dispatchEvent(new CustomEvent('yuisync:focus-mode', { detail: false }))
+    }
+  }, [tab])
+
+  useEffect(() => {
     loadProducts({ activeOnly: true })
     loadPets()
     loadSales({ date: todayISO() })
@@ -832,6 +846,7 @@ export default function VendasPage() {
 
   return (
     <div className="animate-fade-up h-full flex flex-col">
+      {tab !== 'caixa' && (
       <div className="px-6 lg:px-8 pt-6 pb-4 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -878,6 +893,7 @@ export default function VendasPage() {
           </button>
         </div>
       </div>
+      )}
 
       {tab === 'historico' ? (
         <div className="flex-1 overflow-y-auto px-6 lg:px-8 pb-6">
@@ -999,6 +1015,7 @@ export default function VendasPage() {
                 subtotal={subtotal}
                 discount={discount}
                 total={total}
+                onExit={() => setTab('pdv')}
               />
             ) : (
               <>
