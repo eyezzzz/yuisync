@@ -117,7 +117,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
   const discount = Number(order.sale?.discount || 0)
   const orderLabel = String(order.id || '').slice(0, 8)
   const saleLabel = String(order.sale_id || '').slice(0, 8) || '-'
-  const logoUrl = `${window.location.origin}/brand/quatro-patas-logo.png`
+  const logoUrl = `${window.location.origin}/brand/quatro-patas-logo-mono.png`
 
   const html = `
     <html>
@@ -127,7 +127,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
           @page { margin: 0; }
           * { box-sizing: border-box; }
           html { width: ${width}; height: auto !important; min-height: 0 !important; }
-          body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 4mm 4mm 3mm; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 10px; overflow: visible; }
+          body { width: ${width}; height: auto !important; min-height: 0 !important; margin: 0; padding: 5mm 6mm 4mm; color: #000; font-family: Arial, Helvetica, sans-serif; font-size: 10px; overflow: visible; }
           .receipt { display: flow-root; width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
           @media print {
             html, body { height: auto !important; min-height: 0 !important; overflow: visible !important; }
@@ -135,7 +135,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
             .receipt { position: absolute !important; top: 0 !important; left: 0 !important; break-after: avoid-page; page-break-after: avoid; }
           }
           .center { text-align: center; }
-          .brand { display: block; width: 58mm; height: 27mm; object-fit: contain; margin: -3mm auto -5mm; mix-blend-mode: multiply; }
+          .brand { display: block; width: 52mm; height: 24mm; object-fit: contain; margin: -2mm auto -4mm; }
           .store-name { font-size: 13px; font-weight: 800; text-transform: uppercase; letter-spacing: .4px; }
           .store-data { font-size: 9px; line-height: 1.35; }
           .document-title { border: 1px solid #000; font-size: 12px; font-weight: 800; text-align: center; padding: 5px 4px; margin: 8px 0 6px; text-transform: uppercase; letter-spacing: .7px; }
@@ -146,6 +146,9 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
           .customer-name { font-size: 11px; font-weight: 800; text-transform: uppercase; }
           .wrap { white-space: normal; word-break: break-word; }
           .customer-line { line-height: 1.35; }
+          .address-box { border: 1px solid #000; padding: 4px 5px; margin-top: 6px; }
+          .address-box .section-label { margin-bottom: 2px; }
+          .address-value { font-size: 10px; font-weight: 700; line-height: 1.35; }
           table { width: 100%; border-collapse: collapse; font-size: 9px; }
           th { text-align: left; font-size: 7px; text-transform: uppercase; padding: 3px 1px; border-bottom: 1px solid #000; }
           td { vertical-align: top; padding: 4px 1px; border-bottom: 1px dotted #777; }
@@ -170,7 +173,7 @@ function printOrderReceipt(order, storeSettings = {}, fallbackItems = []) {
         <div class="customer-name wrap">${escapeHtml(order.client?.owner_name || order.sale?.customer_name || 'Cliente')}</div>
         <div class="customer-line">Telefone: ${escapeHtml(order.contact_phone || order.client?.phone || '-')}</div>
         ${order.client?.owner_cpf ? `<div class="customer-line">CPF: ${escapeHtml(order.client.owner_cpf)}</div>` : ''}
-        ${address ? `<div class="customer-line wrap">Endereço: ${escapeHtml(address)}</div>` : ''}
+        ${address ? `<div class="address-box"><div class="section-label">Endereço de entrega</div><div class="address-value wrap">${escapeHtml(address)}</div></div>` : ''}
         <div class="rule"></div>
         <div class="section-label">Itens</div>
         <table><thead><tr><th class="qtd">Qtd</th><th>Descrição</th><th class="unit">Unit.</th><th class="amount">Total</th></tr></thead><tbody>
