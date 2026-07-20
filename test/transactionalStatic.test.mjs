@@ -120,6 +120,8 @@ test('ordem impressa usa a largura nativa da Print iD sem forcar altura', async 
   assert.match(source, /Conferência \/ ordem de entrega/)
   assert.match(source, /<table><thead>/)
   assert.match(source, /Endereço de entrega/)
+  assert.match(source, /Endereço do cliente/)
+  assert.match(source, /completeClientAddress/)
 })
 
 test('todos os comprovantes usam a largura 80mm da Print iD', async () => {

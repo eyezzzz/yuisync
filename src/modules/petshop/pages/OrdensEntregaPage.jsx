@@ -21,6 +21,21 @@ function orderAddress(order) {
   ].filter(Boolean).join(' - ')
 }
 
+function completeClientAddress(order) {
+  const client = order.client || {}
+  const details = client.details || {}
+  const address = order.delivery_address || client.owner_address || ''
+  const number = order.delivery_number || client.address_number || details.address_number || ''
+  const complement = order.delivery_complement || client.address_complement || details.address_complement || ''
+  const neighborhood = order.delivery_neighborhood || client.owner_neighborhood || ''
+  const city = order.delivery_city || client.owner_city || ''
+  const zipCode = order.delivery_zip_code || client.zip_code || details.zip_code || ''
+  const reference = order.delivery_reference || client.address_reference || details.address_reference || ''
+  const streetLine = [address, number && `Nº ${number}`, complement].filter(Boolean).join(', ')
+  const locationLine = [neighborhood && `Bairro ${neighborhood}`, city, zipCode && `CEP ${zipCode}`].filter(Boolean).join(' · ')
+  return [streetLine, locationLine, reference && `Referência: ${reference}`].filter(Boolean).join(' · ')
+}
+
 function extractNoteValue(notes = '', label = '') {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   const match = String(notes || '').match(new RegExp(`${escaped}:\\s*([^|]+)`, 'i'))
@@ -209,7 +224,7 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
   const address = orderAddress(order)
   const directItems = orderItems(order)
   const items = directItems.length ? directItems : fallbackItems
-  const originAddress = address || orderOriginAddress(order)
+  const clientAddress = completeClientAddress(order) || address || orderOriginAddress(order)
   const publicNotes = visibleOrderNotes(order)
   const ownerName = order.client?.owner_name || order.sale?.customer_name || 'Cliente'
   const petName = order.client?.pet_name && order.client.pet_name !== ownerName ? order.client.pet_name : ''
@@ -286,10 +301,10 @@ function OrderCard({ order, assignees, onAssign, onAdvance, onPrint, fallbackIte
       </div>
 
       <div className="rounded-xl bg-white/5 border border-[var(--border)] px-4 py-3 text-sm text-text">
-        <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-2">Origem</p>
+        <p className="text-[10px] uppercase tracking-widest text-muted font-bold mb-2">Endereço do cliente</p>
         <div className="flex items-start gap-2">
           <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />
-          <span className="leading-snug">{originAddress || 'Endereco nao informado na ordem.'}</span>
+          <span className="leading-snug">{clientAddress || 'Endereço não informado no cadastro do cliente.'}</span>
         </div>
         <p className="text-[11px] text-muted mt-2">Canal: {sourceLabel(order)}</p>
         {order.transport_label && <p className="text-[11px] text-emerald-500 mt-1">MotoDog: {order.transport_label}</p>}
@@ -345,7 +360,7 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
               <th className="w-[320px]">Itens</th>
               <th className="w-[120px]">Venda</th>
               <th className="w-[120px]">Total</th>
-              <th className="w-[260px]">Origem</th>
+              <th className="w-[260px]">Endereço do cliente</th>
               <th className="w-[170px]">Concluida em</th>
               <th className="w-[120px]">Acoes</th>
             </tr>
@@ -356,7 +371,7 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
               const petName = order.client?.pet_name && order.client.pet_name !== ownerName ? order.client.pet_name : ''
               const directItems = orderItems(order)
               const items = directItems.length ? directItems : fallbackItemsForOrder(order)
-              const originAddress = orderAddress(order) || orderOriginAddress(order) || sourceLabel(order)
+              const clientAddress = completeClientAddress(order) || orderAddress(order) || orderOriginAddress(order) || 'Endereço não informado'
               const firstItem = items[0]
               const extraCount = Math.max(0, items.length - 1)
               const payBadge = paymentBadge(order)
@@ -392,7 +407,7 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
                   <td>
                     <div className="flex items-start gap-2 text-sm text-text">
                       <MapPin size={15} className="text-amber-400 mt-0.5 flex-shrink-0" />
-                      <span className="line-clamp-2">{originAddress}</span>
+                      <span className="line-clamp-2">{clientAddress}</span>
                     </div>
                   </td>
                   <td className="text-sm text-muted">{formatDateTime(orderCompletedAt(order))}</td>
