@@ -100,36 +100,37 @@ export function Sidebar({ profile, onLogout, open, setOpen, storeSettings, activ
         </nav>
 
         <div className="px-2.5 py-3 border-t border-[var(--border2)] space-y-2.5">
-          <button type="button" onClick={onToggleDarkMode} className="w-full flex items-center justify-between gap-3 px-3 py-2.5 rounded-xl border border-[var(--border)] bg-[var(--card)] text-sm font-semibold text-text hover:border-[var(--primary-border)] transition-colors" aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'}>
-            <span className="flex items-center gap-2"><span className="w-7 h-7 rounded-lg bg-[var(--primary-bg-light)] text-primary flex items-center justify-center">{darkMode ? <Sun size={15} /> : <Moon size={15} />}</span>{darkMode ? 'Modo claro' : 'Modo noturno'}</span>
-            <span className="text-xs text-muted">Alterar</span>
-          </button>
-          {isAdminGlobal && (
-            <div className="px-2.5 py-2.5 rounded-xl border border-white/10 bg-white/[0.03]">
-              <p className="text-[10px] text-muted uppercase tracking-[0.16em] font-bold mb-1.5 flex items-center gap-1">
-                <Building2 size={10} />
-                Instancia Ativa
-              </p>
-              <div className="relative">
-                <select
-                  className="w-full bg-black/20 border border-[var(--border2)] rounded-lg text-xs font-semibold text-text px-2.5 py-2 outline-none"
-                  value={activeTenantId || ''}
-                  disabled={tenantLoading || switchingTenant || tenants.length === 0}
-                  onChange={(event) => handleGlobalTenantChange(event.target.value)}
-                >
-                  {tenants.length === 0 && <option value="">Sem instancias</option>}
-                  {tenants.map((tenant) => (
-                    <option key={tenant.id} value={tenant.id}>
-                      {tenant.name}
-                    </option>
-                  ))}
-                </select>
-                {(tenantLoading || switchingTenant) && (
-                  <RefreshCw size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted animate-spin" />
-                )}
+          <div className="flex items-end gap-2">
+            {isAdminGlobal && (
+              <div className="flex-1 min-w-0">
+                <p className="text-[9px] text-muted uppercase tracking-[0.16em] font-bold mb-1 flex items-center gap-1">
+                  <Building2 size={10} />
+                  Instancia Ativa
+                </p>
+                <div className="relative">
+                  <select
+                    className="w-full bg-black/20 border border-[var(--border2)] rounded-lg text-xs font-semibold text-text px-2.5 py-2 outline-none"
+                    value={activeTenantId || ''}
+                    disabled={tenantLoading || switchingTenant || tenants.length === 0}
+                    onChange={(event) => handleGlobalTenantChange(event.target.value)}
+                  >
+                    {tenants.length === 0 && <option value="">Sem instancias</option>}
+                    {tenants.map((tenant) => (
+                      <option key={tenant.id} value={tenant.id}>
+                        {tenant.name}
+                      </option>
+                    ))}
+                  </select>
+                  {(tenantLoading || switchingTenant) && (
+                    <RefreshCw size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-muted animate-spin" />
+                  )}
+                </div>
               </div>
-            </div>
-          )}
+            )}
+            <button type="button" onClick={onToggleDarkMode} className="w-10 h-10 flex-shrink-0 rounded-xl border border-[var(--border)] bg-[var(--card)] text-primary hover:border-[var(--primary-border)] hover:bg-[var(--primary-bg-light)] transition-colors flex items-center justify-center" aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'} title={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'}>
+              {darkMode ? <Sun size={17} /> : <Moon size={17} />}
+            </button>
+          </div>
 
           <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-xl bg-white/3">
             <div
