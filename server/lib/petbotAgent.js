@@ -249,14 +249,24 @@ function serviceMatchesCoat(service, coatType) {
 function serviceMatchesBreedPreset(service, breed = '') {
   const normalizedBreed = normalizePetbotBreedText(breed)
   if (!normalizedBreed || service.all_breeds || !service.breeds?.length) return false
-  return service.breeds.some((alias) => (
-    normalizedBreed === alias
-    || normalizedBreed.startsWith(`${alias} `)
-    || normalizedBreed.endsWith(` ${alias}`)
-  ))
+
+  // Service metadata stores one canonical label per breed. User spelling
+  // variants stay in the centralized catalog so aliases do not appear as
+  // duplicate breeds in multiple service classifications.
+  const canonicalBreed = normalizePetbotBreedText(classifyCommonPetBreed(breed)?.canonical || '')
+  const candidates = new Set([normalizedBreed, canonicalBreed].filter(Boolean))
+
+  return service.breeds.some((storedBreed) => [...candidates].some((candidate) => (
+    candidate === storedBreed
+    || candidate.startsWith(`${storedBreed} `)
+    || candidate.endsWith(` ${storedBreed}`)
+  )))
 }
 
 function inferredCoatTypeForBreed(breed = '', candidates = []) {
+  const classification = classifyCommonPetBreed(breed)
+  if (classification?.coat_type) return classification.coat_type
+
   const presetCoats = new Set(
     candidates
       .filter((service) => serviceMatchesBreedPreset(service, breed))
@@ -264,9 +274,7 @@ function inferredCoatTypeForBreed(breed = '', candidates = []) {
       .filter((coat) => coat && coat !== 'todas'),
   )
   if (presetCoats.size === 1) return [...presetCoats][0]
-
-  const classification = classifyCommonPetBreed(breed)
-  return classification?.coat_type || null
+  return null
 }
 
 function serviceSelection({ serviceQuery = '', orderType = '', services = [], weightKg = null, coatType = null, breed = null } = {}) {

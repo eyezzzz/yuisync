@@ -246,3 +246,18 @@ test('classificacao PetBot preenche racas comuns por pelagem sem sobrescrever aj
   assert.match(agent, /inferredCoatTypeForBreed/)
   assert.match(agent, /serviceMatchesBreedPreset/)
 })
+
+
+test('classificacao exclusiva armazena uma unica grafia canonica por raca', async () => {
+  const migration = await read('supabase/migrations/20260721005000_petbot_exclusive_breed_classification.sql')
+  const catalog = await read('shared/petbotBreedCatalog.js')
+
+  assert.match(migration, /yuisync_exclusive_breed_presets_v2/)
+  assert.match(migration, /classification_version', 3/)
+  assert.match(migration, /having count\(distinct coat_type\) > 1/)
+  assert.match(migration, /'longo'.*\["shih tzu", "yorkshire terrier"/s)
+  assert.doesNotMatch(migration, /"shihtzu"/)
+  assert.doesNotMatch(migration, /"shitzu"/)
+  assert.match(catalog, /commonCanonicalBreedsForCoatType/)
+  assert.match(catalog, /classification_source: CLASSIFICATION_SOURCE/)
+})

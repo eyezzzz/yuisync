@@ -1,4 +1,5 @@
-const CLASSIFICATION_VERSION = 2
+const CLASSIFICATION_VERSION = 3
+const CLASSIFICATION_SOURCE = 'yuisync_exclusive_breed_presets_v2'
 
 export const PETBOT_COAT_TYPES = Object.freeze(['curto', 'medio', 'longo', 'duplo'])
 
@@ -56,8 +57,6 @@ export const COMMON_PET_BREED_CLASSIFICATIONS = Object.freeze([
   { canonical: 'Biewer Terrier', species: 'dog', coat_type: 'longo', aliases: ['biewer terrier', 'biewer'] },
   { canonical: 'Setter Irlandês', species: 'dog', coat_type: 'longo', aliases: ['setter irlandês', 'setter irlandes', 'irish setter'] },
   { canonical: 'Setter Inglês', species: 'dog', coat_type: 'longo', aliases: ['setter inglês', 'setter ingles', 'english setter'] },
-  { canonical: 'Chihuahua de Pelo Longo', species: 'dog', coat_type: 'longo', aliases: ['chihuahua de pelo longo', 'chihuahua pelo longo', 'long haired chihuahua', 'long-haired chihuahua'] },
-  { canonical: 'Dachshund de Pelo Longo', species: 'dog', coat_type: 'longo', aliases: ['dachshund de pelo longo', 'dachshund pelo longo', 'teckel de pelo longo', 'salsicha de pelo longo'] },
 
   // Curly, wavy, woolly or wire coat grooming class.
   { canonical: 'Poodle', species: 'dog', coat_type: 'medio', aliases: ['poodle', 'poodle toy', 'poodle miniatura', 'poodle médio', 'poodle medio', 'poodle standard', 'poodle gigante'] },
@@ -65,9 +64,7 @@ export const COMMON_PET_BREED_CLASSIFICATIONS = Object.freeze([
   { canonical: 'Schnauzer', species: 'dog', coat_type: 'medio', aliases: ['schnauzer', 'schnauzer miniatura', 'schnauzer standard', 'schnauzer gigante'] },
   { canonical: 'West Highland White Terrier', species: 'dog', coat_type: 'medio', aliases: ['west highland white terrier', 'westie'] },
   { canonical: 'Scottish Terrier', species: 'dog', coat_type: 'medio', aliases: ['scottish terrier', 'terrier escocês', 'terrier escoces', 'scottie'] },
-  { canonical: 'Fox Terrier de Pelo Duro', species: 'dog', coat_type: 'medio', aliases: ['fox terrier de pelo duro', 'wire fox terrier'] },
-  { canonical: 'Dachshund de Pelo Duro', species: 'dog', coat_type: 'medio', aliases: ['dachshund de pelo duro', 'dachshund pelo duro', 'teckel de pelo duro', 'salsicha de pelo duro'] },
-  { canonical: 'Jack Russell de Pelo Duro', species: 'dog', coat_type: 'medio', aliases: ['jack russell de pelo duro', 'jack russell pelo duro', 'jack russell rough coat', 'jack russell broken coat'] },
+  { canonical: 'Fox Terrier', species: 'dog', coat_type: 'medio', aliases: ['fox terrier', 'fox terrier de pelo duro', 'wire fox terrier'] },
   { canonical: 'Cão de Água Português', species: 'dog', coat_type: 'medio', aliases: ['cão de água português', 'cao de agua portugues', 'portuguese water dog'] },
   { canonical: 'Lagotto Romagnolo', species: 'dog', coat_type: 'medio', aliases: ['lagotto romagnolo', 'lagotto'] },
   { canonical: 'Labradoodle', species: 'dog', coat_type: 'medio', aliases: ['labradoodle'] },
@@ -95,9 +92,9 @@ export const COMMON_PET_BREED_CLASSIFICATIONS = Object.freeze([
   { canonical: 'Boston Terrier', species: 'dog', coat_type: 'curto', aliases: ['boston terrier'] },
   { canonical: 'Bull Terrier', species: 'dog', coat_type: 'curto', aliases: ['bull terrier'] },
   { canonical: 'Terrier Brasileiro', species: 'dog', coat_type: 'curto', aliases: ['terrier brasileiro', 'fox paulistinha'] },
-  { canonical: 'Jack Russell de Pelo Curto', species: 'dog', coat_type: 'curto', aliases: ['jack russell de pelo curto', 'jack russell pelo curto', 'jack russell smooth coat'] },
-  { canonical: 'Chihuahua de Pelo Curto', species: 'dog', coat_type: 'curto', aliases: ['chihuahua de pelo curto', 'chihuahua pelo curto', 'smooth coat chihuahua', 'short-haired chihuahua'] },
-  { canonical: 'Dachshund de Pelo Curto', species: 'dog', coat_type: 'curto', aliases: ['dachshund de pelo curto', 'dachshund pelo curto', 'teckel de pelo curto', 'salsicha de pelo curto'] },
+  { canonical: 'Jack Russell Terrier', species: 'dog', coat_type: 'curto', aliases: ['jack russell', 'jack russell terrier', 'jack russell de pelo curto', 'jack russell pelo curto', 'jack russell smooth coat'] },
+  { canonical: 'Chihuahua', species: 'dog', coat_type: 'curto', aliases: ['chihuahua', 'chihuahua de pelo curto', 'chihuahua pelo curto', 'smooth coat chihuahua', 'short-haired chihuahua'] },
+  { canonical: 'Dachshund', species: 'dog', coat_type: 'curto', aliases: ['dachshund', 'teckel', 'salsicha', 'dachshund de pelo curto', 'dachshund pelo curto', 'teckel de pelo curto', 'salsicha de pelo curto'] },
   { canonical: 'Dálmata', species: 'dog', coat_type: 'curto', aliases: ['dálmata', 'dalmata', 'dalmatian'] },
   { canonical: 'Weimaraner', species: 'dog', coat_type: 'curto', aliases: ['weimaraner'] },
   { canonical: 'Vizsla', species: 'dog', coat_type: 'curto', aliases: ['vizsla', 'braco húngaro', 'braco hungaro'] },
@@ -108,11 +105,26 @@ export const COMMON_PET_BREED_CLASSIFICATIONS = Object.freeze([
 
 const AMBIGUOUS_BREEDS = Object.freeze([
   { canonical: 'SRD', species: 'dog', aliases: ['srd', 'sem raça definida', 'sem raca definida', 'vira lata', 'vira-lata', 'mestiço', 'mestico'], reason: 'A pelagem varia entre indivíduos.' },
-  { canonical: 'Chihuahua', species: 'dog', aliases: ['chihuahua'], reason: 'Há variedades reconhecidas de pelo curto e de pelo longo.' },
-  { canonical: 'Dachshund', species: 'dog', aliases: ['dachshund', 'teckel', 'salsicha'], reason: 'Há variedades de pelo curto, longo e duro.' },
-  { canonical: 'Jack Russell Terrier', species: 'dog', aliases: ['jack russell', 'jack russell terrier'], reason: 'Pode ter pelagem lisa, quebrada ou áspera.' },
-  { canonical: 'Fox Terrier', species: 'dog', aliases: ['fox terrier'], reason: 'Há variedades de pelo liso e de pelo duro.' },
 ])
+
+// A customer who volunteers a specific coat variety should be respected, but
+// the editable service lists still contain only the generalized breed name.
+// This keeps one breed in one default class without discarding explicit data.
+const EXPLICIT_COAT_VARIANTS = Object.freeze([
+  { canonical: 'Chihuahua', species: 'dog', coat_type: 'longo', aliases: ['chihuahua de pelo longo', 'chihuahua pelo longo', 'long haired chihuahua', 'long-haired chihuahua'] },
+  { canonical: 'Dachshund', species: 'dog', coat_type: 'longo', aliases: ['dachshund de pelo longo', 'dachshund pelo longo', 'teckel de pelo longo', 'salsicha de pelo longo'] },
+  { canonical: 'Dachshund', species: 'dog', coat_type: 'medio', aliases: ['dachshund de pelo duro', 'dachshund pelo duro', 'teckel de pelo duro', 'salsicha de pelo duro'] },
+  { canonical: 'Jack Russell Terrier', species: 'dog', coat_type: 'medio', aliases: ['jack russell de pelo duro', 'jack russell pelo duro', 'jack russell rough coat', 'jack russell broken coat'] },
+  { canonical: 'Fox Terrier', species: 'dog', coat_type: 'curto', aliases: ['fox terrier de pelo liso', 'smooth fox terrier'] },
+])
+
+const indexedExplicitCoatVariants = EXPLICIT_COAT_VARIANTS
+  .flatMap((entry) => (entry.aliases || []).map((alias) => ({
+    key: normalizePetbotBreedText(alias),
+    entry,
+  })))
+  .filter((item) => item.key)
+  .sort((left, right) => right.key.length - left.key.length)
 
 const indexedBreeds = COMMON_PET_BREED_CLASSIFICATIONS
   .flatMap((entry) => [entry.canonical, ...(entry.aliases || [])].map((alias) => ({
@@ -140,6 +152,18 @@ export function classifyCommonPetBreed(value = '') {
   const normalized = normalizePetbotBreedText(value)
   if (!normalized) return null
 
+  const explicitVariant = indexedExplicitCoatVariants.find((item) => matchesAlias(normalized, item.key))
+  if (explicitVariant) {
+    return {
+      canonical: explicitVariant.entry.canonical,
+      species: explicitVariant.entry.species,
+      coat_type: explicitVariant.entry.coat_type,
+      ambiguous: false,
+      explicit_coat: true,
+      classification_version: CLASSIFICATION_VERSION,
+    }
+  }
+
   const exact = indexedBreeds.find((item) => matchesAlias(normalized, item.key))
   if (exact) {
     return {
@@ -164,6 +188,16 @@ export function classifyCommonPetBreed(value = '') {
   }
 
   return null
+}
+
+export function commonCanonicalBreedsForCoatType(coatType = '') {
+  const normalized = normalizePetbotBreedText(coatType)
+  if (!PETBOT_COAT_TYPES.includes(normalized)) return []
+
+  return COMMON_PET_BREED_CLASSIFICATIONS
+    .filter((entry) => entry.coat_type === normalized)
+    .map((entry) => normalizePetbotBreedText(entry.canonical))
+    .filter(Boolean)
 }
 
 export function commonBreedAliasesForCoatType(coatType = '') {
@@ -194,7 +228,7 @@ export function buildServiceBreedPreset(serviceName = '', existingMetadata = {})
   const current = existingMetadata && typeof existingMetadata === 'object' ? existingMetadata : {}
   const coatType = inferServiceCoatType(current.coat_type || serviceName)
   const allBreeds = coatType === 'todas'
-  const breeds = allBreeds ? [] : commonBreedAliasesForCoatType(coatType)
+  const breeds = allBreeds ? [] : commonCanonicalBreedsForCoatType(coatType)
 
   return {
     ...current,
@@ -204,8 +238,11 @@ export function buildServiceBreedPreset(serviceName = '', existingMetadata = {})
     breed: breeds,
     all_breeds: allBreeds,
     classification_version: CLASSIFICATION_VERSION,
-    classification_source: 'yuisync_common_breed_presets_v1',
+    classification_source: CLASSIFICATION_SOURCE,
   }
 }
 
-export { CLASSIFICATION_VERSION as PETBOT_BREED_CLASSIFICATION_VERSION }
+export {
+  CLASSIFICATION_SOURCE as PETBOT_BREED_CLASSIFICATION_SOURCE,
+  CLASSIFICATION_VERSION as PETBOT_BREED_CLASSIFICATION_VERSION,
+}

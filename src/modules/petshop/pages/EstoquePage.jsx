@@ -500,7 +500,7 @@ function ProductModal({ product, products, moduleId, tenantId, serviceMode = fal
                   <label className="inp-label">Racas relacionadas</label>
                   <textarea className="inp min-h-24" placeholder="shih tzu, spitz alemao, lhasa apso"
                     value={form.bot_breed} onChange={e => set('bot_breed', e.target.value)}/>
-                  {serviceMode && <p className="mt-1 text-[11px] text-muted">O PetBot usa esta lista para descobrir a pelagem pela raca. O peso continua sendo perguntado quando o servico possui faixa em kg.</p>}
+                  {serviceMode && <p className="mt-1 text-[11px] text-muted">Use um nome canonico por raca. Variacoes de escrita sao reconhecidas automaticamente pelo PetBot; o peso continua sendo perguntado quando o servico possui faixa em kg.</p>}
                 </div>
                 <label className="col-span-2 flex items-center gap-3 cursor-pointer group">
                   <input

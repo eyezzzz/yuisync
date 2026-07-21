@@ -521,12 +521,13 @@ test('sequencia de coleta usa classificacao da raca sem pular nome e peso', () =
 })
 
 
-test('catalogo comum padroniza pelagem e preserva racas ambiguas', () => {
+test('catalogo comum padroniza uma pelagem por raca', () => {
   assert.equal(classifyCommonPetBreed('Lulu da Pomerânia')?.coat_type, 'duplo')
   assert.equal(classifyCommonPetBreed('Shih-tzu')?.coat_type, 'longo')
   assert.equal(classifyCommonPetBreed('Poodle toy')?.coat_type, 'medio')
   assert.equal(classifyCommonPetBreed('Bulldog Francês')?.coat_type, 'curto')
-  assert.equal(classifyCommonPetBreed('Dachshund')?.ambiguous, true)
+  assert.equal(classifyCommonPetBreed('Dachshund')?.coat_type, 'curto')
+  assert.equal(classifyCommonPetBreed('Dachshund de pelo longo')?.coat_type, 'longo')
   assert.equal(classifyCommonPetBreed('SRD')?.coat_type, null)
 })
 
@@ -544,7 +545,7 @@ test('preset de servico preenche somente racas da pelagem correspondente', () =>
   assert.deepEqual(all.breed, [])
 })
 
-test('metadata editavel do servico tem prioridade na classificacao da raca', () => {
+test('catalogo canonico resolve raca conhecida e metadata cobre racas personalizadas', () => {
   const services = mergePetshopServiceCatalogs([], [
     {
       id: '11111111-1111-1111-1111-111111111111',
