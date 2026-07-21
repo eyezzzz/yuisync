@@ -127,6 +127,93 @@ test('servico respeita especie e nao seleciona variante de outro animal', () => 
   assert.equal(result.service.price, 110)
 })
 
+test('banho de cachorro elimina servico de gato mesmo sem metadado de especie', () => {
+  const result = resolvePetshopService({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: 8,
+    coatType: 'longo',
+    services: [
+      {
+        id: 'cat', code: 'banho_gato', name: 'BANHO GATO (TODAS AS PELAGENS)',
+        group_type: 'banho_tosa', default_price: 120, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'cat-product',
+      },
+      {
+        id: 'small', code: 'banho_pet_pequeno',
+        name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+        group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'dog-small-product',
+      },
+    ],
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'resolved')
+  assert.equal(result.service.id, 'small')
+  assert.equal(result.service.price, 72)
+  assert.equal(result.service.species, 'dog')
+})
+
+test('banho geral de cachorro ate 10 kg tem prioridade sobre variacao por pelagem', () => {
+  const result = resolvePetshopService({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: 8,
+    coatType: 'longo',
+    services: [
+      {
+        id: 'general', code: 'banho_pet_pequeno',
+        name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+        group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'general-product', species: 'dog',
+      },
+      {
+        id: 'long', code: 'banho_pet_pequeno_longo',
+        name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (PELO LONGO)',
+        group_type: 'banho_tosa', default_price: 95, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'long-product', species: 'dog',
+      },
+    ],
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.service.id, 'general')
+  assert.equal(result.service.price, 72)
+})
+
+test('banho de gato continua selecionando somente o catalogo felino', () => {
+  const result = resolvePetshopService({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    species: 'cat',
+    breed: 'Persa',
+    weightKg: 5,
+    coatType: 'longo',
+    services: [
+      {
+        id: 'cat', code: 'banho_gato', name: 'BANHO GATO (TODAS AS PELAGENS)',
+        group_type: 'banho_tosa', default_price: 120, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'cat-product',
+      },
+      {
+        id: 'small', code: 'banho_pet_pequeno',
+        name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+        group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'dog-small-product',
+      },
+    ],
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.service.id, 'cat')
+  assert.equal(result.service.species, 'cat')
+})
+
 test('agenda respeita expediente, antecedencia e capacidade configurados', () => {
   const settings = {
     petbotTimezone: 'America/Sao_Paulo',

@@ -297,3 +297,17 @@ test('PetBot v3 movimenta estoque e consome beneficio de plano na mesma transaca
   assert.match(migration, /subscription_benefit_used = v_subscription_benefit_used/)
   assert.match(migration, /'subscription_plan_name', v_subscription_plan_name/)
 })
+
+
+test('catalogo de servicos normaliza especie e protege novos cadastros', async () => {
+  const migration = await read('supabase/migrations/20260721007000_petbot_service_species_priority.sql')
+  const agent = await read('server/lib/petbotAgent.js')
+
+  assert.match(migration, /infer_petbot_service_species/)
+  assert.match(migration, /trg_apply_petbot_service_species_metadata/)
+  assert.match(migration, /return 'cat'/)
+  assert.match(migration, /return 'dog'/)
+  assert.match(agent, /inferServiceSpecies/)
+  assert.match(agent, /isUniversalSmallDogBathService/)
+  assert.match(agent, /normalizedWeight <= 10/)
+})

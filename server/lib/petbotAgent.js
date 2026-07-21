@@ -237,6 +237,17 @@ function normalizeServiceSpecies(value = '') {
   return normalizeCode(value) || null
 }
 
+function inferServiceSpecies({ species = '', speciesTarget = '', name = '', category = '' } = {}) {
+  const explicit = normalizeServiceSpecies(species || speciesTarget)
+  if (explicit) return explicit
+
+  const text = normalize([name, category].filter(Boolean).join(' '))
+  if (/\b(gato|gata|gatos|gatas|felino|felina|felinos|felinas)\b/.test(text)) return 'cat'
+  if (/\b(cao|caes|cachorro|cachorra|cachorros|cachorras|canino|canina|caninos|caninas)\b/.test(text)) return 'dog'
+  if (/\b(banho|tosa)\b/.test(text) && /\bpet\b/.test(text) && /\bporte\b/.test(text)) return 'dog'
+  return null
+}
+
 function serviceKind(value = '') {
   const text = normalize(value)
   if (/banho.*tosa|tosa.*banho/.test(text)) return 'banho_e_tosa'
@@ -294,7 +305,12 @@ export function serviceFromCatalogProduct(product = {}) {
     sort_order: Number(product.sort_order || 500),
     source_product_id: clean(product.id),
     catalog_source: 'products',
-    species: normalizeServiceSpecies(metadata.species || product.species_target),
+    species: inferServiceSpecies({
+      species: metadata.species,
+      speciesTarget: product.species_target,
+      name,
+      category: product.category,
+    }),
     breeds: Array.isArray(metadata.breed) ? metadata.breed : (clean(metadata.breed) ? [metadata.breed] : []),
     all_breeds: metadata.all_breeds === true,
     coat_type: normalizeCoatType(metadata.coat_type) || extractCoatType(name),
@@ -390,7 +406,12 @@ function normalizeService(row = {}) {
     source_product_id: sourceProductId || null,
     catalog_source: clean(row.catalog_source) || (sourceProductId ? 'products' : 'petshop_services'),
     service_kind: serviceKind(`${code} ${name}`),
-    species: normalizeServiceSpecies(row.species || row.species_target),
+    species: inferServiceSpecies({
+      species: row.species,
+      speciesTarget: row.species_target,
+      name,
+      category: row.category,
+    }),
     weight_range: row.weight_range || extractWeightRange(name),
     coat_type: normalizeCoatType(row.coat_type) || extractCoatType(name),
     breeds: Array.isArray(row.breeds)
@@ -414,6 +435,27 @@ function serviceMatchesWeight(service, weightKg) {
 function serviceMatchesCoat(service, coatType) {
   if (!service.coat_type || service.coat_type === 'todas' || !coatType) return true
   return service.coat_type === coatType
+}
+
+function isUniversalSmallDogBathService(service = {}, weightKg = null) {
+  const weight = positiveNumber(weightKg, 0) || null
+  if (weight === null || weight > 10) return false
+  if (service.service_kind !== 'banho') return false
+  if (service.species === 'cat') return false
+
+  const range = service.weight_range
+  if (!range || !Number.isFinite(Number(range.max)) || Number(range.max) > 10) return false
+  if (Number.isFinite(Number(range.min)) && Number(range.min) > weight) return false
+
+  const text = normalize(service.name)
+  const universalCoat = !service.coat_type
+    || service.coat_type === 'todas'
+    || /todas\s+as\s+pelagens|qualquer\s+pelagem/.test(text)
+  const universalBreed = service.all_breeds
+    || !service.breeds?.length
+    || /todas\s+as\s+racas|qualquer\s+raca/.test(text)
+
+  return universalCoat && universalBreed
 }
 
 function serviceMatchesBreedPreset(service, breed = '') {
@@ -559,6 +601,17 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
       candidates,
       required_fields: [],
       error: `Nenhum serviço cadastrado atende o peso informado (${normalizedWeight} kg).`,
+    }
+  }
+
+  // Regra comercial do catálogo: para cães de até 10 kg, o banho geral de
+  // pequeno porte é a opção canônica. Raça/pelagem continuam úteis acima
+  // dessa faixa, mas não devem criar escolhas técnicas desnecessárias aqui.
+  if (normalizedSpecies === 'dog' && queryKind === 'banho' && normalizedWeight !== null && normalizedWeight <= 10) {
+    const universalSmall = filtered.filter((service) => isUniversalSmallDogBathService(service, normalizedWeight))
+    if (universalSmall.length) {
+      const authoritative = universalSmall.filter((service) => service.catalog_source === 'products' || service.source_product_id)
+      filtered = authoritative.length ? authoritative : universalSmall
     }
   }
 
