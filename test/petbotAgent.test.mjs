@@ -4,6 +4,8 @@ import test from 'node:test'
 import {
   PETBOT_AGENT_TOOLS,
   buildServiceAvailability,
+  extractExplicitPetbotServiceFacts,
+  groundPetbotServiceArgs,
   isExplicitPetbotConfirmation,
   mergePetshopServiceCatalogs,
   preparePetshopOrderDraft,
@@ -68,7 +70,8 @@ test('prepara serviço somente com horário disponível e preço real', () => {
       pet_name: 'Thor',
       species: 'dog',
       size: 'medio',
-      breed: null,
+      breed: 'SRD',
+      weight_kg: 12,
       symptom: null,
       order_type: 'banho_tosa',
       items: [],
@@ -160,6 +163,7 @@ test('prepara agendamento virtual com preço e duração do cadastro de serviço
       species: 'dog',
       size: null,
       breed: 'Lhasa Apso',
+      weight_kg: 8,
       symptom: null,
       order_type: 'banho_tosa',
       items: [],
@@ -276,6 +280,8 @@ test('runtime tenta o agente antes do guardião legado', async () => {
   assert.match(source, /loadAppointmentsFresh/)
   assert.match(source, /check_petshop_availability/)
   assert.match(source, /resolvePetTransportSelection/)
+  assert.match(source, /groundPetbotServiceArgs\(args, explicitServiceFacts\)/)
+  assert.match(source, /groundPetbotServiceArgs\(pendingAtTurnStart\.order, explicitServiceFacts\)/)
 })
 
 test('nao escolhe banho generico quando catalogo varia por peso', () => {
@@ -614,4 +620,128 @@ test('peso decide entre servico pequeno geral e variacao de pelagem do porte seg
   assert.equal(medium.ok, true)
   assert.match(medium.service.name, /Porte Medio.*Pelo Duplo/)
   assert.equal(medium.service.price, 104)
+})
+
+
+test('aterra dados de servico somente em fatos ditos pelo cliente', () => {
+  const facts = extractExplicitPetbotServiceFacts({
+    history: [],
+    message: 'Olá, gostaria de marcar um banho para meu shih tzu hoje às 14h',
+    interpretation: {
+      customer_name: 'Gabriel',
+      pet_name: 'Shih Tzu',
+      species: 'dog',
+      breed: 'Shih Tzu',
+      weight_kg: 12,
+    },
+  })
+
+  assert.equal(facts.breed, 'Shih Tzu')
+  assert.equal(facts.species, 'dog')
+  assert.equal(facts.coat_type, 'longo')
+  assert.equal(facts.pet_name, null)
+  assert.equal(facts.pet_name_explicit, false)
+  assert.equal(facts.weight_kg, null)
+  assert.equal(facts.weight_explicit, false)
+
+  const grounded = groundPetbotServiceArgs({
+    pet_name: 'Theo inventado',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weight_kg: 12,
+    coat_type: 'longo',
+  }, facts)
+
+  assert.equal(grounded.pet_name, null)
+  assert.equal(grounded.weight_kg, null)
+  assert.equal(grounded.breed, 'Shih Tzu')
+  assert.equal(grounded.coat_type, 'longo')
+})
+
+test('extrai somente o nome do pet sem carregar o restante da frase', () => {
+  const facts = extractExplicitPetbotServiceFacts({
+    history: [],
+    message: 'O nome dele é Theo e ele é um shih tzu',
+    interpretation: { pet_name: 'Theo', breed: 'Shih Tzu' },
+  })
+
+  assert.equal(facts.pet_name, 'Theo')
+  assert.equal(facts.breed, 'Shih Tzu')
+})
+
+test('preserva nome e peso quando foram informados explicitamente em turnos anteriores', () => {
+  const facts = extractExplicitPetbotServiceFacts({
+    history: [
+      { role: 'user', content: 'Quero agendar um banho para o Theo, ele é um shih tzu' },
+      { role: 'assistant', content: 'Qual é o peso dele?' },
+    ],
+    message: 'Ele pesa 7,5 kg',
+    interpretation: { pet_name: 'Theo', breed: 'Shih Tzu', weight_kg: 7.5 },
+  })
+
+  assert.equal(facts.pet_name, 'Theo')
+  assert.equal(facts.pet_name_explicit, true)
+  assert.equal(facts.breed, 'Shih Tzu')
+  assert.equal(facts.weight_kg, 7.5)
+  assert.equal(facts.weight_explicit, true)
+})
+
+test('fluxo operacional exige raça e peso comprovados antes de preço e agenda', () => {
+  const services = mergePetshopServiceCatalogs([], [
+    {
+      id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+      name: 'Banho Pet Porte Pequeno 0 KG A 10 KG (Pelo Longo)',
+      category: 'Serviço', price: 90, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'longo', breed: ['shih tzu'] },
+    },
+    {
+      id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+      name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Longo)',
+      category: 'Serviço', price: 120, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'longo', breed: ['shih tzu'] },
+    },
+  ])
+
+  const missingWeight = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    petName: 'Theo',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: null,
+    date: '2026-07-21',
+    preferredTime: '14:00',
+    period: 'specific',
+    services,
+    appointments: [],
+    requirePetIdentity: true,
+    requireServiceClassification: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(missingWeight.ok, false)
+  assert.deepEqual(missingWeight.required_fields, ['peso do pet em kg'])
+  assert.equal(missingWeight.service, undefined)
+  assert.equal(missingWeight.available_slots, undefined)
+
+  const exact = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    petName: 'Theo',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: 7.5,
+    date: '2026-07-21',
+    preferredTime: '14:00',
+    period: 'specific',
+    services,
+    appointments: [],
+    requirePetIdentity: true,
+    requireServiceClassification: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(exact.ok, true)
+  assert.equal(exact.service.price, 90)
+  assert.match(exact.service.name, /0 KG A 10 KG/)
 })

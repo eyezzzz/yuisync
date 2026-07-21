@@ -45,6 +45,159 @@ function normalizeCode(value = '') {
     .replace(/^_+|_+$/g, '')
 }
 
+function normalizeFactText(value = '') {
+  return normalizePetbotBreedText(value)
+}
+
+function userConversationTexts(history = [], message = '') {
+  const texts = (history || [])
+    .filter((entry) => !entry?.role || entry.role === 'user' || entry.role === 'customer')
+    .map((entry) => clean(entry?.content))
+    .filter(Boolean)
+  const current = clean(message)
+  if (current) texts.push(current)
+  return texts
+}
+
+function extractExplicitWeight(texts = []) {
+  const numberWords = new Map([
+    ['um', 1], ['uma', 1], ['dois', 2], ['duas', 2], ['tres', 3], ['quatro', 4],
+    ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9], ['dez', 10],
+    ['onze', 11], ['doze', 12], ['treze', 13], ['quatorze', 14], ['catorze', 14],
+    ['quinze', 15], ['dezesseis', 16], ['dezessete', 17], ['dezoito', 18], ['dezenove', 19], ['vinte', 20],
+  ])
+
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const text = normalize(texts[index])
+    const numeric = text.match(/(?:pesa|peso(?:\s+(?:dele|dela|do pet|da pet))?\s*(?:e|eh|de|:)?\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:kg|kgs|quilo|quilos)\b/)
+    if (numeric) {
+      const value = Number(numeric[1].replace(',', '.'))
+      if (Number.isFinite(value) && value > 0 && value <= 200) return value
+    }
+    const written = text.match(/(?:pesa|peso(?:\s+(?:dele|dela|do pet|da pet))?\s*(?:e|eh|de|:)?\s*)(um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)\s*(?:kg|kgs|quilo|quilos)?\b/)
+    if (written && numberWords.has(written[1])) return numberWords.get(written[1])
+  }
+  return null
+}
+
+function extractExplicitCoat(texts = []) {
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const text = normalize(texts[index])
+    const match = text.match(/(?:pelo|pelagem)\s+(curt[oa]?|medi[oa]?|long[oa]?|dupl[oa]?)/)
+    if (match) return normalizeCoatType(match[1])
+  }
+  return null
+}
+
+function extractExplicitSpecies(texts = []) {
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const text = normalize(texts[index])
+    if (/\b(gato|gata|felino|felina)\b/.test(text)) return 'cat'
+    if (/\b(cachorro|cachorra|cao|cadela|canino|canina)\b/.test(text)) return 'dog'
+  }
+  return null
+}
+
+function extractExplicitBreed(texts = [], interpretedBreed = '') {
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    const classification = classifyCommonPetBreed(texts[index])
+    if (classification?.canonical) return classification.canonical
+  }
+
+  const candidate = clean(interpretedBreed)
+  const normalizedCandidate = normalizeFactText(candidate)
+  if (!normalizedCandidate) return null
+  const grounded = texts.some((text) => {
+    const normalizedText = ` ${normalizeFactText(text)} `
+    return normalizedText.includes(` ${normalizedCandidate} `)
+  })
+  return grounded ? candidate : null
+}
+
+function plausiblePetName(value = '', customerName = '') {
+  const candidate = clean(value)
+    .replace(/\s+(?:e|ele|ela|que|com|da raca|da raça|eh|é)\b.*$/i, '')
+    .replace(/^[^A-Za-zÀ-ÿ]+|[^A-Za-zÀ-ÿ' -]+$/g, '')
+    .trim()
+  const normalized = normalizeFactText(candidate)
+  if (!normalized || normalized.length < 2 || normalized.length > 40) return null
+  if (normalizeFactText(customerName) === normalized) return null
+  if (classifyCommonPetBreed(candidate)) return null
+  if (/^(meu|minha|pet|cachorro|cachorra|cao|gato|gata|ele|ela|um|uma|banho|tosa|hoje|amanha)$/.test(normalized)) return null
+  return candidate.split(/\s+/).slice(0, 3).join(' ')
+}
+
+function extractExplicitPetName(texts = [], interpretedPetName = '', customerName = '') {
+  const patterns = [
+    /(?:se chama|chama-se|nome (?:dele|dela|do pet|da pet|do meu pet|da minha pet) (?:e|eh|é|:)?|(?:ele|ela) (?:se chama|chama)|(?:meu|minha) pet (?:se chama|chama|e|eh|é))\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,38})/i,
+    /(?:banho|tosa|consulta|vacina)\s+(?:pro|pra|para o|para a)\s+(?!meu\b|minha\b)([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,24})/i,
+    /(?:e|eh)\s+(?:o|a)\s+(?!meu\b|minha\b|um\b|uma\b)([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,24})(?:[,.!?]|$)/i,
+  ]
+
+  for (let index = texts.length - 1; index >= 0; index -= 1) {
+    for (const pattern of patterns) {
+      const match = clean(texts[index]).match(pattern)
+      const candidate = plausiblePetName(match?.[1], customerName)
+      if (candidate) return candidate
+    }
+  }
+
+  const interpreted = plausiblePetName(interpretedPetName, customerName)
+  if (!interpreted) return null
+  const normalizedCandidate = normalizeFactText(interpreted)
+  const grounded = texts.some((text) => {
+    const normalizedText = ` ${normalizeFactText(text)} `
+    return normalizedText.includes(` ${normalizedCandidate} `)
+  })
+  return grounded ? interpreted : null
+}
+
+export function extractExplicitPetbotServiceFacts({
+  history = [],
+  message = '',
+  interpretation = {},
+  previousFacts = {},
+} = {}) {
+  const texts = userConversationTexts(history, message)
+  const customerName = clean(interpretation?.customer_name || previousFacts?.customer_name)
+  const currentPetName = extractExplicitPetName(texts, interpretation?.pet_name, customerName)
+  const previousPetName = previousFacts?.pet_name_explicit ? clean(previousFacts?.pet_name) : null
+  const currentBreed = extractExplicitBreed(texts, interpretation?.breed)
+  const previousBreed = previousFacts?.breed_explicit ? clean(previousFacts?.breed) : null
+  const breed = currentBreed || previousBreed || null
+  const breedClassification = classifyCommonPetBreed(breed)
+  const currentSpecies = extractExplicitSpecies(texts)
+  const previousSpecies = previousFacts?.species_explicit ? clean(previousFacts?.species) : null
+  const currentWeight = extractExplicitWeight(texts)
+  const previousWeight = previousFacts?.weight_explicit ? positiveNumber(previousFacts?.weight_kg, 0) || null : null
+  const explicitCoat = extractExplicitCoat(texts)
+
+  return {
+    pet_name: currentPetName || previousPetName || null,
+    pet_name_explicit: Boolean(currentPetName || previousPetName),
+    species: currentSpecies || breedClassification?.species || previousSpecies || null,
+    species_explicit: Boolean(currentSpecies || breedClassification?.species || previousSpecies),
+    breed,
+    breed_explicit: Boolean(currentBreed || previousBreed),
+    weight_kg: currentWeight || previousWeight || null,
+    weight_explicit: Boolean(currentWeight || previousWeight),
+    coat_type: explicitCoat || breedClassification?.coat_type || normalizeCoatType(previousFacts?.coat_type),
+    coat_type_explicit: Boolean(explicitCoat || previousFacts?.coat_type_explicit),
+    coat_type_source: explicitCoat ? 'customer' : (breedClassification?.coat_type ? 'breed_catalog' : clean(previousFacts?.coat_type_source) || null),
+  }
+}
+
+export function groundPetbotServiceArgs(args = {}, facts = {}) {
+  return {
+    ...args,
+    pet_name: facts.pet_name_explicit ? clean(facts.pet_name) || null : null,
+    species: facts.species_explicit ? clean(facts.species) || null : null,
+    breed: facts.breed_explicit ? clean(facts.breed) || null : null,
+    weight_kg: facts.weight_explicit ? positiveNumber(facts.weight_kg, 0) || null : null,
+    coat_type: clean(facts.coat_type) || null,
+  }
+}
+
 function parseTimeMinutes(value = '') {
   const match = clean(value).match(/^(\d{1,2})(?::(\d{2}))?$/)
   if (!match) return null
@@ -800,6 +953,7 @@ export function buildServiceAvailability({
   appointments = [],
   now = new Date(),
   requirePetIdentity = false,
+  requireServiceClassification = false,
 } = {}) {
   if (requirePetIdentity) {
     const requiredIdentity = []
@@ -812,6 +966,21 @@ export function buildServiceAvailability({
         required_fields: requiredIdentity,
         available_services: [],
         instruction: `Pergunte somente: ${requiredIdentity[0]}. Não informe preço, duração ou disponibilidade antes de identificar o pet e o serviço exato.`,
+      }
+    }
+  }
+
+  if (requireServiceClassification && clean(orderType) === 'banho_tosa') {
+    const requiredClassification = []
+    if (!clean(breed)) requiredClassification.push('raça do pet')
+    if (!positiveNumber(weightKg, 0)) requiredClassification.push('peso do pet em kg')
+    if (requiredClassification.length) {
+      return {
+        ok: false,
+        error: 'Faltam dados informados pelo cliente para selecionar a faixa exata do serviço.',
+        required_fields: requiredClassification,
+        available_services: [],
+        instruction: `Pergunte somente: ${requiredClassification[0]}. Não informe preço, duração ou disponibilidade antes de selecionar o serviço exato.`,
       }
     }
   }
@@ -1037,7 +1206,12 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
 
   if (!base.pet_name) missing.push('nome do pet')
   if (!base.species) missing.push('espécie do pet')
-  if (!base.size && !base.breed) missing.push('porte ou raça do pet')
+  if (orderType === 'banho_tosa') {
+    if (!base.breed) missing.push('raça do pet')
+    if (!base.weight_kg) missing.push('peso do pet em kg')
+  } else if (!base.size && !base.breed) {
+    missing.push('porte ou raça do pet')
+  }
   if (orderType === 'veterinaria' && !base.symptom) missing.push('problema principal')
 
   const normalizedAppointments = (appointments || []).map(normalizeAppointment)

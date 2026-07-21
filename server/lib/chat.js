@@ -20,6 +20,8 @@ import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
 import {
   PETBOT_AGENT_TOOLS,
   buildServiceAvailability,
+  extractExplicitPetbotServiceFacts,
+  groundPetbotServiceArgs,
   isExplicitPetbotConfirmation,
   mergePetshopServiceCatalogs,
   preparePetshopOrderDraft,
@@ -1985,6 +1987,7 @@ function serviceFieldQuestion(field = '', availableServices = []) {
     .toLowerCase()
   if (normalized.includes('nome do pet')) return 'Qual é o nome do seu pet?'
   if (normalized.includes('especie')) return 'Seu pet é cachorro, gato ou outra espécie?'
+  if (normalized.includes('raca')) return 'Qual é a raça do seu pet?'
   if (normalized.includes('peso')) return 'Qual é o peso exato do seu pet em kg? Não vou deduzir o peso pela raça.'
   if (normalized.includes('tipo de pelo')) return 'Qual é o tipo de pelo do seu pet: curto, médio, longo ou duplo?'
   if (normalized.includes('data')) return 'Para qual data você deseja o agendamento?'
@@ -2046,6 +2049,13 @@ async function respondWithPetbotAgent({
   customInstructions,
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForGuard.context)
+  const previousAgentContext = parseJsonObject(sessionForGuard.context)?.petbot_agent || {}
+  const explicitServiceFacts = extractExplicitPetbotServiceFacts({
+    history,
+    message: trimmedMessage,
+    interpretation: llmInterpretation || {},
+    previousFacts: previousAgentContext.explicit_facts || {},
+  })
   let pendingOrder = pendingAtTurnStart
   let orderResult = null
   let needsHuman = false
@@ -2093,7 +2103,7 @@ async function respondWithPetbotAgent({
     '1. Converse naturalmente e escolha a próxima ação.',
     '2. Use update_customer_profile quando houver dados novos explícitos.',
     '3. Assim que identificar banho/tosa ou veterinária, use check_petshop_availability para resolver o serviço exato do catálogo comercial em Estoque > Serviços, mesmo que a data ainda não tenha sido informada. Envie nome do pet, espécie, raça, peso e tipo de pelo apenas quando tiverem sido informados. Se a ferramenta retornar required_fields, pergunte somente o primeiro campo indicado.',
-    '4. Nunca deduza peso ou porte pela raça. A pelagem só pode ser resolvida pela ferramenta usando a Classificação do PetBot cadastrada no serviço; não invente pelagem por conhecimento próprio. Nunca informe preço, duração ou disponibilidade antes de a ferramenta retornar ok=true com um serviço exato. Para qualquer pergunta ou pedido de horário, use check_petshop_availability antes de responder.',
+    '4. Nunca deduza peso ou porte pela raça. O servidor ignora nome do pet, peso, raça e espécie enviados pela ferramenta quando não estiverem comprovados nas mensagens do cliente. A pelagem pode ser resolvida pela Classificação do PetBot cadastrada no serviço. Nunca informe preço, duração ou disponibilidade antes de a ferramenta retornar ok=true com um serviço exato. Para qualquer pergunta ou pedido de horário, use check_petshop_availability antes de responder.',
     '5. Para produto, use search_petshop_products quando precisar confirmar estoque, preço ou opções.',
     '6. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
     '7. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
@@ -2109,7 +2119,8 @@ async function respondWithPetbotAgent({
     const args = parseAgentToolArguments(toolCall)
 
     if (name === 'update_customer_profile') {
-      const updatedCustomer = await ensureCustomerProfile(supabase, sessionForGuard, args)
+      const groundedProfileArgs = groundPetbotServiceArgs(args, explicitServiceFacts)
+      const updatedCustomer = await ensureCustomerProfile(supabase, sessionForGuard, groundedProfileArgs)
       updatedCustomerName = cleanText(args.customer_name) || cleanText(updatedCustomer.client?.name) || updatedCustomerName
       return {
         ok: true,
@@ -2144,6 +2155,7 @@ async function respondWithPetbotAgent({
     }
 
     if (name === 'check_petshop_availability') {
+      const groundedArgs = groundPetbotServiceArgs(args, explicitServiceFacts)
       const [freshServices, freshAppointments] = await Promise.all([
         loadPetshopServices(supabase, moduleId, session.tenant_id),
         loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
@@ -2155,24 +2167,28 @@ async function respondWithPetbotAgent({
         ...buildServiceAvailability({
           serviceQuery: args.service_query || llmInterpretation?.service_type,
           orderType: args.order_type || llmInterpretation?.intent,
-          petName: args.pet_name || llmInterpretation?.pet_name,
-          species: args.species || llmInterpretation?.species,
-          breed: args.breed || llmInterpretation?.breed,
-          weightKg: args.weight_kg ?? llmInterpretation?.weight_kg,
-          coatType: args.coat_type || llmInterpretation?.coat_type,
+          petName: groundedArgs.pet_name,
+          species: groundedArgs.species,
+          breed: groundedArgs.breed,
+          weightKg: groundedArgs.weight_kg,
+          coatType: groundedArgs.coat_type,
           date: args.date,
           preferredTime: args.preferred_time,
           period: args.period,
           services: liveServices,
           appointments: liveAppointments,
           requirePetIdentity: true,
+          requireServiceClassification: true,
         }),
       }
     }
 
     if (name === 'prepare_petshop_order') {
-      if (args.order_type === 'produto') {
-        const productIds = (Array.isArray(args.items) ? args.items : [])
+      const effectiveArgs = args.order_type === 'produto'
+        ? args
+        : groundPetbotServiceArgs(args, explicitServiceFacts)
+      if (effectiveArgs.order_type === 'produto') {
+        const productIds = (Array.isArray(effectiveArgs.items) ? effectiveArgs.items : [])
           .map((item) => cleanText(item.product_id))
           .filter(Boolean)
         const freshProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
@@ -2187,7 +2203,7 @@ async function respondWithPetbotAgent({
       }
 
       const prepared = preparePetshopOrderDraft({
-        args,
+        args: effectiveArgs,
         products: liveProducts,
         services: liveServices,
         appointments: liveAppointments,
@@ -2261,8 +2277,11 @@ async function respondWithPetbotAgent({
         liveAppointments = refreshedAppointments
       }
 
+      const groundedPendingOrder = pendingAtTurnStart.order.order_type === 'produto'
+        ? pendingAtTurnStart.order
+        : groundPetbotServiceArgs(pendingAtTurnStart.order, explicitServiceFacts)
       const revalidated = preparePetshopOrderDraft({
-        args: pendingAtTurnStart.order,
+        args: groundedPendingOrder,
         products: pendingAtTurnStart.order.order_type === 'produto' ? refreshedProducts : liveProducts,
         services: refreshedServices,
         appointments: refreshedAppointments,
@@ -2370,6 +2389,9 @@ async function respondWithPetbotAgent({
   const changedConfirmationRun = [...(agentResult.toolRuns || [])]
     .reverse()
     .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.changed && run?.result?.summary)
+  const blockedConfirmationRun = [...(agentResult.toolRuns || [])]
+    .reverse()
+    .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.ok === false && run?.result?.missing?.length)
   if (preparedRun?.result?.summary && !orderResult) {
     reply = cleanText(preparedRun.result.summary)
   } else if (changedConfirmationRun?.result?.summary && !orderResult) {
@@ -2379,6 +2401,8 @@ async function respondWithPetbotAgent({
       availabilityRun.result.required_fields[0],
       availabilityRun.result.available_services,
     )
+  } else if (blockedConfirmationRun?.result?.missing?.length) {
+    reply = serviceFieldQuestion(blockedConfirmationRun.result.missing[0])
   } else if (
     replyClaimsServiceOperationalData(reply)
     && !latestSuccessfulTool(agentResult.toolRuns, 'check_petshop_availability')
@@ -2405,6 +2429,7 @@ async function respondWithPetbotAgent({
       engine_version: 'petbot_agent_v1',
       updatedAt: botSentAt,
       pending_order: pendingOrder,
+      explicit_facts: explicitServiceFacts,
       last_action: agentResult.toolRuns.at(-1)?.name || 'reply',
       last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
       needs_human: needsHuman,
