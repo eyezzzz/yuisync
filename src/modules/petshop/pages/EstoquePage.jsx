@@ -97,6 +97,11 @@ function formatStockQuantity(value, unit = 'UN') {
 function isServiceProduct(product = {}) {
   const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
   const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
+  // Some legacy rows received the category "Serviço" during import even
+  // though they are physical merchandise. Product names take precedence.
+  if (/banheira|banho a seco|brinquedo|casinha|roupa|shampoo|varinha/.test(normalize(product.name))) return false
+  // Bath packages are managed in the Plans area, never in the service catalog.
+  if (/pacote.*banho|banho.*pacote/.test(normalize(product.name))) return false
   return metadata.product_type === 'servico'
     || normalize(product.category) === 'servico'
     || /banho|tosa|desembolo|escovac|hidratacao|hidratacao|higienizacao|consulta|vacina|exame|cirurg/.test(text)
