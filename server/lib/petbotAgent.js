@@ -187,6 +187,62 @@ export function extractExplicitPetbotServiceFacts({
   }
 }
 
+function formatWeightValue(value) {
+  const number = Number(value)
+  if (!Number.isFinite(number)) return ''
+  return Number.isInteger(number)
+    ? String(number)
+    : number.toLocaleString('pt-BR', { minimumFractionDigits: 1, maximumFractionDigits: 1 })
+}
+
+export function mergeInterpretedPetbotServiceFacts({
+  interpretation = {},
+  previousFacts = {},
+} = {}) {
+  const current = interpretation && typeof interpretation === 'object' ? interpretation : {}
+  const previous = previousFacts && typeof previousFacts === 'object' ? previousFacts : {}
+
+  const petName = clean(current.pet_name) || clean(previous.pet_name) || null
+  const breed = clean(current.breed) || clean(previous.breed) || null
+  const breedClassification = classifyCommonPetBreed(breed)
+  const species = clean(current.species)
+    || breedClassification?.species
+    || clean(previous.species)
+    || null
+  const weightKg = positiveNumber(current.weight_kg, 0)
+    || positiveNumber(previous.weight_kg, 0)
+    || null
+  const weightLabel = clean(current.weight_label)
+    || clean(previous.weight_label)
+    || (weightKg ? `${formatWeightValue(weightKg)} kg` : null)
+  const hasCurrentWeight = positiveNumber(current.weight_kg, 0) > 0
+  const coatFromCustomer = normalizeCoatType(current.coat_type)
+  const coatType = coatFromCustomer
+    || breedClassification?.coat_type
+    || normalizeCoatType(previous.coat_type)
+    || null
+
+  return {
+    pet_name: petName,
+    pet_name_explicit: Boolean(petName),
+    species,
+    species_explicit: Boolean(species),
+    breed,
+    breed_explicit: Boolean(breed),
+    weight_kg: weightKg,
+    weight_label: weightLabel,
+    weight_estimated: hasCurrentWeight
+      ? Boolean(current.weight_estimated)
+      : Boolean(previous.weight_estimated),
+    weight_explicit: Boolean(weightKg),
+    coat_type: coatType,
+    coat_type_explicit: Boolean(coatFromCustomer),
+    coat_type_source: coatFromCustomer
+      ? 'customer'
+      : (breedClassification?.coat_type ? 'breed_catalog' : clean(previous.coat_type_source) || null),
+  }
+}
+
 export function groundPetbotServiceArgs(args = {}, facts = {}) {
   return {
     ...args,
@@ -194,6 +250,8 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     species: facts.species_explicit ? clean(facts.species) || null : null,
     breed: facts.breed_explicit ? clean(facts.breed) || null : null,
     weight_kg: facts.weight_explicit ? positiveNumber(facts.weight_kg, 0) || null : null,
+    weight_label: facts.weight_explicit ? clean(facts.weight_label) || null : null,
+    weight_estimated: facts.weight_explicit ? Boolean(facts.weight_estimated) : false,
     coat_type: clean(facts.coat_type) || null,
   }
 }
@@ -496,7 +554,7 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
 
   const requiredFields = []
   if (candidates.some((service) => service.weight_range) && normalizedWeight === null) {
-    requiredFields.push('peso do pet em kg')
+    requiredFields.push('peso aproximado do pet')
   }
 
   let filtered = candidates
@@ -515,7 +573,23 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
   }
 
   const distinctCoats = new Set(filtered.map((service) => service.coat_type).filter((value) => value && value !== 'todas'))
-  if (distinctCoats.size > 1 && !normalizedCoat) requiredFields.push('tipo de pelo do pet')
+  if (distinctCoats.size > 1 && !normalizedCoat) {
+    if (clean(breed)) {
+      const genericForWeight = filtered.filter((service) => service.coat_type === 'todas')
+      if (genericForWeight.length) {
+        filtered = genericForWeight
+      } else {
+        return {
+          service: null,
+          candidates: filtered,
+          required_fields: [],
+          error: 'A raça informada ainda não possui uma classificação única no catálogo. Encaminhe para um atendente sem inventar o serviço.',
+        }
+      }
+    } else {
+      requiredFields.push('tipo de pelo do pet')
+    }
+  }
   if (normalizedCoat) {
     filtered = filtered.filter((service) => serviceMatchesCoat(service, normalizedCoat))
     const exactCoatMatches = filtered.filter((service) => service.coat_type === normalizedCoat)
@@ -698,7 +772,7 @@ function formatOrderSummary(order, settings = {}) {
       order.species,
       order.breed,
       order.size,
-      order.weight_kg ? `${order.weight_kg} kg` : null,
+      order.weight_label || (order.weight_kg ? `${order.weight_kg} kg` : null),
       order.coat_type ? `pelo ${order.coat_type}` : null,
     ].filter(Boolean).join(' / ')
     lines.push(`• Pet: ${pet}`)
@@ -973,14 +1047,14 @@ export function buildServiceAvailability({
   if (requireServiceClassification && clean(orderType) === 'banho_tosa') {
     const requiredClassification = []
     if (!clean(breed)) requiredClassification.push('raça do pet')
-    if (!positiveNumber(weightKg, 0)) requiredClassification.push('peso do pet em kg')
+    if (!positiveNumber(weightKg, 0)) requiredClassification.push('peso aproximado do pet')
     if (requiredClassification.length) {
       return {
         ok: false,
-        error: 'Faltam dados informados pelo cliente para selecionar a faixa exata do serviço.',
+        error: 'Faltam dados para selecionar o serviço correto no catálogo.',
         required_fields: requiredClassification,
         available_services: [],
-        instruction: `Pergunte somente: ${requiredClassification[0]}. Não informe preço, duração ou disponibilidade antes de selecionar o serviço exato.`,
+        instruction: 'Conduza a conversa naturalmente e peça somente os dados ausentes. Não exponha regras internas e não informe preço ou disponibilidade antes da validação do catálogo.',
       }
     }
   }
@@ -994,7 +1068,7 @@ export function buildServiceAvailability({
       required_fields: selection.required_fields,
       available_services: selection.candidates.map(publicService),
       instruction: selection.required_fields.length
-        ? `Pergunte somente: ${selection.required_fields[0]}. Não informe preço nem escolha um serviço enquanto houver ambiguidade.`
+        ? 'Peça naturalmente apenas o dado necessário para eliminar a ambiguidade. Não exponha regras internas e não invente preço ou serviço.'
         : 'Não invente serviço, preço ou disponibilidade. Use apenas uma opção exata retornada pelo cadastro.',
     }
   }
@@ -1122,6 +1196,8 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     size: nullableString(args.size, 60),
     breed: nullableString(args.breed, 80),
     weight_kg: positiveNumber(args.weight_kg, 0) || null,
+    weight_label: nullableString(args.weight_label, 40),
+    weight_estimated: Boolean(args.weight_estimated),
     coat_type: normalizeCoatType(args.coat_type),
     symptom: nullableString(args.symptom, 200),
     order_type: orderType,
@@ -1208,7 +1284,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   if (!base.species) missing.push('espécie do pet')
   if (orderType === 'banho_tosa') {
     if (!base.breed) missing.push('raça do pet')
-    if (!base.weight_kg) missing.push('peso do pet em kg')
+    if (!base.weight_kg) missing.push('peso aproximado do pet')
   } else if (!base.size && !base.breed) {
     missing.push('porte ou raça do pet')
   }
@@ -1337,6 +1413,7 @@ export async function runPetbotAgent({
   executeTool,
   maxSteps = MAX_AGENT_STEPS,
   initialToolChoice = 'auto',
+  validateReply = null,
 } = {}) {
   if (typeof callModel !== 'function') throw new TypeError('callModel is required')
   if (typeof executeTool !== 'function') throw new TypeError('executeTool is required')
@@ -1367,6 +1444,25 @@ export async function runPetbotAgent({
 
     if (!toolCalls.length) {
       if (!content) throw new Error('O agente retornou uma resposta vazia.')
+      if (typeof validateReply === 'function') {
+        const validation = await validateReply({
+          reply: content,
+          toolRuns,
+          messages,
+        })
+        if (validation?.ok === false) {
+          if (step >= Math.max(1, maxSteps) - 1) {
+            throw new Error(validation.error || 'O agente não conseguiu produzir uma resposta operacionalmente válida.')
+          }
+          messages.push({ role: 'assistant', content })
+          messages.push({
+            role: 'system',
+            content: clean(validation.instruction)
+              || 'Reescreva a resposta de forma natural, sem afirmar dados operacionais que não foram validados.',
+          })
+          continue
+        }
+      }
       return { reply: content, toolRuns, tokensUsed, messages }
     }
 

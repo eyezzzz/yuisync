@@ -93,16 +93,21 @@ function compactHistory(history = []) {
 
 function compactState(state = {}) {
   const petbot = state?.petbot || state || {}
+  const agentFacts = state?.petbot_agent?.facts
+    || state?.petbot_agent?.explicit_facts
+    || {}
   return {
     customer_name: petbot.customerName || '',
     intent: petbot.intent || '',
     awaiting: petbot.awaiting || '',
-    pet_name: petbot.petName || '',
-    species: petbot.species || '',
-    breed: petbot.breed || '',
+    pet_name: petbot.petName || agentFacts.pet_name || '',
+    species: petbot.species || agentFacts.species || '',
+    breed: petbot.breed || agentFacts.breed || '',
     size: petbot.size || '',
-    weight_kg: petbot.weightKg || petbot.weight_kg || '',
-    coat_type: petbot.coatType || petbot.coat_type || '',
+    weight_kg: petbot.weightKg || petbot.weight_kg || agentFacts.weight_kg || '',
+    weight_label: agentFacts.weight_label || '',
+    weight_estimated: Boolean(agentFacts.weight_estimated),
+    coat_type: petbot.coatType || petbot.coat_type || agentFacts.coat_type || '',
     age_category: petbot.ageCategory || '',
     brand: petbot.brand || '',
     package_preference: petbot.packagePreference || '',
@@ -123,7 +128,6 @@ export function normalizePetbotInterpretation(input = {}) {
   const species = normalizeSpecies(data.species)
   const payment = normalizePayment(data.payment_method || data.payment)
   const breed = normalizeBreed(data.breed || data.pet_breed)
-  const normalizedBreed = norm(breed)
 
   return {
     customer_name: pickString(data.customer_name || data.customerName, 60),
@@ -131,8 +135,10 @@ export function normalizePetbotInterpretation(input = {}) {
     pet_name: pickString(data.pet_name || data.petName, 60),
     species,
     breed,
-    size: pickEnum(data.size, SIZES) || (normalizedBreed === 'shih tzu' ? 'pequeno' : ''),
+    size: pickEnum(data.size, SIZES),
     weight_kg: clampNumber(data.weight_kg ?? data.weightKg, 0.1, 200),
+    weight_label: pickString(data.weight_label || data.weightLabel, 60),
+    weight_estimated: Boolean(data.weight_estimated || data.weightEstimated),
     coat_type: pickString(data.coat_type || data.coatType, 30),
     age_category: pickEnum(data.age_category || data.ageCategory, AGES),
     product_kind: pickEnum(data.product_kind || data.productKind, PRODUCT_KINDS),
@@ -171,16 +177,19 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Voce e a camada de interpretacao do PetBot.',
         'Sua tarefa e extrair fatos estruturados da conversa. Nao responda o cliente.',
         'Nao invente preco, estoque, horario ou produto. Extraia somente sinais da fala, historico e estado.',
-        'Pode inferir contexto comum de petshop: "racao" = produto de alimento; "shi tzu", "shih tzu", "shitzu" = cachorro pequeno da raca Shih Tzu; "spitz", "poodle", "pinscher" = cachorro pequeno; "golden", "labrador" = cachorro grande.',
+        'Pode normalizar grafias comuns e entender contexto de petshop, mas nao invente atributos que o cliente nao informou.',
         'Quando o produto escolhido ou contexto for granel e o cliente disser "2kg", "2 kg" ou "dois quilos", extraia package_kg e quantity como 2.',
         'Para agendamento, extraia service_date como o texto que o cliente disse ("hoje", "amanha", "20/05", "sexta") e service_time_preference/service_preferred_time como "manha", "tarde", "qualquer horario" ou "14h". Nao invente horario.',
         'Para tosa, se o cliente disser maquina 1/3/5/7, lamina, pente, acabamento ou foto de referencia, extraia service_grooming_detail.',
-        'Para banho/tosa, extraia weight_kg somente quando o cliente informar peso explicitamente. Extraia coat_type quando disser pelo curto, medio, longo, duplo ou equivalente. Nunca deduza peso ou pelo pela raca.',
+        'Para banho/tosa, interprete a raca e o peso aproximado quando estiverem presentes na fala, no historico recente ou no estado atual. Nunca deduza peso pela raca.',
+        'Se o cliente disser um valor aproximado, mantenha weight_kg com o valor informado, weight_label com a forma natural e weight_estimated=true.',
+        'Se disser uma faixa suficiente para o catalogo, como "ate 10 kg" ou "mais de 10 kg", use um valor operacional compativel em weight_kg, preserve a frase em weight_label e marque weight_estimated=true.',
+        'Extraia coat_type somente quando o cliente disser a pelagem. A classificacao de pelagem por raca sera resolvida pelo catalogo do sistema, nao por esta camada.',
         'Para banho/tosa e veterinaria, pagamento nao e obrigatorio no chat; extraia payment_method somente quando o cliente falar pagamento espontaneamente.',
         'Se o cliente disser "Robertao, quero uma racao", extraia customer_name "Robertao" e intent "produto".',
         'Interjeicoes como "ue", "uai", "oxe", "opa" nao sao nome.',
         'Retorne apenas JSON valido, sem markdown.',
-        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, service_type, service_grooming_detail, service_notes, service_date, service_time_preference, service_preferred_time, symptom, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, confirmation, negation, confidence, raw_summary.',
+        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, service_type, service_grooming_detail, service_notes, service_date, service_time_preference, service_preferred_time, symptom, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, confirmation, negation, confidence, raw_summary.',
         'Enums: intent produto|banho_tosa|veterinaria|multi; species dog|cat; size pequeno|medio|grande; age_category filhote|adulto|castrado|senior; product_kind food|flea|litter|specific; payment_method pix|dinheiro|cartao; fulfillment_type entrega|retirada.',
         clean(customInstructions) ? `Instrucoes de atendimento publicadas para este tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
       ].join('\n'),

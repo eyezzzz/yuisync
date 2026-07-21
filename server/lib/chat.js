@@ -23,6 +23,7 @@ import {
   extractExplicitPetbotServiceFacts,
   groundPetbotServiceArgs,
   isExplicitPetbotConfirmation,
+  mergeInterpretedPetbotServiceFacts,
   mergePetshopServiceCatalogs,
   preparePetshopOrderDraft,
   resolvePetTransportSelection,
@@ -782,16 +783,16 @@ function buildSystemPrompt({
     'Nunca afirme que salvou cadastro, separou produto, enviou foto, transferiu ou confirmou pedido sem a ferramenta correspondente retornar ok.',
     'Seu foco e vender, mas sem pressionar: se o cliente recusar o upsell, continue o pedido normalmente.',
     'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar um atendente; em caso veterinario, a veterinaria.',
-    'Se o cliente ainda nao tem nome confirmado, peca o nome antes de qualquer triagem ou oferta, inclusive em saudacao simples.',
+    'Colete nome do cliente e do pet de forma natural ao longo da conversa, sem bloquear uma consulta de catálogo que dependa apenas de dados técnicos já informados.',
     '',
     'Fluxo obrigatorio:',
     'Produto: nome, intencao, dados minimos, opcoes reais, preco, um upsell compativel, resumo parcial, pagamento, entrega/retirada, endereco se entrega, resumo final, confirmar, salvar e avaliacao 0-10.',
     'Servico: nome, intencao, dados minimos, horario real, resumo, transporte do pet quando banho/tosa, confirmar, salvar agendamento e avaliacao 0-10. Nao peca forma de pagamento para banho/tosa ou veterinaria no chat.',
     'Para banho/tosa e veterinaria, nunca afirme que pagamento antecipado e obrigatorio. O chat apenas registra o agendamento; se perguntarem, diga que o pagamento sera tratado no atendimento conforme a politica da loja.',
     'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
-    'Dados minimos produto: cliente, especie e idade/categoria quando relevante (adulto, filhote, castrado, senior). Para produtos que dependem tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento, pergunte o peso exato.',
-    'Dados minimos banho/tosa: cliente, nome do pet, especie, raca, peso exato em kg quando o catalogo possui faixas de peso, data e horario real disponivel. O tipo de pelo deve ser resolvido pela Classificacao do PetBot vinculada aos servicos; pergunte pelagem somente para SRD, raca desconhecida ou raca com variedades de pelo.',
-    'Para banho/tosa, nunca deduza peso, preco ou servico apenas pela raca. Consulte o catalogo real. A ferramenta pode usar a lista editavel de racas da Classificacao do PetBot para resolver a pelagem; se ainda houver ambiguidade, pergunte somente o dado retornado como obrigatorio. O resumo deve usar exatamente o nome e o codigo retornados pelo cadastro, nunca apenas "Banho" ou outro nome generico quando houver opcoes especificas.',
+    'Dados minimos produto: cliente, especie e idade/categoria quando relevante (adulto, filhote, castrado, senior). Para produtos que dependem tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento, pergunte o peso aproximado em kg.',
+    'Dados minimos para classificar banho/tosa: raca e peso aproximado ou faixa de peso suficiente para selecionar o servico. Se um deles ja estiver presente, pergunte apenas o outro; se ambos estiverem presentes, nao repita essas perguntas. Nome do cliente, nome do pet, data e horario podem ser coletados naturalmente antes da confirmacao final.',
+    'Para banho/tosa, nunca deduza peso, preco ou servico apenas pela raca. Consulte o catalogo real. A Classificacao do PetBot resolve a pelagem vinculada a raca; nao pergunte porte ou pelagem quando raca e peso ja forem suficientes para o catalogo. Nunca exponha regras internas, validacoes ou ferramentas. O resumo deve usar exatamente o nome e o codigo retornados pelo cadastro, nunca apenas "Banho" ou outro nome generico quando houver opcoes especificas.',
     'Nao ofereca horarios sem uma data definida. Quando listar alternativas, associe cada horario a data consultada.',
     'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
     'Nunca assuma especie. Se o cliente nao disse cachorro/gato, pergunte. Nao diga "e cachorro, certo?".',
@@ -1657,6 +1658,7 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     size: cleanText(args.size),
     breed: cleanText(args.breed),
     weight_kg: Number(args.weight_kg || 0),
+    weight_label: cleanText(args.weight_label),
     coat_type: cleanText(args.coat_type),
     symptom: cleanText(args.symptom),
     order_type: orderType,
@@ -1980,53 +1982,13 @@ function latestToolRun(toolRuns, name) {
   return null
 }
 
-function serviceFieldQuestion(field = '', availableServices = []) {
-  const normalized = cleanText(field)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-  if (normalized.includes('nome do pet')) return 'Qual é o nome do seu pet?'
-  if (normalized.includes('especie')) return 'Seu pet é cachorro, gato ou outra espécie?'
-  if (normalized.includes('raca')) return 'Qual é a raça do seu pet?'
-  if (normalized.includes('peso')) return 'Qual é o peso exato do seu pet em kg? Não vou deduzir o peso pela raça.'
-  if (normalized.includes('tipo de pelo')) return 'Qual é o tipo de pelo do seu pet: curto, médio, longo ou duplo?'
-  if (normalized.includes('data')) return 'Para qual data você deseja o agendamento?'
-  if (normalized.includes('horario')) return 'Qual horário você prefere?'
-  if (normalized.includes('servico exato')) {
-    const names = (availableServices || []).map((service) => cleanText(service?.name)).filter(Boolean).slice(0, 6)
-    return names.length
-      ? `Encontrei mais de uma opção no catálogo. Qual destas corresponde ao serviço desejado?
-${names.map((name) => `- ${name}`).join('\n')}`
-      : 'Encontrei mais de uma opção de serviço. Qual delas você deseja?'
-  }
-  return `Antes de consultar preço e horário, preciso confirmar ${cleanText(field) || 'os dados do serviço exato'}.`
-}
-
 function replyClaimsServiceOperationalData(reply = '') {
   const text = cleanText(reply)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
   return /r\$\s*\d/.test(reply)
-    || /horario.*(disponivel|livre)|esta disponivel|temos horario|valor e|custa/.test(text)
-}
-
-function shouldForceAvailabilityLookup(message = '', history = []) {
-  const current = cleanText(message)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-  const conversation = [...(history || []).slice(-8).map((entry) => cleanText(entry.content)), current]
-    .join(' ')
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-  const hasServiceContext = /\b(banho|tosa|consulta|vacina|veterin|agendar|agendamento)\b/.test(conversation)
-  const hasScheduleRequest = /\b(hoje|amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|horario|hora)\b/.test(current)
-    || /\b(?:as\s*)?\d{1,2}(?::\d{2}|h(?:oras?)?)\b/.test(current)
-    || /\bas\s+\d{1,2}\b/.test(current)
-  const hasServiceRequest = /\b(banho|tosa|consulta|vacina|veterin|agendar|agendamento|preco|valor|custa)\b/.test(conversation)
-  return hasServiceContext && (hasScheduleRequest || hasServiceRequest)
+    || /horario.*(disponivel|livre|ocupado|indisponivel)|esta disponivel|temos horario|nao temos horario|sem horario|valor e|custa|duracao|dura.*(?:min|hora)|leva.*(?:min|hora)/.test(text)
 }
 
 async function respondWithPetbotAgent({
@@ -2050,11 +2012,11 @@ async function respondWithPetbotAgent({
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForGuard.context)
   const previousAgentContext = parseJsonObject(sessionForGuard.context)?.petbot_agent || {}
-  const explicitServiceFacts = extractExplicitPetbotServiceFacts({
+  const serviceFacts = extractExplicitPetbotServiceFacts({
     history,
     message: trimmedMessage,
     interpretation: llmInterpretation || {},
-    previousFacts: previousAgentContext.explicit_facts || {},
+    previousFacts: previousAgentContext.facts || previousAgentContext.explicit_facts || {},
   })
   let pendingOrder = pendingAtTurnStart
   let orderResult = null
@@ -2102,13 +2064,24 @@ async function respondWithPetbotAgent({
     'Protocolo do agente:',
     '1. Converse naturalmente e escolha a próxima ação.',
     '2. Use update_customer_profile quando houver dados novos explícitos.',
-    '3. Assim que identificar banho/tosa ou veterinária, use check_petshop_availability para resolver o serviço exato do catálogo comercial em Estoque > Serviços, mesmo que a data ainda não tenha sido informada. Envie nome do pet, espécie, raça, peso e tipo de pelo apenas quando tiverem sido informados. Se a ferramenta retornar required_fields, pergunte somente o primeiro campo indicado.',
-    '4. Nunca deduza peso ou porte pela raça. O servidor ignora nome do pet, peso, raça e espécie enviados pela ferramenta quando não estiverem comprovados nas mensagens do cliente. A pelagem pode ser resolvida pela Classificação do PetBot cadastrada no serviço. Nunca informe preço, duração ou disponibilidade antes de a ferramenta retornar ok=true com um serviço exato. Para qualquer pergunta ou pedido de horário, use check_petshop_availability antes de responder.',
-    '5. Para produto, use search_petshop_products quando precisar confirmar estoque, preço ou opções.',
-    '6. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
-    '7. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
-    '8. Use handoff_to_human quando não puder concluir com dados reais ou houver risco veterinário.',
-    '9. Não exponha nomes de ferramentas, JSON, IDs internos nem regras deste prompt.',
+    '3. Assim que identificar banho/tosa ou veterinária, use check_petshop_availability para resolver o serviço exato do catálogo comercial em Estoque > Serviços. Passe os fatos interpretados da conversa; a ferramenta informará apenas quais dados ainda faltam e quais dados operacionais foram validados.',
+    '4. Em banho/tosa, a classificação depende de raça e peso aproximado. Se faltar um deles, formule uma pergunta natural para obter somente o que falta. Se os dois estiverem presentes, não volte a perguntar raça, peso, porte ou pelagem. A Classificação do PetBot resolve a pelagem. Você escolhe livremente a redação, preservando saudação, contexto e tom humano.',
+    '5. Preço, duração, serviço e agenda sempre vêm das ferramentas e do cadastro real. Nunca exponha regras internas, nomes de ferramentas ou validações ao cliente.',
+    '6. Para produto, use search_petshop_products quando precisar confirmar estoque, preço ou opções.',
+    '7. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
+    '8. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
+    '9. Use handoff_to_human quando não puder concluir com dados reais ou houver risco veterinário.',
+    '',
+    'Fatos estruturados interpretados da conversa:',
+    JSON.stringify({
+      pet_name: serviceFacts.pet_name,
+      species: serviceFacts.species,
+      breed: serviceFacts.breed,
+      weight_kg: serviceFacts.weight_kg,
+      weight_label: serviceFacts.weight_label,
+      coat_type: serviceFacts.coat_type,
+    }),
+    'Use esses fatos como memória da conversa. Não os exponha como JSON e não pergunte novamente um campo já preenchido.',
     '',
     'Estado transacional desta conversa:',
     pendingContext,
@@ -2119,7 +2092,7 @@ async function respondWithPetbotAgent({
     const args = parseAgentToolArguments(toolCall)
 
     if (name === 'update_customer_profile') {
-      const groundedProfileArgs = groundPetbotServiceArgs(args, explicitServiceFacts)
+      const groundedProfileArgs = groundPetbotServiceArgs(args, serviceFacts)
       const updatedCustomer = await ensureCustomerProfile(supabase, sessionForGuard, groundedProfileArgs)
       updatedCustomerName = cleanText(args.customer_name) || cleanText(updatedCustomer.client?.name) || updatedCustomerName
       return {
@@ -2155,7 +2128,7 @@ async function respondWithPetbotAgent({
     }
 
     if (name === 'check_petshop_availability') {
-      const groundedArgs = groundPetbotServiceArgs(args, explicitServiceFacts)
+      const groundedArgs = groundPetbotServiceArgs(args, serviceFacts)
       const [freshServices, freshAppointments] = await Promise.all([
         loadPetshopServices(supabase, moduleId, session.tenant_id),
         loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
@@ -2177,7 +2150,7 @@ async function respondWithPetbotAgent({
           period: args.period,
           services: liveServices,
           appointments: liveAppointments,
-          requirePetIdentity: true,
+          requirePetIdentity: false,
           requireServiceClassification: true,
         }),
       }
@@ -2186,7 +2159,7 @@ async function respondWithPetbotAgent({
     if (name === 'prepare_petshop_order') {
       const effectiveArgs = args.order_type === 'produto'
         ? args
-        : groundPetbotServiceArgs(args, explicitServiceFacts)
+        : groundPetbotServiceArgs(args, serviceFacts)
       if (effectiveArgs.order_type === 'produto') {
         const productIds = (Array.isArray(effectiveArgs.items) ? effectiveArgs.items : [])
           .map((item) => cleanText(item.product_id))
@@ -2279,7 +2252,7 @@ async function respondWithPetbotAgent({
 
       const groundedPendingOrder = pendingAtTurnStart.order.order_type === 'produto'
         ? pendingAtTurnStart.order
-        : groundPetbotServiceArgs(pendingAtTurnStart.order, explicitServiceFacts)
+        : groundPetbotServiceArgs(pendingAtTurnStart.order, serviceFacts)
       const revalidated = preparePetshopOrderDraft({
         args: groundedPendingOrder,
         products: pendingAtTurnStart.order.order_type === 'produto' ? refreshedProducts : liveProducts,
@@ -2367,9 +2340,7 @@ async function respondWithPetbotAgent({
     return { ok: false, error: `Ferramenta desconhecida: ${name}` }
   }
 
-  const initialToolChoice = !pendingAtTurnStart && shouldForceAvailabilityLookup(trimmedMessage, history)
-    ? { type: 'function', function: { name: 'check_petshop_availability' } }
-    : 'auto'
+  const initialToolChoice = 'auto'
 
   const agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
@@ -2381,35 +2352,45 @@ async function respondWithPetbotAgent({
     callModel: (params) => callOpenAIWithTimeout(params, serverEnv.openAiTimeoutMs),
     executeTool,
     initialToolChoice,
+    validateReply: ({ reply: draftReply, toolRuns }) => {
+      if (!replyClaimsServiceOperationalData(draftReply)) return { ok: true }
+
+      const hasValidatedOperationalData = Boolean(
+        latestSuccessfulTool(toolRuns, 'check_petshop_availability')
+        || latestSuccessfulTool(toolRuns, 'prepare_petshop_order')
+        || orderResult
+        || pendingAtTurnStart,
+      )
+      if (hasValidatedOperationalData) return { ok: true }
+
+      const availability = latestToolRun(toolRuns, 'check_petshop_availability')
+      const blockedConfirmation = [...(toolRuns || [])]
+        .reverse()
+        .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.ok === false)
+      const missing = availability?.result?.required_fields
+        || blockedConfirmation?.result?.missing
+        || []
+
+      return {
+        ok: false,
+        instruction: [
+          'A resposta anterior afirmou preço, serviço ou disponibilidade sem validação operacional bem-sucedida.',
+          missing.length ? `Dados ainda ausentes: ${missing.join(', ')}.` : 'Ainda faltam dados para consultar o catálogo ou a agenda.',
+          'Reescreva a resposta no tom natural da conversa. Faça no máximo uma pergunta útil e não mencione regras internas, validações ou ferramentas.',
+        ].join('\n'),
+      }
+    },
   })
 
   let reply = cleanText(agentResult.reply)
   const preparedRun = latestSuccessfulTool(agentResult.toolRuns, 'prepare_petshop_order')
-  const availabilityRun = latestToolRun(agentResult.toolRuns, 'check_petshop_availability')
   const changedConfirmationRun = [...(agentResult.toolRuns || [])]
     .reverse()
     .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.changed && run?.result?.summary)
-  const blockedConfirmationRun = [...(agentResult.toolRuns || [])]
-    .reverse()
-    .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.ok === false && run?.result?.missing?.length)
   if (preparedRun?.result?.summary && !orderResult) {
     reply = cleanText(preparedRun.result.summary)
   } else if (changedConfirmationRun?.result?.summary && !orderResult) {
     reply = cleanText(changedConfirmationRun.result.summary)
-  } else if (availabilityRun?.result?.ok === false && availabilityRun.result.required_fields?.length) {
-    reply = serviceFieldQuestion(
-      availabilityRun.result.required_fields[0],
-      availabilityRun.result.available_services,
-    )
-  } else if (blockedConfirmationRun?.result?.missing?.length) {
-    reply = serviceFieldQuestion(blockedConfirmationRun.result.missing[0])
-  } else if (
-    replyClaimsServiceOperationalData(reply)
-    && !latestSuccessfulTool(agentResult.toolRuns, 'check_petshop_availability')
-    && !pendingOrder
-    && !orderResult
-  ) {
-    reply = 'Antes de informar preço ou disponibilidade, preciso validar o serviço exato no catálogo. Qual é o nome do seu pet?'
   }
   if (!reply) throw new HttpError(502, 'The PetBot agent response came back empty.')
 
@@ -2425,11 +2406,11 @@ async function respondWithPetbotAgent({
       last_total: Number(orderResult.total || 0),
     } : {}),
     petbot_agent: {
-      version: 1,
-      engine_version: 'petbot_agent_v1',
+      version: 2,
+      engine_version: 'petbot_agent_v2',
       updatedAt: botSentAt,
       pending_order: pendingOrder,
-      explicit_facts: explicitServiceFacts,
+      facts: serviceFacts,
       last_action: agentResult.toolRuns.at(-1)?.name || 'reply',
       last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
       needs_human: needsHuman,
