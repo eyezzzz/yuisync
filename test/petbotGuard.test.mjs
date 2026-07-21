@@ -873,7 +873,7 @@ test('confirmacao simples antes do resumo final nao salva pedido', () => {
   assert.match(result.reply, /Qual forma prefere/i)
 })
 
-test('banho normal e tosa higienica usam agenda de banho, nao agenda de tosa', () => {
+test('banho normal reconhece "somente o banho" e nao oferece banho e tosa', () => {
   let context = {}
   let result = turn(context, 'oi')
   context = result.context
@@ -883,7 +883,7 @@ test('banho normal e tosa higienica usam agenda de banho, nao agenda de tosa', (
   context = result.context
   assert.equal(result.action, 'responder_controlado')
 
-  result = turn(context, 'somente banho normal')
+  result = turn(context, 'somente o banho')
   assert.equal(result.state.serviceType, 'Banho')
   assert.equal(result.action, 'pedir_nome_pet')
 })

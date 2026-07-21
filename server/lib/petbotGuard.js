@@ -968,7 +968,7 @@ function applyBathGroomingChoice(state, message = '') {
   const lower = norm(message)
   if (!lower) return false
 
-  if (/(sem tosa|so banho|só banho|apenas banho|banho somente|somente banho|banho normal)/.test(lower)) {
+  if (/(sem tosa|so (o )?banho|só (o )?banho|apenas (o )?banho|banho somente|somente (o )?banho|banho normal)/.test(lower)) {
     state.serviceType = 'Banho'
     state.groomingChoiceConfirmed = true
     return true
@@ -1723,7 +1723,9 @@ function serviceMatches(intent, appointment, requestedServiceType = '') {
   if (/tosa higien/.test(requested)) return /(higien|tosa)/.test(service)
   if (/tosa/.test(requested) && !/banho/.test(requested)) return /(tosa|higien)/.test(service)
   if (/banho/.test(requested) && /tosa/.test(requested)) return /(banho.*tosa|tosa.*banho|higien)/.test(service)
-  if (/banho/.test(requested)) return /banho/.test(service)
+  // A plain bath has the hygienic trim included, but must never be offered a
+  // paid "Banho e tosa" slot as if it were the same service.
+  if (/banho/.test(requested)) return /banho/.test(service) && !/tosa|higien/.test(service)
   return true
 }
 
@@ -2581,7 +2583,7 @@ function serviceFlow(state, message, appointments, settings) {
     return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar um atendente para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_atendente')
   }
   if (state.intent === 'banho_tosa' && !state.groomingChoiceConfirmed) {
-    return ask('Você quer o banho com a tosa higiênica mesmo ou tosa no corpinho?', state, 'grooming_confirmation', 'confirmacao_tosa_pendente')
+    return ask('No banho normal, a tosa higiênica já está inclusa. Você prefere somente o banho normal ou banho com tosa no corpinho?', state, 'grooming_confirmation', 'confirmacao_tosa_pendente')
   }
   if (!state.petName) {
     return ask('Perfeito. Qual o nome do pet?', state, 'pet_name', 'pet_nome_pendente')
@@ -2602,7 +2604,8 @@ function serviceFlow(state, message, appointments, settings) {
     return ask('Como você quer a tosa? Pode me dizer máquina 1, 3, 5 ou 7, ou enviar uma foto de referência.', state, 'grooming_detail', 'acabamento_tosa_pendente')
   }
   if (state.intent === 'banho_tosa' && !state.serviceNotesAsked && !state.serviceNotes) {
-    return ask('Alguma observação para banho/tosa? Ex: alergia, nós no pelo, bravo ou sem perfume. Se não tiver, me fala "sem observação".', state, 'service_notes', 'observacao_servico_pendente')
+    const serviceLabel = /tosa/.test(norm(state.serviceType)) ? 'banho e tosa' : 'banho'
+    return ask(`Alguma observação para o ${serviceLabel}? Ex: alergia, nós no pelo, bravo ou sem perfume. Se não tiver, me fala "sem observação".`, state, 'service_notes', 'observacao_servico_pendente')
   }
   if (!state.serviceDate) {
     return ask('Para qual dia você quer agendar?', state, 'service_date', 'dia_agendamento_pendente')
