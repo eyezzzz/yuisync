@@ -275,3 +275,139 @@ test('runtime tenta o agente antes do guardião legado', async () => {
   assert.match(source, /check_petshop_availability/)
   assert.match(source, /resolvePetTransportSelection/)
 })
+
+test('nao escolhe banho generico quando catalogo varia por peso', () => {
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services: [
+      { id: 'generic', code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 60, default_duration_min: 60, active: true },
+      { id: 'small', code: 'banho_pet_porte_pequeno_0_kg_a_10_kg_todas_as_racas', name: 'Banho Pet Porte Pequeno 0 KG A 10 KG (Todas As Raças)', group_type: 'banho_tosa', default_price: 72, default_duration_min: 60, active: true },
+      { id: 'medium-short', code: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_curto', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Curto)', group_type: 'banho_tosa', default_price: 88, default_duration_min: 75, active: true },
+    ],
+    appointments: [],
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, false)
+  assert.deepEqual(availability.required_fields, ['peso do pet em kg'])
+  assert.ok(availability.available_services.every((service) => service.name !== 'Banho'))
+})
+
+test('seleciona nome e preco exatos do servico por peso e tipo de pelo', () => {
+  const services = [
+    { id: 'medium-short', code: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_curto', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Curto)', group_type: 'banho_tosa', default_price: 88, default_duration_min: 75, active: true },
+    { id: 'medium-double', code: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)', group_type: 'banho_tosa', default_price: 104, default_duration_min: 90, active: true },
+  ]
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    weightKg: 12,
+    coatType: 'duplo',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services,
+    appointments: [],
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, true)
+  assert.equal(availability.service.code, 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo')
+  assert.equal(availability.service.name, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
+  assert.equal(availability.service.price, 104)
+
+  const prepared = preparePetshopOrderDraft({
+    args: {
+      customer_name: 'Ricardo',
+      pet_name: 'Theo',
+      species: 'dog',
+      size: null,
+      breed: 'Spitz Alemão',
+      weight_kg: 12,
+      coat_type: 'duplo',
+      symptom: null,
+      order_type: 'banho_tosa',
+      items: [],
+      appointment_id: null,
+      scheduled_at: '2026-07-22T14:00:00-03:00',
+      service_code: availability.service.code,
+      service_type: availability.service.code,
+      service_transport_mode: 'sem_transporte',
+    },
+    services,
+    appointments: [],
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(prepared.ok, true)
+  assert.equal(prepared.order.service_label, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
+  assert.equal(prepared.order.items[0].unit_price, 104)
+  assert.equal(prepared.order.total, 104)
+  assert.match(prepared.summary, /Banho Pet Porte Medio 10,1 A 22 KG \(Pelo Duplo\)/)
+  assert.doesNotMatch(prepared.summary, /Pagamento:/)
+})
+
+test('codigo especializado retornado pelo catalogo permanece exato', () => {
+  const services = [
+    { id: 'generic', code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 60, default_duration_min: 60, active: true },
+    { id: 'medium-short', code: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_curto', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Curto)', group_type: 'banho_tosa', default_price: 88, default_duration_min: 75, active: true },
+    { id: 'medium-double', code: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)', group_type: 'banho_tosa', default_price: 104, default_duration_min: 90, active: true },
+  ]
+
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo',
+    orderType: 'banho_tosa',
+    weightKg: 12,
+    coatType: 'duplo',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services,
+    appointments: [],
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, true)
+  assert.equal(availability.service.code, 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo')
+  assert.equal(availability.service.price, 104)
+})
+
+test('prefere variacao de pelo exata em vez de opcao generica da mesma faixa', () => {
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    weightKg: 12,
+    coatType: 'duplo',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services: [
+      { id: 'medium-all', code: 'banho_pet_porte_medio_10_1_a_22_kg_todas_as_racas', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Todas As Raças)', group_type: 'banho_tosa', default_price: 90, default_duration_min: 75, active: true },
+      { id: 'medium-double', code: 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)', group_type: 'banho_tosa', default_price: 104, default_duration_min: 90, active: true },
+    ],
+    appointments: [],
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, true)
+  assert.equal(availability.service.code, 'banho_pet_porte_medio_10_1_a_22_kg_pelo_duplo')
+  assert.equal(availability.service.price, 104)
+})
+
+test('exige data antes de oferecer horarios de um servico exato', () => {
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    date: null,
+    services: [{ id: 's1', code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 70, default_duration_min: 60, active: true }],
+    appointments: [],
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, false)
+  assert.deepEqual(availability.required_fields, ['data do agendamento'])
+})

@@ -161,3 +161,23 @@ test('fluxo legado do WhatsApp tem MotoDog, Pix e checklist configuraveis', () =
   assert.match(guard, /buildPetbotConfirmationReply/)
   assert.match(guard, /aguardando_comprovante/)
 })
+
+test('PetBot exige servico exato por peso/pelo e possui fallback quando RPC nao foi aplicada', () => {
+  const localChat = read('server/lib/chat.js')
+  const agent = read('server/lib/petbotAgent.js')
+  const migration = read('supabase/migrations/20260721002000_petbot_service_catalog_booking_fix.sql')
+
+  assert.match(agent, /peso do pet em kg/)
+  assert.match(agent, /tipo de pelo do pet/)
+  assert.match(agent, /specialized\.length/)
+  assert.match(localChat, /isMissingPetbotTransactionRpcError/)
+  assert.match(localChat, /return createConfirmedPetshopOrder\(supabase, session, settings, args\)/)
+  assert.match(localChat, /validatedAppointment\.id[\s\S]*from\('appointments'\)\.insert\(payload\)/)
+  assert.match(localChat, /nunca afirme que pagamento antecipado e obrigatorio/i)
+  assert.match(localChat, /Assim que identificar banho\/tosa ou veterinária, use check_petshop_availability/)
+  assert.match(localChat, /!pendingAtTurnStart && shouldForceAvailabilityLookup/)
+  assert.match(migration, /from public\.petshop_services/)
+  assert.match(migration, /and code = v_service_type/)
+  assert.match(migration, /v_subtotal := v_service\.default_price/)
+  assert.match(migration, /insert into public\.appointments/)
+})
