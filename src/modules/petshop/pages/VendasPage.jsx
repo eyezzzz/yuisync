@@ -389,8 +389,9 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
             </div>
           `).join('')}
           <div class="hr"></div>
-          <div class="total-row"><span>SUBTOTAL:</span> <span>R$ ${(sale.total + (sale.discount || 0)).toFixed(2)}</span></div>
+          <div class="total-row"><span>SUBTOTAL:</span> <span>R$ ${(sale.total + (sale.discount || 0) - (sale.deliveryFee || 0)).toFixed(2)}</span></div>
           ${sale.discount > 0 ? `<div class="total-row" style="color:red"><span>DESCONTO:</span> <span>-R$ ${sale.discount.toFixed(2)}</span></div>` : ''}
+          ${sale.deliveryFee > 0 ? `<div class="total-row"><span>ENTREGA:</span> <span>R$ ${sale.deliveryFee.toFixed(2)}</span></div>` : ''}
           <div class="total-row" style="font-size: 1.2em;"><span>TOTAL:</span> <span>R$ ${sale.total.toFixed(2)}</span></div>
           <div class="hr"></div>
           <div class="info center">Pagamento: ${sale.payment.toUpperCase()}</div>
@@ -691,7 +692,10 @@ export default function VendasPage() {
   }, [productTotalPages])
 
   const subtotal = cart.reduce((s, i) => s + i.unit_price * i.quantity, 0)
-  const total    = Math.max(0, subtotal - (Number(discount) || 0))
+  const deliveryFee = fulfillmentType === 'entrega'
+    ? Math.max(0, Number(auth?.storeSettings?.delivery_fee ?? 8))
+    : 0
+  const total = Math.max(0, subtotal - (Number(discount) || 0)) + deliveryFee
   const breakdownTotal = paymentBreakdown.reduce((sum, item) => sum + Number(item.amount || 0), 0)
   const breakdownRemaining = Math.max(0, total - breakdownTotal)
 
@@ -840,6 +844,7 @@ export default function VendasPage() {
     payment: saleRow?.payment_method || 'dinheiro',
     discount: Number(saleRow?.discount || 0),
     total: Number(saleRow?.total_price || 0),
+    deliveryFee: Number(saleRow?.delivery_fee || 0),
     fiscal,
     source: saleRow?.source || 'pdv',
     fulfillmentType: saleRow?.fulfillment_type || 'balcao',
@@ -938,7 +943,8 @@ export default function VendasPage() {
         customer: customerName || 'Balcão',
         payment: paymentDescriptor,
         discount: Number(discount) || 0,
-        total,
+        total: Number(createdSale?.total_price ?? total),
+        deliveryFee: Number(createdSale?.delivery_fee ?? deliveryFee),
         fiscal: null,
         source: createdSale?.source || saleSource,
         fulfillmentType: createdSale?.fulfillment_type || (saleSource === 'whatsapp' ? fulfillmentType : 'balcao'),
@@ -1495,8 +1501,14 @@ export default function VendasPage() {
                 </div>
               )}
               <div className="-mx-4 -mb-4 border-t border-[var(--border2)] bg-surface p-4 pt-3">
-              <div className="rounded-2xl border border-[var(--border)] bg-card p-4 shadow-sm">
-                <div className="flex items-end justify-between gap-3">
+              <div className="rounded-2xl border border-[var(--border)] bg-card p-4 shadow-sm space-y-2">
+                {deliveryFee > 0 && (
+                  <div className="flex items-center justify-between gap-3 text-sm">
+                    <span className="text-muted flex items-center gap-2"><Truck size={14}/> Taxa de entrega</span>
+                    <strong className="text-text">{fmtCurrency(deliveryFee)}</strong>
+                  </div>
+                )}
+                <div className="flex items-end justify-between gap-3 border-t border-[var(--border2)] pt-2">
                   <span className="text-sm font-semibold text-muted">Total da venda</span>
                   <strong className="font-display text-2xl font-bold text-primary">{fmtCurrency(total)}</strong>
                 </div>

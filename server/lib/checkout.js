@@ -66,12 +66,22 @@ export async function executeCheckout(accessToken, body) {
   if (transaction.error) throw mapTransactionError(transaction.error)
 
   const saleId = transaction.data?.sale_id
-  const saleResponse = await userSupabase
+  let saleResponse = await userSupabase
     .from('sales')
-    .select('id,tenant_id,module_id,client_id,customer_name,customer_phone,payment_method,subtotal,discount,total_price,status,source,fulfillment_type,notes,created_at')
+    .select('id,tenant_id,module_id,client_id,customer_name,customer_phone,payment_method,subtotal,discount,delivery_fee,total_price,status,source,fulfillment_type,notes,created_at')
     .eq('id', saleId)
     .eq('tenant_id', payload.tenant_id)
     .single()
+
+  if (saleResponse.error && String(saleResponse.error.message || '').toLowerCase().includes('delivery_fee')) {
+    saleResponse = await userSupabase
+      .from('sales')
+      .select('id,tenant_id,module_id,client_id,customer_name,customer_phone,payment_method,subtotal,discount,total_price,status,source,fulfillment_type,notes,created_at')
+      .eq('id', saleId)
+      .eq('tenant_id', payload.tenant_id)
+      .single()
+    if (saleResponse.data) saleResponse.data.delivery_fee = Number(transaction.data?.delivery_fee || 0)
+  }
   if (saleResponse.error) throw new HttpError(500, 'Venda concluida, mas nao foi possivel recarregar o comprovante.')
 
   let fiscal = { status: 'queued' }

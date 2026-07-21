@@ -14,25 +14,18 @@ import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import {
   DEFAULT_PETSHOP_SERVICES,
-  SERVICE_GROUPS,
-  findService,
-  getServiceGroupFromCode,
   serviceIcon,
-  serviceLabel as lookupServiceLabel,
 } from '../lib/petshopTeam'
+import {
+  appointmentServiceCodes,
+  appointmentServiceGroup,
+  appointmentServiceLabel,
+  calculateAppointmentServiceTotals,
+  classifyAppointmentServiceGroup,
+  serviceOptionsForAppointmentGroup,
+} from '../lib/appointmentServices'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-// ── Helpers ───────────────────────────────────────────────────────────────────
-const LEGACY_SERVICES = [
-  { value: 'banho',        label: 'Banho',          price: 60,  icon: Droplets     },
-  { value: 'tosa',         label: 'Tosa',           price: 80,  icon: Scissors     },
-  { value: 'banho_e_tosa', label: 'Banho & Tosa',   price: 120, icon: Scissors     },
-  { value: 'veterinario',  label: 'Veterinário',    price: 150, icon: Stethoscope  },
-  { value: 'consulta',     label: 'Consulta',       price: 120, icon: Stethoscope  },
-  { value: 'vacina',       label: 'Vacina',         price: 90,  icon: Syringe      },
-  { value: 'outro',        label: 'Outro',          price: 0,   icon: PawPrint     },
-]
-
 const asAgendaServices = (services = DEFAULT_PETSHOP_SERVICES) =>
   (services?.length ? services : DEFAULT_PETSHOP_SERVICES).map((service) => ({
     value: service.code || service.value,
@@ -40,7 +33,7 @@ const asAgendaServices = (services = DEFAULT_PETSHOP_SERVICES) =>
     price: Number(service.default_price ?? service.price ?? 0),
     duration: Number(service.default_duration_min ?? service.duration ?? 60),
     icon: serviceIcon(service),
-    group_type: service.group_type || getServiceGroupFromCode(service.code || service.value),
+    group_type: classifyAppointmentServiceGroup(service),
     active: service.active !== false,
   }))
 
@@ -56,31 +49,15 @@ const normalizeServiceType = (type = '') =>
 
 const compactText = (value = '') => normalizeServiceType(value).trim()
 const safeLower = (value = '') => compactText(value)
-const serviceText = (service = {}) =>
-  compactText(`${service.value || ''} ${service.label || ''} ${service.group_type || ''}`)
 
-const isVeterinaryService = (service) => /vet|consulta|vacina|clinica|medico|exame|cirurg/.test(serviceText(service))
-const isGroomingService = (service) => /banho|tosa|escov|higien|groom|perfume|hidrat/.test(serviceText(service))
+const getAppointmentServiceGroup = (appointment, services = SERVICES) =>
+  appointmentServiceGroup(
+    typeof appointment === 'object' ? appointment : { service_type: appointment },
+    services,
+  )
 
-const getAppointmentServiceGroup = (type = '', services = SERVICES) => {
-  const matched = (services || SERVICES).find((service) => service.value === type)
-  if (matched?.group_type) return matched.group_type
-  const service = normalizeServiceType(type)
-  if (/vet|consulta|vacina|clinica|medico/.test(service)) return 'veterinaria'
-  return 'banho_tosa'
-}
-
-const serviceFitsAgendaGroup = (service, group, services = SERVICES) => {
-  if (!service || service.active === false) return false
-  if (service.value === 'outro') return group === 'outro'
-  const declaredGroup = service.group_type || getAppointmentServiceGroup(service.value, services)
-  const vet = isVeterinaryService(service)
-  const grooming = isGroomingService(service)
-
-  if (group === 'veterinaria') return !grooming && (declaredGroup === 'veterinaria' || vet)
-  if (group === 'banho_tosa') return !vet && (declaredGroup === 'banho_tosa' || grooming)
-  return declaredGroup === group
-}
+const serviceOptionsForGroup = (group, services = SERVICES) =>
+  serviceOptionsForAppointmentGroup(services || SERVICES, group)
 
 const fmtAppointmentInterval = (appt) => {
   if (!appt?.scheduled_at) return '-'
@@ -99,9 +76,6 @@ const agendaCardTone = (status) => ({
   cancelado: 'border-red-400/25 bg-red-500/10 text-red-100 opacity-70',
   no_show: 'border-red-400/25 bg-red-500/10 text-red-100 opacity-70',
 }[status] || 'border-white/12 bg-white/7 text-text')
-
-const serviceOptionsForGroup = (group, services = SERVICES) =>
-  (services || SERVICES).filter((service) => serviceFitsAgendaGroup(service, group, services))
 
 const serviceLabelFallbackLegacy = (type = '') =>
   SERVICES.find((service) => service.value === type)?.label || String(type || 'Serviço')
@@ -203,7 +177,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
           <div class="val">${p.phone}</div>
           
           <div class="label">SERVIÇO</div>
-          <div class="val">${serviceLabel(appt.service_type).toUpperCase()}</div>
+          <div class="val">${serviceLabel(appt).toUpperCase()}</div>
 
           ${p.owner_address ? `
             <div class="label">ENDEREÇO (MOTODOG)</div>
@@ -247,7 +221,7 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
             <div className="grid grid-cols-2 gap-4">
               <div className="col-span-2">
                 <p className="text-[9px] text-muted uppercase font-black tracking-widest opacity-60">Pet & Serviço</p>
-                <p className="text-sm font-bold text-text underline decoration-primary/30 underline-offset-4">{p.pet_name} — {serviceLabel(appt.service_type)}</p>
+                <p className="text-sm font-bold text-text underline decoration-primary/30 underline-offset-4">{p.pet_name} — {serviceLabel(appt)}</p>
               </div>
               <div>
                 <p className="text-[9px] text-muted uppercase font-black tracking-widest opacity-60">Tutor</p>
@@ -282,12 +256,28 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
-  const defaultTime = appt?.time || `${String(now.getHours()+1).padStart(2,'0')}:00`
-  const serviceGroup = isEdit ? getAppointmentServiceGroup(appt?.service_type, services) : (appt?.serviceGroup || 'banho_tosa')
-  const serviceOptions = serviceOptionsForGroup(serviceGroup, services)
-  const fallbackService = SERVICES.find((service) => serviceFitsAgendaGroup(service, serviceGroup, SERVICES))
-  const defaultService = serviceOptions[0] || fallbackService || SERVICES.find((service) => service.value === 'outro') || SERVICES[0]
-  const serviceGroupLabel = serviceGroup === 'veterinaria' ? 'Atendimento veterinario' : 'Servico de banho/tosa'
+  const defaultTime = appt?.time || `${String(now.getHours() + 1).padStart(2, '0')}:00`
+  const serviceGroup = isEdit ? getAppointmentServiceGroup(appt, services) : (appt?.serviceGroup || 'banho_tosa')
+  const groupOptions = serviceOptionsForGroup(serviceGroup, services)
+  const existingCodes = isEdit ? appointmentServiceCodes(appt) : []
+  const existingSnapshots = Array.isArray(appt?.service_items) ? appt.service_items : []
+  const legacyOptions = existingCodes.map((code) => {
+    const catalogService = (services || SERVICES).find((service) => service.value === code)
+    if (catalogService) return catalogService
+    const snapshot = existingSnapshots.find((item) => item?.code === code) || {}
+    return {
+      value: code,
+      label: snapshot.name || serviceLabelFallback(code, services),
+      price: Number(snapshot.unit_price ?? snapshot.price ?? 0),
+      duration: Number(snapshot.duration_min || 60),
+      group_type: snapshot.group_type || serviceGroup,
+      active: true,
+      icon: PawPrint,
+    }
+  })
+  const serviceOptions = [...new Map([...groupOptions, ...legacyOptions].map((service) => [service.value, service])).values()]
+  const initialServiceCodes = existingCodes.length > 0 ? existingCodes : []
+  const serviceGroupLabel = serviceGroup === 'veterinaria' ? 'Servicos veterinarios' : 'Servicos de banho/tosa'
   const staffOptions = (staff || []).filter((person) => {
     const staffType = person?.staff_type || 'funcionario'
     if (serviceGroup === 'veterinaria') return ['veterinaria', 'gerente', 'funcionario'].includes(staffType)
@@ -295,23 +285,18 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     return ['gerente', 'funcionario'].includes(staffType)
   })
 
-  const [form, setForm] = useState(isEdit ? {
-    pet_id:       appt.pets?.id || '',
-    pet_search:   '',
-    service_type: appt.service_type,
-    date:         appt.scheduled_at?.slice(0,10) || defaultDate,
-    time:         appt.scheduled_at ? fmtTime(appt.scheduled_at).replace('h',':') : defaultTime,
-    duration_min: appt.duration_min || 60,
-    price:        appt.price || 0,
-    status:       appt.status || 'agendado',
-    notes:        appt.notes || '',
-    groomer_id:    appt.groomer_id || '',
-  } : {
-    pet_id: '', pet_search: '', service_type: defaultService.value, date: defaultDate, time: defaultTime,
-    duration_min: defaultService.duration || 60, price: defaultService.price, status: 'agendado', notes: '', groomer_id: '',
+  const [form, setForm] = useState({
+    pet_id: isEdit ? appt.pets?.id || appt.client_id || '' : '',
+    pet_search: '',
+    service_codes: initialServiceCodes,
+    date: isEdit ? appt.scheduled_at?.slice(0, 10) || defaultDate : defaultDate,
+    time: isEdit && appt.scheduled_at ? fmtTime(appt.scheduled_at).replace('h', ':') : defaultTime,
+    status: isEdit ? appt.status || 'agendado' : 'agendado',
+    notes: isEdit ? appt.notes || '' : '',
+    groomer_id: isEdit ? appt.groomer_id || '' : '',
   })
   const [saving, setSaving] = useState(false)
-  const [err, setErr]       = useState('')
+  const [err, setErr] = useState('')
   const [clientPickerOpen, setClientPickerOpen] = useState(() => !form.pet_id)
   const [selectedClient, setSelectedClient] = useState(() => appt?.pets || null)
   const [remotePets, setRemotePets] = useState([])
@@ -320,9 +305,13 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   const clientSearchRef = useRef(null)
   const searchRequestRef = useRef(0)
 
-  const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+  const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const petSearch = form.pet_search || ''
   const deferredPetSearch = useDeferredValue(petSearch)
+  const serviceTotals = useMemo(
+    () => calculateAppointmentServiceTotals(form.service_codes, serviceOptions),
+    [form.service_codes, serviceOptions],
+  )
   const searchablePets = useMemo(() => (pets || []).map((pet) => ({
     pet,
     searchText: safeLower([
@@ -335,9 +324,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     ].filter(Boolean).join(' ')),
   })), [pets])
   const localFilteredPets = useMemo(() => {
-    const q = safeLower(deferredPetSearch)
+    const query = safeLower(deferredPetSearch)
     return searchablePets
-      .filter(({ searchText }) => !q || searchText.includes(q))
+      .filter(({ searchText }) => !query || searchText.includes(query))
       .map(({ pet }) => pet)
   }, [searchablePets, deferredPetSearch])
   const filteredPets = useMemo(() => {
@@ -399,40 +388,56 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     setClientPickerOpen(false)
   }
 
-  const handleServiceChange = (svc) => {
-    const s = (services || SERVICES).find(x => x.value === svc)
-    set('service_type', svc)
-    if (!isEdit && s) {
-      set('price', s.price)
-      set('duration_min', s.duration || 60)
-    }
+  const toggleService = (serviceCode) => {
+    setForm((current) => {
+      const selected = current.service_codes.includes(serviceCode)
+      return {
+        ...current,
+        service_codes: selected
+          ? current.service_codes.filter((code) => code !== serviceCode)
+          : [...current.service_codes, serviceCode],
+      }
+    })
+    setErr('')
   }
 
   async function handleSubmit() {
-    if (!form.pet_id)       return setErr('Selecione um cliente/pet')
-    if (!form.date)         return setErr('Informe a data')
-    if (!form.time)         return setErr('Informe o horário')
-    setSaving(true); setErr('')
+    if (!form.pet_id) return setErr('Selecione um cliente/pet')
+    if (!form.service_codes.length) return setErr('Selecione pelo menos um servico')
+    if (!form.date) return setErr('Informe a data')
+    if (!form.time) return setErr('Informe o horario')
+    if (!serviceTotals.services.length) return setErr('Os servicos selecionados nao estao mais disponiveis')
+
+    setSaving(true)
+    setErr('')
     try {
       const scheduled_at = new Date(`${form.date}T${form.time}:00`).toISOString()
       const payload = {
-        pet_id: form.pet_id, service_type: form.service_type,
-        scheduled_at, duration_min: Number(form.duration_min),
-        price: Number(form.price), status: form.status, notes: form.notes,
+        pet_id: form.pet_id,
+        service_type: form.service_codes[0],
+        services: form.service_codes.map((code) => ({ code })),
+        service_group: serviceGroup,
+        scheduled_at,
+        duration_min: serviceTotals.duration,
+        price: serviceTotals.price,
+        status: form.status,
+        notes: form.notes,
         groomer_id: form.groomer_id || null,
+        source: 'manual',
       }
-      isEdit ? await onUpdate(appt.id, payload) : await onCreate(payload)
+      if (isEdit) await onUpdate(appt.id, payload)
+      else await onCreate(payload)
       onClose()
-    } catch (e) {
-      setErr(e.message)
+    } catch (error) {
+      setErr(error.message)
     } finally {
       setSaving(false)
     }
   }
 
   return createPortal(
-    <div className="modal-overlay theme-petshop-modal" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box max-w-lg">
+    <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal-box max-w-2xl">
         <div className="modal-header">
           <h2 className="font-display font-bold text-xl text-text">
             {isEdit ? 'Editar Agendamento' : 'Novo Agendamento'}
@@ -442,7 +447,6 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
 
         <div className="modal-body">
           <div className="space-y-6">
-            {/* Pet com Busca */}
             <div ref={clientPickerRef} className="bg-card border border-[var(--border)] rounded-2xl p-5 space-y-4">
               <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar cliente</label>
               {!clientPickerOpen && selectedPet ? (
@@ -461,7 +465,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                 </button>
               ) : !clientPickerOpen ? (
                 <button type="button" onClick={openClientPicker} className="btn btn-secondary w-full justify-center">
-                  <Search size={14} /> Buscar cliente ou pet
+                  <Search size={14}/> Buscar cliente ou pet
                 </button>
               ) : (
                 <div className="space-y-3">
@@ -478,32 +482,32 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                     />
                   </div>
                   <div role="listbox" aria-label="Resultados de clientes" className="max-h-64 rounded-xl border border-[var(--border2)] bg-surface/60 overflow-y-auto">
-                {filteredPets.map((p) => {
-                  const active = form.pet_id === p.id
-                  return (
-                    <button
-                      type="button"
-                      role="option"
-                      aria-selected={active}
-                      key={p.id}
-                      onClick={() => selectClient(p)}
-                      className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 border-b border-[var(--border2)] last:border-b-0 transition-colors ${
-                        active ? 'bg-amber-500/15 text-text' : 'hover:bg-white/5 text-muted'
-                      }`}
-                    >
-                      <span className="min-w-0">
-                        <span className="block text-xs font-bold text-text truncate">{p.owner_name || 'Cliente sem nome'}</span>
-                        <span className="block text-[11px] truncate">
-                          {[p.pet_name, p.breed || p.species, p.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
-                        </span>
-                      </span>
-                      {active && <Check size={14} className="text-amber-400 flex-shrink-0"/>}
-                    </button>
-                  )
-                })}
-                {filteredPets.length === 0 && (
-                  <p className="px-3 py-3 text-xs text-muted">Nenhum cliente encontrado com essa busca.</p>
-                )}
+                    {filteredPets.map((pet) => {
+                      const active = form.pet_id === pet.id
+                      return (
+                        <button
+                          type="button"
+                          role="option"
+                          aria-selected={active}
+                          key={pet.id}
+                          onClick={() => selectClient(pet)}
+                          className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 border-b border-[var(--border2)] last:border-b-0 transition-colors ${
+                            active ? 'bg-amber-500/15 text-text' : 'hover:bg-white/5 text-muted'
+                          }`}
+                        >
+                          <span className="min-w-0">
+                            <span className="block text-xs font-bold text-text truncate">{pet.owner_name || 'Cliente sem nome'}</span>
+                            <span className="block text-[11px] truncate">
+                              {[pet.pet_name, pet.breed || pet.species, pet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
+                            </span>
+                          </span>
+                          {active && <Check size={14} className="text-amber-400 flex-shrink-0"/>}
+                        </button>
+                      )
+                    })}
+                    {filteredPets.length === 0 && (
+                      <p className="px-3 py-3 text-xs text-muted">Nenhum cliente encontrado com essa busca.</p>
+                    )}
                   </div>
                   <p className="text-[11px] text-muted">
                     {searchingClients
@@ -516,72 +520,92 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               )}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-              {/* Serviço */}
+            <div>
+              <label className="inp-label">{serviceGroupLabel}</label>
+              {serviceOptions.length === 0 ? (
+                <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                  Nenhum servico ativo e corretamente classificado nesta aba.
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                  {serviceOptions.map((service) => {
+                    const selected = form.service_codes.includes(service.value)
+                    const Icon = service.icon || PawPrint
+                    return (
+                      <button
+                        key={service.value}
+                        type="button"
+                        onClick={() => toggleService(service.value)}
+                        className={`rounded-xl border px-4 py-3 text-left flex items-start gap-3 transition-colors ${
+                          selected
+                            ? 'border-amber-400/45 bg-amber-500/12 text-text'
+                            : 'border-[var(--border2)] bg-white/5 text-muted hover:text-text hover:bg-white/8'
+                        }`}
+                      >
+                        <span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${selected ? 'border-amber-400 bg-amber-400 text-gray-950' : 'border-[var(--border)]'}`}>
+                          {selected && <Check size={13}/>}
+                        </span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2 text-sm font-bold"><Icon size={14}/>{service.label}</span>
+                          <span className="mt-1 block text-xs text-muted">
+                            {fmtCurrency(service.price)} · {service.duration || 60} min
+                          </span>
+                        </span>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              <p className="text-[11px] text-muted mt-2">Selecione um ou mais servicos da mesma area. O valor e o tempo sao somados automaticamente.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="inp-label">{serviceGroupLabel}</label>
-                <select aria-label="Servico" className="inp" value={form.service_type} onChange={e => handleServiceChange(e.target.value)}>
-                  {isEdit && form.service_type && !serviceOptions.some(s => s.value === form.service_type) && (
-                    <option value={form.service_type}>{serviceLabelFallback(form.service_type, services)}</option>
-                  )}
-                  {serviceOptions.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+                <label className="inp-label">Status da visita</label>
+                <select aria-label="Status do agendamento" className="inp" value={form.status} onChange={(event) => set('status', event.target.value)}>
+                  {STATUSES.map((status) => <option key={status.value} value={status.value}>{status.label}</option>)}
                 </select>
               </div>
-
-              {/* Status */}
               <div>
-                <label className="inp-label">Status da Visita</label>
-                <select aria-label="Status do agendamento" className="inp" value={form.status} onChange={e => set('status', e.target.value)}>
-                  {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
-                </select>
-              </div>
-
-              <div className="md:col-span-2">
                 <label className="inp-label">Responsavel pelo servico</label>
-                <select aria-label="Responsavel pelo atendimento" className="inp" value={form.groomer_id} onChange={e => set('groomer_id', e.target.value)}>
+                <select aria-label="Responsavel pelo atendimento" className="inp" value={form.groomer_id} onChange={(event) => set('groomer_id', event.target.value)}>
                   <option value="">Sem responsavel</option>
                   {staffOptions.map((person) => (
                     <option key={person.id} value={person.id}>{person.full_name || person.email}</option>
                   ))}
                 </select>
-                <p className="text-[11px] text-muted mt-1">
-                  Pode ficar vazio no agendamento. O dono define o profissional depois, antes do fechamento de comissao.
-                </p>
               </div>
 
-              {/* Data / Hora */}
               <div className="grid grid-cols-2 gap-3 md:col-span-2 bg-surface/80 border border-[var(--border)] rounded-2xl p-5">
                 <div>
-                  <label className="inp-label">Data Reservada</label>
-                  <input aria-label="Data do agendamento" className="inp" type="date" value={form.date} onChange={e => set('date', e.target.value)} />
+                  <label className="inp-label">Data reservada</label>
+                  <input aria-label="Data do agendamento" className="inp" type="date" value={form.date} onChange={(event) => set('date', event.target.value)}/>
                 </div>
                 <div>
-                  <label className="inp-label">Início</label>
-                  <input aria-label="Horario do agendamento" className="inp" type="time" value={form.time} onChange={e => set('time', e.target.value)} />
+                  <label className="inp-label">Inicio</label>
+                  <input aria-label="Horario do agendamento" className="inp" type="time" value={form.time} onChange={(event) => set('time', event.target.value)}/>
                 </div>
               </div>
 
-              {/* Duração / Valor */}
-              <div>
-                <label className="inp-label">Tempo Est. (min)</label>
-                <input aria-label="Duracao em minutos" className="inp" type="number" min="15" step="15"
-                  value={form.duration_min} onChange={e => set('duration_min', e.target.value)} />
+              <div className="rounded-xl border border-[var(--border)] bg-white/5 px-4 py-3">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-muted">Tempo total</span>
+                <strong className="mt-1 block text-lg text-text">{serviceTotals.duration || 0} min</strong>
               </div>
-              <div>
-                <label className="inp-label">Valor (R$)</label>
-                <div className="relative">
-                  <span className="absolute left-3.5 top-1/2 -translate-y-1/2 text-xs text-muted font-bold">R$</span>
-                  <input aria-label="Valor do atendimento" className="inp pl-9" type="number" min="0" step="5"
-                    value={form.price} onChange={e => set('price', e.target.value)} />
-                </div>
+              <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
+                <span className="block text-[11px] font-bold uppercase tracking-wider text-muted">Valor total</span>
+                <strong className="mt-1 block text-lg text-emerald-400">{fmtCurrency(serviceTotals.price)}</strong>
               </div>
             </div>
 
-            {/* Observações */}
             <div>
-              <label className="inp-label">Instruções para o Profissional</label>
-              <textarea aria-label="Observacoes do agendamento" className="inp h-24 resize-none p-4" placeholder="Ex: Tem alergia a tal produto, ou é agressivo..."
-                value={form.notes} onChange={e => set('notes', e.target.value)} />
+              <label className="inp-label">Instrucoes para o profissional</label>
+              <textarea
+                aria-label="Observacoes do agendamento"
+                className="inp h-24 resize-none p-4"
+                placeholder="Ex: alergias, comportamento ou observacoes importantes..."
+                value={form.notes}
+                onChange={(event) => set('notes', event.target.value)}
+              />
             </div>
 
             {err && (
@@ -589,18 +613,18 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
                 <AlertCircle size={14}/> {err}
               </p>
             )}
-            
+
             <div className="flex gap-3 pt-2">
               <button onClick={onClose} className="btn btn-secondary flex-1 justify-center">Descartar</button>
-              <button onClick={handleSubmit} disabled={saving} className="btn btn-primary flex-1 justify-center shadow-lg">
-                {saving ? 'Confirmando...' : isEdit ? '✓ Salvar Alterações' : '+ Confirmar Reserva'}
+              <button onClick={handleSubmit} disabled={saving || serviceOptions.length === 0} className="btn btn-primary flex-1 justify-center shadow-lg">
+                {saving ? 'Confirmando...' : isEdit ? 'Salvar alteracoes' : 'Confirmar reserva'}
               </button>
             </div>
           </div>
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   )
 }
 
@@ -632,9 +656,10 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
           <p className="text-amber-400 font-bold leading-none">{fmtInterval(appt.scheduled_at)}</p>
           <p className="mt-1 opacity-70 flex items-center gap-1">
              {(() => {
-               const s = (services || SERVICES).find(x => x.value === appt.service_type);
-               const Icon = s?.icon || PawPrint;
-               return <><Icon size={10}/> {s?.label || 'Serviço'}</>
+               const firstCode = appointmentServiceCodes(appt)[0]
+               const selectedService = (services || SERVICES).find((item) => item.value === firstCode)
+               const Icon = selectedService?.icon || PawPrint
+               return <><Icon size={10}/> {serviceLabel(appt)}</>
              })()}
           </p>
           <p className={`mt-1 ${assigned ? 'text-muted' : 'text-amber-400'}`}>
@@ -810,7 +835,7 @@ function AgendaTimelineView({
                                 <span className={`badge ${sb.cls} shrink-0 text-[9px]`}>{sb.label}</span>
                               </div>
                               <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted">
-                                <span className="truncate">{serviceLabel(appt.service_type)}</span>
+                                <span className="truncate">{serviceLabel(appt)}</span>
                                 <span className="font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
                               </div>
                               <p className={`mt-1 truncate text-[10px] ${assigned ? 'text-muted' : 'text-amber-300'}`}>
@@ -849,7 +874,10 @@ export default function AgendaPage() {
   const [staff, setStaff] = useState([])
 
   const staffById = useMemo(() => new Map((staff || []).map((person) => [person.id, person])), [staff])
-  const serviceLabel = (type) => serviceLabelFallback(type, agendaServices) || legacyServiceLabel(type)
+  const serviceLabel = (value) => {
+    if (value && typeof value === 'object') return appointmentServiceLabel(value, agendaServices)
+    return serviceLabelFallback(value, agendaServices) || legacyServiceLabel(value)
+  }
   const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate])
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart])
@@ -874,12 +902,12 @@ export default function AgendaPage() {
   }, [selectedDate, filterStatus, view, weekStart, weekEnd, load])
 
   const tabbedAppointments = appointments.filter((appointment) =>
-    getAppointmentServiceGroup(appointment.service_type, agendaServices) === activeAgendaTab
+    getAppointmentServiceGroup(appointment, agendaServices) === activeAgendaTab
   )
   const stats = buildStatsForDate(tabbedAppointments, selectedDate)
   const tabCounts = AGENDA_TABS.reduce((acc, tab) => ({
     ...acc,
-    [tab.id]: appointments.filter((appointment) => getAppointmentServiceGroup(appointment.service_type, agendaServices) === tab.id).length,
+    [tab.id]: appointments.filter((appointment) => getAppointmentServiceGroup(appointment, agendaServices) === tab.id).length,
   }), {})
 
   const displayed = tabbedAppointments.filter(a => {
@@ -888,7 +916,7 @@ export default function AgendaPage() {
     return (
       a.pets?.pet_name?.toLowerCase().includes(q) ||
       a.pets?.owner_name?.toLowerCase().includes(q) ||
-      a.service_type?.toLowerCase().includes(q) ||
+      serviceLabel(a).toLowerCase().includes(q) ||
       staffById.get(a.groomer_id)?.full_name?.toLowerCase().includes(q)
     )
   })
@@ -1074,7 +1102,7 @@ export default function AgendaPage() {
                         <p className="text-sm">{a.pets?.owner_name || '—'}</p>
                         <p className="text-xs text-muted">{a.pets?.phone}</p>
                       </td>
-                      <td className="text-xs">{serviceLabel(a.service_type)}</td>
+                      <td className="text-xs">{serviceLabel(a)}</td>
                       <td className="text-xs">
                         {staffById.get(a.groomer_id)?.full_name || (
                           <span className={a.status === 'concluido' ? 'text-amber-400 font-semibold' : 'text-muted'}>Sem responsavel</span>

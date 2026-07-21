@@ -57,7 +57,7 @@ function assertActiveTenant(tenantId, action = 'salvar') {
   if (!tenantId) throw new Error(`Selecione uma empresa ativa antes de ${action}.`)
 }
 
-function salesSelect({ includeFulfillment = true, includeProfiles = true, includeClients = true } = {}) {
+function salesSelect({ includeFulfillment = true, includeDeliveryFee = true, includeProfiles = true, includeClients = true } = {}) {
   const fields = [
     'id',
     'customer_name',
@@ -65,6 +65,7 @@ function salesSelect({ includeFulfillment = true, includeProfiles = true, includ
     'payment_method',
     'subtotal',
     'discount',
+    includeDeliveryFee ? 'delivery_fee' : null,
     'total_price',
     'status',
     'notes',
@@ -79,13 +80,14 @@ function salesSelect({ includeFulfillment = true, includeProfiles = true, includ
   return fields.join(', ')
 }
 
-function insertSaleSelect({ includeClient = true, includeFulfillment = true } = {}) {
+function insertSaleSelect({ includeClient = true, includeFulfillment = true, includeDeliveryFee = true } = {}) {
   const fields = [
     'id',
     includeClient ? 'client_id' : null,
     'customer_name',
     'customer_phone',
     'total_price',
+    includeDeliveryFee ? 'delivery_fee' : null,
     'payment_method',
     'source',
     includeFulfillment ? 'fulfillment_type' : null,
@@ -304,34 +306,29 @@ export function useSales() {
           return query
         }
 
-        let scopedResponse = await buildQuery(salesSelect({
+        const selectOptions = {
           includeFulfillment: true,
+          includeDeliveryFee: true,
           includeProfiles: true,
           includeClients: true,
-        }))
+        }
+        let scopedResponse = await buildQuery(salesSelect(selectOptions))
 
+        if (scopedResponse.error && hasColumnError(scopedResponse.error, 'delivery_fee')) {
+          selectOptions.includeDeliveryFee = false
+          scopedResponse = await buildQuery(salesSelect(selectOptions))
+        }
         if (scopedResponse.error && hasColumnError(scopedResponse.error, 'fulfillment_type')) {
-          scopedResponse = await buildQuery(salesSelect({
-            includeFulfillment: false,
-            includeProfiles: true,
-            includeClients: true,
-          }))
+          selectOptions.includeFulfillment = false
+          scopedResponse = await buildQuery(salesSelect(selectOptions))
         }
-
         if (scopedResponse.error && hasColumnError(scopedResponse.error, 'client_id')) {
-          scopedResponse = await buildQuery(salesSelect({
-            includeFulfillment: false,
-            includeProfiles: true,
-            includeClients: false,
-          }))
+          selectOptions.includeClients = false
+          scopedResponse = await buildQuery(salesSelect(selectOptions))
         }
-
         if (scopedResponse.error && hasColumnError(scopedResponse.error, 'profile_id')) {
-          scopedResponse = await buildQuery(salesSelect({
-            includeFulfillment: false,
-            includeProfiles: false,
-            includeClients: false,
-          }))
+          selectOptions.includeProfiles = false
+          scopedResponse = await buildQuery(salesSelect(selectOptions))
         }
 
         return scopedResponse

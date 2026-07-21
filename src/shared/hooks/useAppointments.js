@@ -5,7 +5,7 @@ import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
 const APPOINTMENT_BASE_FIELDS = `
-  id, pet_id, client_id, service_type, scheduled_at, duration_min, price, status, notes, source, created_at,
+  id, pet_id, client_id, service_type, service_group, service_items, scheduled_at, duration_min, price, status, notes, source, created_at,
   employee_id, groomer_id, live_status, checkin_at, ready_at, subscription_id, subscription_benefit_used
 `
 const APPOINTMENT_SELECT = `${APPOINTMENT_BASE_FIELDS},
@@ -23,20 +23,25 @@ function isClientRelationError(error) {
 }
 
 function mapAppointmentRow(appointment) {
-  if (!appointment?.clients) return appointment
-  return {
+  if (!appointment) return appointment
+  const normalized = {
     ...appointment,
+    service_items: Array.isArray(appointment.service_items) ? appointment.service_items : [],
+  }
+  if (!normalized.clients) return normalized
+  return {
+    ...normalized,
     pets: {
-      id: appointment.clients.id,
-      owner_name: appointment.clients.name,
-      phone: appointment.clients.phone,
-      email: appointment.clients.email,
-      owner_address: appointment.clients.address,
-      owner_neighborhood: appointment.clients.neighborhood,
-      owner_city: appointment.clients.city,
-      pet_name: appointment.clients.details?.pet_name || '',
-      species: appointment.clients.details?.species || '',
-      breed: appointment.clients.details?.breed || '',
+      id: normalized.clients.id,
+      owner_name: normalized.clients.name,
+      phone: normalized.clients.phone,
+      email: normalized.clients.email,
+      owner_address: normalized.clients.address,
+      owner_neighborhood: normalized.clients.neighborhood,
+      owner_city: normalized.clients.city,
+      pet_name: normalized.clients.details?.pet_name || '',
+      species: normalized.clients.details?.species || '',
+      breed: normalized.clients.details?.breed || '',
     },
     clients: undefined,
   }
@@ -352,6 +357,7 @@ export function useAppointments() {
         ...apiPayload,
         tenant_id: activeTenantId,
         module_id: activeModuleId,
+        source: payload.source || 'manual',
         idempotency_key: payload.idempotency_key || crypto.randomUUID(),
       },
     })
@@ -370,18 +376,45 @@ export function useAppointments() {
       apiPayload.pet_id = await ensurePetRecordForClient(activeModuleId, activeTenantId, apiPayload.client_id)
     }
 
-    const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-      let query = supabase
-        .from('appointments')
-        .update(apiPayload)
-        .eq('id', id)
-        .eq('module_id', activeModuleId)
+    const requiresTransaction = Boolean(
+      apiPayload.services
+      || apiPayload.service_type
+      || apiPayload.service_group
+      || apiPayload.scheduled_at
+      || apiPayload.client_id
+      || apiPayload.pet_id
+    )
 
-      query = applyTenantFilter(query, activeTenantId, includeTenant)
-      return query
-    })
+    if (requiresTransaction) {
+      const response = await supabase.rpc('update_petshop_appointment_transaction', {
+        p_appointment_id: id,
+        p_payload: {
+          ...apiPayload,
+          tenant_id: activeTenantId,
+          module_id: activeModuleId,
+          source: payload.source || 'manual',
+        },
+      })
+      if (response.error) {
+        const message = String(response.error.message || '')
+        if (message.includes('update_petshop_appointment_transaction')) {
+          throw new Error('Aplique a migracao de infraestrutura da agenda antes de editar servicos.')
+        }
+        throw response.error
+      }
+    } else {
+      const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+        let query = supabase
+          .from('appointments')
+          .update(apiPayload)
+          .eq('id', id)
+          .eq('module_id', activeModuleId)
 
-    if (response.error) throw response.error
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query
+      })
+      if (response.error) throw response.error
+    }
 
     const updated = await fetchAppointmentById(id)
     setAppointments((prev) => prev.map((appt) => (appt.id === id ? updated : appt)))
