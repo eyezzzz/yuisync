@@ -19,8 +19,10 @@ import {
 import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
 import {
   PETBOT_AGENT_TOOLS,
+  buildServiceAvailability,
   isExplicitPetbotConfirmation,
   preparePetshopOrderDraft,
+  resolvePetTransportSelection,
   runPetbotAgent,
 } from './petbotAgent.js'
 
@@ -259,7 +261,7 @@ async function hasBusyAppointmentConflict(supabase, session, scheduledAt, durati
     .eq('module_id', session.module_id)
     .gte('scheduled_at', `${dateIso}T00:00:00-03:00`)
     .lte('scheduled_at', `${dateIso}T23:59:59-03:00`)
-    .limit(100)
+    .limit(1000)
 
   if (error) throw new Error(`Falha ao validar conflito de agenda: ${error.message}`)
 
@@ -665,7 +667,7 @@ async function loadUpsellProducts(supabase, moduleId, tenantId, selectColumns) {
 
 function buildAppointmentsContext(appointments) {
   if (!appointments?.length) {
-    return 'Nenhum horario cadastrado na agenda para os proximos dias. Nao prometa horario; pergunte se deseja falar com atendente.'
+    return 'Nenhum agendamento ocupado foi encontrado nos proximos dias. Isso nao significa agenda fechada: consulte check_petshop_availability antes de responder sobre horarios.'
   }
 
   const lines = appointments
@@ -690,10 +692,22 @@ function buildAppointmentsContext(appointments) {
     })
 
   if (!lines.some((line) => line.includes('DISPONIVEL'))) {
-    lines.push('Nao ha horario explicitamente disponivel no contexto. Ofereca consultar outros horarios com um atendente ou, se for caso veterinario, com a veterinaria.')
+    lines.push('A agenda acima registra principalmente compromissos ocupados. Calcule os horarios livres com check_petshop_availability; nao conclua indisponibilidade apenas pela ausencia de slots DISPONIVEL.')
   }
 
   return lines.join('\n')
+}
+
+function buildServicesContext(services) {
+  if (!services?.length) {
+    return 'Nenhum servico ativo foi carregado do cadastro. Nao invente servicos, precos ou duracoes.'
+  }
+
+  return services
+    .filter((service) => service.active !== false)
+    .slice(0, 40)
+    .map((service) => `${service.code} | ${service.name} | grupo ${service.group_type} | R$ ${Number(service.default_price || 0).toFixed(2)} | ${Number(service.default_duration_min || 60)} min`)
+    .join('\n')
 }
 
 function buildCustomerContext(customer) {
@@ -731,6 +745,7 @@ function buildSystemPrompt({
   petTransportOptions,
   customerContext,
   stockContext,
+  servicesContext,
   appointmentsContext,
   examplesContext,
   botPrompt,
@@ -741,6 +756,11 @@ function buildSystemPrompt({
     storeNeighborhood,
     storeCity,
   ].filter(Boolean).join(' - ') || 'Nao informado'
+  const localNow = new Date().toLocaleString('pt-BR', {
+    timeZone: 'America/Sao_Paulo',
+    dateStyle: 'short',
+    timeStyle: 'short',
+  })
 
   return [
     `Voce e o atendente virtual oficial de ${storeName || 'esta loja'}.`,
@@ -748,7 +768,9 @@ function buildSystemPrompt({
     'Use somente os dados confirmados no contexto operacional abaixo.',
     'Nunca invente preco, estoque, horario, disponibilidade, endereco, politica comercial ou procedimento veterinario.',
     'Se o cliente pedir algo fora do contexto, peca os dados necessarios ou encaminhe para um atendente; em caso veterinario sensivel, para a veterinaria.',
-    'Para agendamentos, nao confirme disponibilidade sem haver horario confirmado no contexto de agenda.',
+    'Para agendamentos, use check_petshop_availability no turno atual antes de afirmar que um horario esta livre ou ocupado. A ausencia de slots livres cadastrados nao significa indisponibilidade.',
+    'Nao diga "vou consultar", "um momento" ou equivalente. Chame a ferramenta silenciosamente e responda somente com o resultado real.',
+    'Para produtos, use search_petshop_products antes de afirmar estoque ou preco quando o item nao estiver claramente presente no contexto atual.',
     'Nunca aplique desconto. Se pedirem desconto, responda gentilmente: "Infelizmente nao conseguimos aplicar desconto nesse pedido."',
     'Mantenha respostas curtas e naturais para conversa de WhatsApp.',
     'Você decide a próxima pergunta e a redação da resposta. O código apenas fornece dados, executa ferramentas e bloqueia operações inválidas.',
@@ -781,6 +803,7 @@ function buildSystemPrompt({
     customInstructions || 'Nenhuma instrucao customizada cadastrada.',
     '',
     'Contexto operacional do banco de dados:',
+    `Data e hora atual em Sao Paulo: ${localNow}`,
     `Loja: ${storeName || 'Nao informado'}`,
     `Telefone da loja: ${storePhone || 'Nao informado'}`,
     `Endereco: ${storeLocation}`,
@@ -792,6 +815,9 @@ function buildSystemPrompt({
     '',
     'Estoque relevante:',
     stockContext || 'Nenhum produto confirmado para esta busca.',
+    '',
+    'Servicos ativos cadastrados:',
+    servicesContext || 'Nenhum servico ativo carregado.',
     '',
     'Agenda dos proximos dias:',
     appointmentsContext || 'Agenda indisponivel no momento.',
@@ -876,6 +902,55 @@ function canUsePetbotAgent(settings = {}, session = {}) {
   return canPetbotCreateOrders(settings, session)
 }
 
+function isPetshopServicesSchemaError(error) {
+  const message = String(error?.message || '').toLowerCase()
+  return message.includes('petshop_services') && (
+    message.includes('does not exist')
+    || message.includes('schema cache')
+    || message.includes('relation')
+    || message.includes('column')
+  )
+}
+
+async function loadPetshopServices(supabase, moduleId, tenantId) {
+  let query = supabase
+    .from('petshop_services')
+    .select('id,code,name,group_type,default_price,default_duration_min,active,sort_order')
+    .eq('module_id', moduleId)
+    .eq('active', true)
+    .order('sort_order')
+    .order('name')
+
+  if (tenantId) query = query.eq('tenant_id', tenantId)
+
+  const { data, error } = await query
+  if (error) {
+    if (isPetshopServicesSchemaError(error)) return []
+    if (tenantId && isMissingTenantColumnError(error)) {
+      throw new HttpError(500, 'Tenant isolation is not enabled in petshop_services table.')
+    }
+    throw new HttpError(500, 'Unable to load petshop services.')
+  }
+
+  return (data || []).filter((service) => service.active !== false)
+}
+
+async function loadProductsByIds(supabase, moduleId, tenantId, productIds = []) {
+  const ids = [...new Set((productIds || []).map(cleanText).filter(isUuid))]
+  if (!ids.length) return []
+
+  let query = supabase
+    .from('products')
+    .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active')
+    .eq('module_id', moduleId)
+    .in('id', ids)
+
+  if (tenantId) query = query.eq('tenant_id', tenantId)
+  const { data, error } = await query
+  if (error) throw new HttpError(500, 'Unable to refresh product stock.')
+  return data || []
+}
+
 async function loadProducts(supabase, moduleId, tenantId, message) {
   const selectColumns = 'id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active'
   const loadCatalog = () => cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
@@ -923,55 +998,59 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
   return (catalog || []).slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
+async function queryAppointments(supabase, moduleId, tenantId) {
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+  const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+  const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price, duration_min'
+  let query = supabase
+    .from('appointments')
+    .select(selectColumns)
+    .eq('module_id', moduleId)
+    .gte('scheduled_at', `${today}T00:00:00-03:00`)
+    .lte('scheduled_at', `${end}T23:59:59-03:00`)
+    .order('scheduled_at')
+    .limit(1000)
+
+  if (tenantId) query = query.eq('tenant_id', tenantId)
+  const { data, error } = await query
+  if (error) {
+    if (tenantId && isMissingTenantColumnError(error)) {
+      throw new HttpError(500, 'Tenant isolation is not enabled in appointments table.')
+    }
+    throw new HttpError(500, 'Unable to load appointment context.')
+  }
+
+  let byServiceDate = []
+  let serviceDateQuery = supabase
+    .from('appointments')
+    .select(selectColumns)
+    .eq('module_id', moduleId)
+    .gte('service_date', today)
+    .lte('service_date', end)
+    .order('service_date')
+    .order('start_time')
+    .limit(100)
+
+  if (tenantId) serviceDateQuery = serviceDateQuery.eq('tenant_id', tenantId)
+  const serviceDateResult = await serviceDateQuery
+  if (!serviceDateResult.error) byServiceDate = serviceDateResult.data || []
+
+  return normalizeAppointmentRows([...(data || []), ...byServiceDate])
+}
+
 async function loadAppointments(supabase, moduleId, tenantId) {
-  return cachedLoad(appointmentsCache, scopeCacheKey(moduleId, tenantId), APPOINTMENTS_CACHE_MS, async () => {
-    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-    const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-    const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price, duration_min'
-    let query = supabase
-      .from('appointments')
-      .select(selectColumns)
-      .eq('module_id', moduleId)
-      .gte('scheduled_at', `${today}T00:00:00-03:00`)
-      .lte('scheduled_at', `${end}T23:59:59-03:00`)
-      .order('scheduled_at')
-      .limit(40)
+  return cachedLoad(
+    appointmentsCache,
+    scopeCacheKey(moduleId, tenantId),
+    APPOINTMENTS_CACHE_MS,
+    () => queryAppointments(supabase, moduleId, tenantId),
+  )
+}
 
-    if (tenantId) {
-      query = query.eq('tenant_id', tenantId)
-    }
-
-    const { data, error } = await query
-
-    if (error) {
-      if (tenantId && isMissingTenantColumnError(error)) {
-        throw new HttpError(500, 'Tenant isolation is not enabled in appointments table.')
-      }
-      throw new HttpError(500, 'Unable to load appointment context.')
-    }
-
-    let byServiceDate = []
-    let serviceDateQuery = supabase
-      .from('appointments')
-      .select(selectColumns)
-      .eq('module_id', moduleId)
-      .gte('service_date', today)
-      .lte('service_date', end)
-      .order('service_date')
-      .order('start_time')
-      .limit(40)
-
-    if (tenantId) {
-      serviceDateQuery = serviceDateQuery.eq('tenant_id', tenantId)
-    }
-
-    const serviceDateResult = await serviceDateQuery
-    if (!serviceDateResult.error) {
-      byServiceDate = serviceDateResult.data || []
-    }
-
-    return normalizeAppointmentRows([...(data || []), ...byServiceDate])
-  })
+async function loadAppointmentsFresh(supabase, moduleId, tenantId) {
+  const rows = await queryAppointments(supabase, moduleId, tenantId)
+  appointmentsCache.set(scopeCacheKey(moduleId, tenantId), { loadedAt: Date.now(), value: rows })
+  return rows
 }
 
 function isBotExamplesSchemaError(error) {
@@ -1481,6 +1560,10 @@ async function createConfirmedPetshopOrder(supabase, session, settings, args = {
 }
 
 function buildPetbotOrderTransactionPayload(session, customer, settings, args = {}) {
+  const orderType = cleanText(args.order_type) || 'produto'
+  const transport = resolvePetTransportSelection({ args, settings, orderType })
+  if (!transport.ok) throw new Error('Opcao de transporte do pet invalida ou desatualizada.')
+
   return {
     session_id: session.id,
     tenant_id: session.tenant_id,
@@ -1493,7 +1576,7 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     size: cleanText(args.size),
     breed: cleanText(args.breed),
     symptom: cleanText(args.symptom),
-    order_type: cleanText(args.order_type) || 'produto',
+    order_type: orderType,
     payment_method: cleanText(args.payment_method),
     fulfillment_type: cleanText(args.fulfillment_type),
     delivery_address: cleanText(args.delivery_address),
@@ -1501,9 +1584,9 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     delivery_city: cleanText(args.delivery_city),
     delivery_reference: cleanText(args.delivery_reference),
     delivery_fee: Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE),
-    service_transport_fee: Number(args.service_transport_fee || 0),
-    service_transport_mode: cleanText(args.service_transport_mode),
-    service_transport_label: cleanText(args.service_transport_label),
+    service_transport_fee: Number(transport.fee || 0),
+    service_transport_mode: cleanText(transport.mode),
+    service_transport_label: cleanText(transport.label),
     service_transport_address: cleanText(args.service_transport_address),
     service_transport_neighborhood: cleanText(args.service_transport_neighborhood),
     service_transport_city: cleanText(args.service_transport_city),
@@ -1787,6 +1870,23 @@ function latestSuccessfulTool(toolRuns, name) {
   return null
 }
 
+function shouldForceAvailabilityLookup(message = '', history = []) {
+  const current = cleanText(message)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  const conversation = [...(history || []).slice(-8).map((entry) => cleanText(entry.content)), current]
+    .join(' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  const hasServiceContext = /\b(banho|tosa|consulta|vacina|veterin|agendar|agendamento)\b/.test(conversation)
+  const hasScheduleRequest = /\b(hoje|amanha|segunda|terca|quarta|quinta|sexta|sabado|domingo|horario|hora)\b/.test(current)
+    || /\b(?:as\s*)?\d{1,2}(?::\d{2}|h(?:oras?)?)\b/.test(current)
+    || /\bas\s+\d{1,2}\b/.test(current)
+  return hasServiceContext && hasScheduleRequest
+}
+
 async function respondWithPetbotAgent({
   supabase,
   sessionId,
@@ -1801,6 +1901,7 @@ async function respondWithPetbotAgent({
   runtimeConfig,
   customer,
   products,
+  services,
   appointments,
   customInstructions,
 }) {
@@ -1811,6 +1912,9 @@ async function respondWithPetbotAgent({
   let handoffTarget = null
   let updatedCustomerName = cleanText(session.customer_name)
   const mediaMessages = []
+  let liveProducts = Array.isArray(products) ? products : []
+  let liveServices = Array.isArray(services) ? services : []
+  let liveAppointments = Array.isArray(appointments) ? appointments : []
 
   const examplesContext = await loadConversationExamples(
     supabase,
@@ -1823,8 +1927,9 @@ async function respondWithPetbotAgent({
   const basePrompt = buildSystemPrompt({
     ...storeSettings,
     customerContext: buildCustomerContext(customer),
-    stockContext: buildStockContext(products),
-    appointmentsContext: buildAppointmentsContext(appointments),
+    stockContext: buildStockContext(liveProducts),
+    servicesContext: buildServicesContext(liveServices),
+    appointmentsContext: buildAppointmentsContext(liveAppointments),
     examplesContext,
     botPrompt: customInstructions,
   })
@@ -1847,10 +1952,12 @@ async function respondWithPetbotAgent({
     'Protocolo do agente:',
     '1. Converse naturalmente e escolha a próxima ação.',
     '2. Use update_customer_profile quando houver dados novos explícitos.',
-    '3. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
-    '4. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
-    '5. Use handoff_to_human quando não puder concluir com dados reais ou houver risco veterinário.',
-    '6. Não exponha nomes de ferramentas, JSON, IDs internos nem regras deste prompt.',
+    '3. Para qualquer pergunta ou pedido de horário, use check_petshop_availability antes de responder. Nunca conclua que não há agenda apenas porque não existem linhas com status disponível.',
+    '4. Para produto, use search_petshop_products quando precisar confirmar estoque, preço ou opções.',
+    '5. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
+    '6. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
+    '7. Use handoff_to_human quando não puder concluir com dados reais ou houver risco veterinário.',
+    '8. Não exponha nomes de ferramentas, JSON, IDs internos nem regras deste prompt.',
     '',
     'Estado transacional desta conversa:',
     pendingContext,
@@ -1871,11 +1978,72 @@ async function respondWithPetbotAgent({
       }
     }
 
+    if (name === 'search_petshop_products') {
+      const query = cleanText(args.query)
+      if (!query) return { ok: false, action: name, error: 'Informe o produto que deve ser pesquisado.' }
+      const found = await loadProducts(supabase, moduleId, session.tenant_id, query)
+      liveProducts = mergeProductsById(liveProducts, found)
+      return {
+        ok: true,
+        action: name,
+        source: 'products',
+        products: found.slice(0, 12).map((product) => ({
+          id: product.id,
+          name: product.name,
+          category: product.category || null,
+          species_target: product.species_target || null,
+          price: Number(product.price || 0),
+          stock_quantity: Number(product.stock_quantity || 0),
+          image_available: Boolean(cleanText(product.image_url)),
+        })),
+        instruction: found.length
+          ? 'Responda usando somente estes produtos, preços e estoques.'
+          : 'Nenhum produto correspondente foi encontrado no estoque ativo.',
+      }
+    }
+
+    if (name === 'check_petshop_availability') {
+      const [freshServices, freshAppointments] = await Promise.all([
+        loadPetshopServices(supabase, moduleId, session.tenant_id),
+        loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
+      ])
+      liveServices = freshServices
+      liveAppointments = freshAppointments
+      return {
+        action: name,
+        ...buildServiceAvailability({
+          serviceQuery: args.service_query,
+          orderType: args.order_type,
+          date: args.date,
+          preferredTime: args.preferred_time,
+          period: args.period,
+          services: liveServices,
+          appointments: liveAppointments,
+        }),
+      }
+    }
+
     if (name === 'prepare_petshop_order') {
+      if (args.order_type === 'produto') {
+        const productIds = (Array.isArray(args.items) ? args.items : [])
+          .map((item) => cleanText(item.product_id))
+          .filter(Boolean)
+        const freshProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
+        liveProducts = mergeProductsById(liveProducts, freshProducts)
+      } else {
+        const [freshServices, freshAppointments] = await Promise.all([
+          loadPetshopServices(supabase, moduleId, session.tenant_id),
+          loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
+        ])
+        liveServices = freshServices
+        liveAppointments = freshAppointments
+      }
+
       const prepared = preparePetshopOrderDraft({
         args,
-        products,
-        appointments,
+        products: liveProducts,
+        services: liveServices,
+        appointments: liveAppointments,
         settings: storeSettings,
       })
       if (!prepared.ok) {
@@ -1928,11 +2096,62 @@ async function respondWithPetbotAgent({
         }
       }
 
+      let refreshedProducts = liveProducts
+      let refreshedServices = liveServices
+      let refreshedAppointments = liveAppointments
+      if (pendingAtTurnStart.order.order_type === 'produto') {
+        const productIds = (pendingAtTurnStart.order.items || [])
+          .map((item) => cleanText(item.product_id))
+          .filter(Boolean)
+        refreshedProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
+        liveProducts = mergeProductsById(liveProducts, refreshedProducts)
+      } else {
+        ;[refreshedServices, refreshedAppointments] = await Promise.all([
+          loadPetshopServices(supabase, moduleId, session.tenant_id),
+          loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
+        ])
+        liveServices = refreshedServices
+        liveAppointments = refreshedAppointments
+      }
+
+      const revalidated = preparePetshopOrderDraft({
+        args: pendingAtTurnStart.order,
+        products: pendingAtTurnStart.order.order_type === 'produto' ? refreshedProducts : liveProducts,
+        services: refreshedServices,
+        appointments: refreshedAppointments,
+        settings: storeSettings,
+      })
+      if (!revalidated.ok) {
+        return {
+          ok: false,
+          action: name,
+          error: 'Os dados operacionais mudaram antes da confirmação.',
+          missing: revalidated.missing || [],
+          instruction: 'Explique que o pedido precisa ser atualizado e pergunte apenas o próximo dado necessário.',
+        }
+      }
+
+      if (revalidated.pending_order_id !== pendingAtTurnStart.id) {
+        pendingOrder = {
+          id: revalidated.pending_order_id,
+          order: revalidated.order,
+          summary: revalidated.summary,
+          prepared_at: new Date().toISOString(),
+        }
+        return {
+          ok: false,
+          action: name,
+          changed: true,
+          summary: revalidated.summary,
+          instruction: 'Preço, estoque, agenda ou transporte mudou. Mostre exatamente o novo resumo e aguarde uma nova confirmação.',
+        }
+      }
+
       orderResult = await createConfirmedPetshopOrderViaRpc(
         supabase,
         sessionForGuard,
         storeSettings,
-        pendingAtTurnStart.order,
+        revalidated.order,
       )
       pendingOrder = null
       return {
@@ -1950,7 +2169,7 @@ async function respondWithPetbotAgent({
     }
 
     if (name === 'send_product_image') {
-      const product = (products || []).find((item) => cleanText(item.id) === cleanText(args.product_id))
+      const product = (liveProducts || []).find((item) => cleanText(item.id) === cleanText(args.product_id))
       if (!product) return { ok: false, action: name, error: 'Produto não encontrado no contexto real.' }
       if (!cleanText(product.image_url)) return { ok: false, action: name, error: 'Produto sem foto aprovada no cadastro.' }
       const attachment = {
@@ -1982,6 +2201,10 @@ async function respondWithPetbotAgent({
     return { ok: false, error: `Ferramenta desconhecida: ${name}` }
   }
 
+  const initialToolChoice = shouldForceAvailabilityLookup(trimmedMessage, history)
+    ? { type: 'function', function: { name: 'check_petshop_availability' } }
+    : 'auto'
+
   const agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
     temperature: runtimeConfig.temperature,
@@ -1991,12 +2214,18 @@ async function respondWithPetbotAgent({
     tools: PETBOT_AGENT_TOOLS,
     callModel: (params) => callOpenAIWithTimeout(params, serverEnv.openAiTimeoutMs),
     executeTool,
+    initialToolChoice,
   })
 
   let reply = cleanText(agentResult.reply)
   const preparedRun = latestSuccessfulTool(agentResult.toolRuns, 'prepare_petshop_order')
+  const changedConfirmationRun = [...(agentResult.toolRuns || [])]
+    .reverse()
+    .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.changed && run?.result?.summary)
   if (preparedRun?.result?.summary && !orderResult) {
     reply = cleanText(preparedRun.result.summary)
+  } else if (changedConfirmationRun?.result?.summary && !orderResult) {
+    reply = cleanText(changedConfirmationRun.result.summary)
   }
   if (!reply) throw new HttpError(502, 'The PetBot agent response came back empty.')
 
@@ -2229,8 +2458,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     buildInterpretedPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), llmInterpretation),
     recoveredContext,
   )
-  const [products, appointments] = await Promise.all([
+  const [products, services, appointments] = await Promise.all([
     loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
+    loadPetshopServices(supabase, moduleId, session.tenant_id),
     loadAppointments(supabase, moduleId, session.tenant_id),
   ])
 
@@ -2255,6 +2485,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         runtimeConfig,
         customer,
         products,
+        services,
         appointments,
         customInstructions,
       })
