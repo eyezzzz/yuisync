@@ -1569,6 +1569,7 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     appointment_id: cleanText(args.appointment_id),
     scheduled_at: cleanText(args.scheduled_at),
     service_type: cleanText(args.service_type),
+    duration_min: Number(args.duration_min || 60),
     change_for: Number(args.change_for || 0),
     notes: cleanText(args.notes),
     items: Array.isArray(args.items) ? args.items : [],

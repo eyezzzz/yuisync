@@ -423,6 +423,7 @@ function defaultState() {
     selectedSlot: null,
     slotOptions: [],
     serviceType: '',
+    groomingChoiceConfirmed: false,
     serviceGroomingDetail: '',
     serviceNotes: '',
     serviceNotesAsked: false,
@@ -536,6 +537,7 @@ export function snapshotPetbotState(state = {}) {
     packagePreferenceAsked: Boolean(next.packagePreferenceAsked),
     pendingQuantity: next.pendingQuantity,
     serviceType: next.serviceType,
+    groomingChoiceConfirmed: Boolean(next.groomingChoiceConfirmed),
     serviceGroomingDetail: next.serviceGroomingDetail,
     serviceNotes: next.serviceNotes,
     serviceNotesAsked: Boolean(next.serviceNotesAsked),
@@ -943,6 +945,30 @@ function inferServiceType(message = '', intent = '') {
   if (wantsGroom) return 'Tosa'
   if (wantsBath) return 'Banho'
   return ''
+}
+
+function applyBathGroomingChoice(state, message = '') {
+  if (state.intent !== 'banho_tosa' || state.awaiting !== 'grooming_confirmation') return false
+  const lower = norm(message)
+  if (!lower) return false
+
+  if (/(sem tosa|so banho|só banho|apenas banho|banho somente)/.test(lower)) {
+    state.serviceType = 'Banho'
+    state.groomingChoiceConfirmed = true
+    return true
+  }
+  if (/(higien|tosa higienica|tosa higiênica)/.test(lower)) {
+    state.serviceType = 'Banho e tosa higiênica'
+    state.groomingChoiceConfirmed = true
+    return true
+  }
+  if (/(corpinho|corpo todo|tosa no corpo|tosa corpo|tosa completa)/.test(lower)) {
+    state.serviceType = 'Banho e tosa'
+    state.serviceGroomingDetail ||= 'Tosa no corpinho'
+    state.groomingChoiceConfirmed = true
+    return true
+  }
+  return false
 }
 
 function hasNoServiceNotes(message = '') {
@@ -2070,6 +2096,8 @@ function applyMessageFacts(state, message, settings = {}) {
     state.serviceType = serviceType
   }
 
+  applyBathGroomingChoice(state, message)
+
   if (state.intent === 'produto') {
     if (isFleaRequest(message)) state.productKind = 'flea'
     else if (isLitterRequest(message)) state.productKind = 'litter'
@@ -2460,8 +2488,9 @@ function sendProductImage(state) {
 function presentSlots(state, appointments) {
   const explicitServiceSlots = availableAppointments(appointments)
     .filter((appointment) => serviceMatches(state.intent, appointment, state.serviceType))
-  const explicitDateSlots = explicitServiceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
-  const serviceSlots = explicitServiceSlots
+  const serviceSlots = explicitServiceSlots.length
+    ? explicitServiceSlots
+    : buildVirtualSlots(state, appointments).filter((slot) => serviceMatches(state.intent, slot, state.serviceType))
   const dateSlots = serviceSlots.filter((slot) => slotMatchesDate(slot, state.serviceDate))
   const preferredSlots = dateSlots.filter((slot) => slotMatchesTimePreference(slot, state))
   const requestedMinutes = state.serviceTimePreference === 'specific' ? timeTextToMinutes(state.servicePreferredTime) : null
@@ -2515,6 +2544,9 @@ function serviceFlow(state, message, appointments, settings) {
   }
   if (state.intent === 'banho_tosa' && state.species === 'cat') {
     return handoffToHuman(state, 'Para banho/tosa de gato, vou chamar um atendente para avaliar com cuidado e combinar o melhor atendimento.', 'banho_tosa_gato_atendente')
+  }
+  if (state.intent === 'banho_tosa' && !state.groomingChoiceConfirmed) {
+    return ask('Você quer o banho com a tosa higiênica mesmo ou tosa no corpinho?', state, 'grooming_confirmation', 'confirmacao_tosa_pendente')
   }
   if (!state.petName) {
     return ask('Perfeito. Qual o nome do pet?', state, 'pet_name', 'pet_nome_pendente')
@@ -2640,7 +2672,6 @@ function checkoutFlow(state, settings) {
 
 function needsFoodPreferences(state) {
   if (state.intent !== 'produto' || state.productKind !== 'food' || state.selectedProduct) return false
-  if (!state.species || (!state.size && !state.ageCategory)) return false
   if (state.brandPreferenceAsked || state.packagePreferenceAsked) return false
   const hasBrandSignal = Boolean(state.brand || state.brandPreferenceAny)
   const hasPackageSignal = Boolean(state.packagePreference || state.packageKg || state.packagePreferenceAny)
@@ -2651,7 +2682,7 @@ function askFoodPreferences(state) {
   state.brandPreferenceAsked = true
   state.packagePreferenceAsked = true
   return ask(
-    'Tem preferência de marca?\n\nE prefere granel, pacote de 1kg ou saco fechado? Se quiser, pode pedir 7kg, 15kg ou 20kg.',
+    'Para a ração, você prefere granel ou saco fechado?\n\nSe tiver preferência de marca, pode me dizer junto. Para saco fechado, também pode informar 7kg, 15kg ou 20kg.',
     state,
     'food_preferences',
     'preferencia_racao_pendente',
@@ -2659,6 +2690,11 @@ function askFoodPreferences(state) {
 }
 
 function productFlow(state, message, products, settings) {
+  // The sale format changes the catalog and quantity semantics, so establish
+  // it before the pet triage whenever the customer asks for ração.
+  if (!availableProducts(products).length) return presentProducts(state, products, message)
+  if (needsFoodPreferences(state)) return askFoodPreferences(state)
+
   if (!state.species) {
     return ask('É para cachorro ou gato?', state, 'species', 'especie_pendente')
   }
@@ -2686,9 +2722,6 @@ function productFlow(state, message, products, settings) {
     }
     return ask('Ele é filhote, adulto ou qual porte/raça?', state, 'pet_category', 'categoria_pendente')
   }
-
-  if (!availableProducts(products).length) return presentProducts(state, products, message)
-  if (needsFoodPreferences(state)) return askFoodPreferences(state)
 
   const chosen = !state.selectedProduct ? chooseProductFromOptions(state, message) : null
   if (chosen) {

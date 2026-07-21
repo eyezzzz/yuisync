@@ -13,13 +13,18 @@ export function useAuth() {
       else setLoading(false)
     })
 
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, nextSession) => {
       setSession(nextSession)
 
-      if (nextSession) fetchProfile(nextSession.user.id)
+      // TOKEN_REFRESHED happens when the tab regains focus or after a while in
+      // the background. The profile did not change, so avoid reloading the
+      // entire tenant scope and flashing the application loading screen.
+      if (nextSession && event !== 'TOKEN_REFRESHED') fetchProfile(nextSession.user.id)
       else {
-        setProfile(null)
-        setLoading(false)
+        if (!nextSession) {
+          setProfile(null)
+          setLoading(false)
+        }
       }
     })
 

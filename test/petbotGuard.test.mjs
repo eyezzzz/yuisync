@@ -1614,7 +1614,7 @@ test('nome com intencao na mesma frase e interjeicao nao suja cadastro', () => {
   assert.notEqual(result.state.customerName, 'Ue Guilerme')
 })
 
-test('racao por raca sem idade pede adulto ou filhote antes de buscar estoque', () => {
+test('racao pergunta granel ou saco antes de continuar a triagem do pet', () => {
   let context = {}
   let result = turn(context, 'ola bom dia')
   context = result.context
@@ -1623,8 +1623,8 @@ test('racao por raca sem idade pede adulto ou filhote antes de buscar estoque', 
   context = result.context
 
   result = turn(context, 'quero uma ração para meu shih tzu')
-  assert.equal(result.action, 'pedir_categoria_pet')
-  assert.match(result.reply, /adulto ou filhote/i)
+  assert.equal(result.action, 'pedir_preferencia_racao')
+  assert.match(result.reply, /granel ou saco fechado/i)
   assert.doesNotMatch(result.reply, /não encontrei produto disponível/i)
 })
 

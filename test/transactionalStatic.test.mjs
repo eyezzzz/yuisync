@@ -42,6 +42,15 @@ test('reset de estoque preserva itens e vendas historicas', async () => {
   assert.match(resetFlow, /stock_quantity:\s*0/)
 })
 
+test('PetBot aplica a RPC transacional de estoque e agenda na cadeia de migracoes', async () => {
+  const migration = await read('supabase/migrations/20260720007000_petbot_transaction_rpc.sql')
+  assert.match(migration, /create or replace function public\.create_petbot_order_transaction/)
+  assert.match(migration, /from public\.products[\s\S]*?for update/)
+  assert.match(migration, /from public\.appointments[\s\S]*?for update/)
+  assert.match(migration, /update public\.products set stock_quantity = stock_quantity - v_quantity/)
+  assert.match(migration, /status = 'agendado'/)
+})
+
 test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () => {
   const apiFiles = await readdir(new URL('api/', root), { recursive: true })
   const serverlessFunctions = apiFiles.filter((path) => path.endsWith('.ts'))

@@ -98,6 +98,7 @@ function fallbackTenantModules(profile) {
 export function AuthProvider({ children }) {
   const auth = useAuth()
   const location = useLocation()
+  const authUserId = auth.session?.user?.id || null
   const [storeSettings, setStoreSettings] = useState({
     store_name: '',
     store_address: '',
@@ -116,7 +117,7 @@ export function AuthProvider({ children }) {
   const [tenantEnabledModules, setTenantEnabledModules] = useState(['petshop'])
 
   const loadTenantScope = useCallback(async () => {
-    if (!auth.session || !auth.profile?.id) {
+    if (!authUserId || !auth.profile?.id) {
       setTenants([])
       setActiveTenantId(null)
       setTenantMode('database')
@@ -182,7 +183,7 @@ export function AuthProvider({ children }) {
     } finally {
       setTenantLoading(false)
     }
-  }, [auth.session, auth.profile?.id, auth.profile?.active_tenant_id])
+  }, [authUserId, auth.profile?.id, auth.profile?.active_tenant_id])
 
   useEffect(() => {
     loadTenantScope()
@@ -280,7 +281,7 @@ export function AuthProvider({ children }) {
   }, [tenantMode, auth.profile?.id, loadTenantScope, switchTenant])
 
   const loadTenantEnabledModules = useCallback(async () => {
-    if (!auth.session || !auth.profile) {
+    if (!authUserId || !auth.profile) {
       setTenantEnabledModules(['petshop'])
       return
     }
@@ -342,14 +343,14 @@ export function AuthProvider({ children }) {
       console.warn('Falha ao carregar modulos habilitados por instancia, usando fallback:', error)
       setTenantEnabledModules(fallbackTenantModules(auth.profile))
     }
-  }, [auth.session, auth.profile, activeTenantId, tenantMode])
+  }, [authUserId, auth.profile, activeTenantId, tenantMode])
 
   useEffect(() => {
     loadTenantEnabledModules()
   }, [loadTenantEnabledModules])
 
   useEffect(() => {
-    if (auth.session && auth.profile && activeTenantId) {
+    if (authUserId && auth.profile && activeTenantId) {
       const parts = location.pathname.split('/').filter(Boolean)
       const routeModuleId = parts[0] || null
 
@@ -362,12 +363,12 @@ export function AuthProvider({ children }) {
       } else {
         setStoreSettings({ store_name: 'Carregando...', module_id: null })
       }
-    } else if (!auth.session || !auth.profile) {
+    } else if (!authUserId || !auth.profile) {
       setStoreSettings({ store_name: '', module_id: null })
     } else {
       setStoreSettings({ store_name: 'Carregando...', module_id: null })
     }
-  }, [auth.session, auth.profile, location.pathname, activeTenantId])
+  }, [authUserId, auth.profile, location.pathname, activeTenantId])
 
   async function loadSettings(moduleId) {
     if (!moduleId && !auth.session) return
