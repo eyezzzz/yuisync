@@ -211,15 +211,18 @@ function extractCoatType(value = '') {
 function normalizeService(row = {}) {
   const code = normalizeCode(row.code || row.service_type || row.name)
   const name = clean(row.name || row.service_type || code)
+  const sourceProductId = clean(row.source_product_id)
   return {
     ...row,
     id: clean(row.id) || code,
     code,
     name,
-    group_type: clean(row.group_type) || (/vet|consulta|vacina|clinica/.test(code) ? 'veterinaria' : 'banho_tosa'),
+    group_type: clean(row.group_type) || serviceGroupFromText(`${code} ${name}`),
     default_price: Number(row.default_price ?? row.price ?? 0),
     default_duration_min: Math.max(15, Number(row.default_duration_min ?? row.duration_min ?? 60) || 60),
     active: row.active !== false,
+    source_product_id: sourceProductId || null,
+    catalog_source: clean(row.catalog_source) || (sourceProductId ? 'products' : 'petshop_services'),
     service_kind: serviceKind(`${code} ${name}`),
     weight_range: row.weight_range || extractWeightRange(name),
     coat_type: normalizeCoatType(row.coat_type) || extractCoatType(name),
@@ -290,16 +293,29 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
     || Boolean(query && (normalize(service.name).includes(query) || query.includes(normalize(service.name))))
   ))
 
+  const authoritativeMatches = kindMatches.filter((service) => (
+    service.catalog_source === 'products' || Boolean(service.source_product_id)
+  ))
+  const exactAuthoritative = exactCatalogMatches.filter((service) => (
+    service.catalog_source === 'products' || Boolean(service.source_product_id)
+  ))
+
   let candidates
-  if (exactId) {
+  if (exactId && (exactId.catalog_source === 'products' || exactId.source_product_id)) {
+    candidates = [exactId]
+  } else if (exactAuthoritative.length) {
+    candidates = exactAuthoritative
+  } else if (authoritativeMatches.length) {
+    // The catalog shown in Estoque > Servicos is the tenant's commercial
+    // source of truth. Generic seeded rows such as "Banho - R$ 60" must not
+    // override those entries, even when the model sends the generic code.
+    candidates = authoritativeMatches
+  } else if (exactId) {
     candidates = [exactId]
   } else {
     const exactSpecialized = exactCatalogMatches.filter((service) => service.weight_range || service.coat_type)
     const kindSpecialized = kindMatches.filter((service) => service.weight_range || service.coat_type)
 
-    // A generic code such as "banho" must not override the tenant's detailed
-    // catalog. Exact specialized codes, however, are authoritative after the
-    // agent has resolved them through the catalog tool.
     if (exactSpecialized.length) candidates = exactSpecialized
     else if (kindSpecialized.length) candidates = kindMatches
     else candidates = exactCatalogMatches.length ? exactCatalogMatches : kindMatches
@@ -625,13 +641,16 @@ export const PETBOT_AGENT_TOOLS = [
         properties: {
           service_query: { type: 'string' },
           order_type: { type: 'string', enum: ['banho_tosa', 'veterinaria'] },
+          pet_name: strictNullableString('Nome do pet informado explicitamente.'),
+          species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
+          breed: strictNullableString('Raça informada explicitamente, sem usar a raça para deduzir peso.'),
           weight_kg: strictNullableNumber('Peso exato do pet em kg quando o catálogo de serviços varia por peso.'),
           coat_type: strictNullableString('Tipo de pelo: curto, medio, longo, duplo ou todas.'),
           date: strictNullableString('Data exata no formato YYYY-MM-DD. Resolva hoje/amanhã usando a data atual do prompt.'),
           preferred_time: strictNullableString('Horário exato no formato HH:mm, quando informado.'),
           period: { type: ['string', 'null'], enum: ['specific', 'morning', 'afternoon', 'any', null] },
         },
-        required: ['service_query', 'order_type', 'weight_kg', 'coat_type', 'date', 'preferred_time', 'period'],
+        required: ['service_query', 'order_type', 'pet_name', 'species', 'breed', 'weight_kg', 'coat_type', 'date', 'preferred_time', 'period'],
       },
     },
   },

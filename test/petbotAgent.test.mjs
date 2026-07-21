@@ -5,6 +5,7 @@ import {
   PETBOT_AGENT_TOOLS,
   buildServiceAvailability,
   isExplicitPetbotConfirmation,
+  mergePetshopServiceCatalogs,
   preparePetshopOrderDraft,
   resolvePetTransportSelection,
   runPetbotAgent,

@@ -21,6 +21,7 @@ import {
   PETBOT_AGENT_TOOLS,
   buildServiceAvailability,
   isExplicitPetbotConfirmation,
+  mergePetshopServiceCatalogs,
   preparePetshopOrderDraft,
   resolvePetTransportSelection,
   runPetbotAgent,
@@ -918,26 +919,57 @@ function isPetshopServicesSchemaError(error) {
 }
 
 async function loadPetshopServices(supabase, moduleId, tenantId) {
-  let query = supabase
-    .from('petshop_services')
-    .select('id,code,name,group_type,default_price,default_duration_min,active,sort_order')
-    .eq('module_id', moduleId)
-    .eq('active', true)
-    .order('sort_order')
-    .order('name')
+  const runDedicatedQuery = async (includeSourceProductId) => {
+    const columns = includeSourceProductId
+      ? 'id,code,name,group_type,default_price,default_duration_min,active,sort_order,source_product_id'
+      : 'id,code,name,group_type,default_price,default_duration_min,active,sort_order'
+    let query = supabase
+      .from('petshop_services')
+      .select(columns)
+      .eq('module_id', moduleId)
+      .eq('active', true)
+      .order('sort_order')
+      .order('name')
 
-  if (tenantId) query = query.eq('tenant_id', tenantId)
-
-  const { data, error } = await query
-  if (error) {
-    if (isPetshopServicesSchemaError(error)) return []
-    if (tenantId && isMissingTenantColumnError(error)) {
-      throw new HttpError(500, 'Tenant isolation is not enabled in petshop_services table.')
-    }
-    throw new HttpError(500, 'Unable to load petshop services.')
+    if (tenantId) query = query.eq('tenant_id', tenantId)
+    return query
   }
 
-  return (data || []).filter((service) => service.active !== false)
+  let dedicatedResult = await runDedicatedQuery(true)
+  if (dedicatedResult.error && /source_product_id/i.test(String(dedicatedResult.error.message || ''))) {
+    dedicatedResult = await runDedicatedQuery(false)
+  }
+
+  const { data: dedicatedServices, error: dedicatedError } = dedicatedResult
+  if (dedicatedError) {
+    if (!isPetshopServicesSchemaError(dedicatedError)) {
+      if (tenantId && isMissingTenantColumnError(dedicatedError)) {
+        throw new HttpError(500, 'Tenant isolation is not enabled in petshop_services table.')
+      }
+      throw new HttpError(500, 'Unable to load petshop services.')
+    }
+  }
+
+  let productQuery = supabase
+    .from('products')
+    .select('id,name,category,description,price,active,bot_metadata,updated_at')
+    .eq('module_id', moduleId)
+    .eq('active', true)
+    .limit(MAX_CACHED_PRODUCTS)
+  if (tenantId) productQuery = productQuery.eq('tenant_id', tenantId)
+
+  const { data: productRows, error: productError } = await productQuery
+  if (productError) {
+    if (tenantId && isMissingTenantColumnError(productError)) {
+      throw new HttpError(500, 'Tenant isolation is not enabled in products table.')
+    }
+    throw new HttpError(500, 'Unable to load the service catalog from products.')
+  }
+
+  return mergePetshopServiceCatalogs(
+    (dedicatedServices || []).filter((service) => service.active !== false),
+    productRows || [],
+  )
 }
 
 async function loadProductsByIds(supabase, moduleId, tenantId, productIds = []) {
@@ -1938,6 +1970,44 @@ function latestSuccessfulTool(toolRuns, name) {
   return null
 }
 
+function latestToolRun(toolRuns, name) {
+  for (let index = (toolRuns || []).length - 1; index >= 0; index -= 1) {
+    const run = toolRuns[index]
+    if (run?.name === name) return run
+  }
+  return null
+}
+
+function serviceFieldQuestion(field = '', availableServices = []) {
+  const normalized = cleanText(field)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  if (normalized.includes('nome do pet')) return 'Qual é o nome do seu pet?'
+  if (normalized.includes('especie')) return 'Seu pet é cachorro, gato ou outra espécie?'
+  if (normalized.includes('peso')) return 'Qual é o peso exato do seu pet em kg? Não vou deduzir o peso pela raça.'
+  if (normalized.includes('tipo de pelo')) return 'Qual é o tipo de pelo do seu pet: curto, médio, longo ou duplo?'
+  if (normalized.includes('data')) return 'Para qual data você deseja o agendamento?'
+  if (normalized.includes('horario')) return 'Qual horário você prefere?'
+  if (normalized.includes('servico exato')) {
+    const names = (availableServices || []).map((service) => cleanText(service?.name)).filter(Boolean).slice(0, 6)
+    return names.length
+      ? `Encontrei mais de uma opção no catálogo. Qual destas corresponde ao serviço desejado?
+${names.map((name) => `- ${name}`).join('\n')}`
+      : 'Encontrei mais de uma opção de serviço. Qual delas você deseja?'
+  }
+  return `Antes de consultar preço e horário, preciso confirmar ${cleanText(field) || 'os dados do serviço exato'}.`
+}
+
+function replyClaimsServiceOperationalData(reply = '') {
+  const text = cleanText(reply)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  return /r\$\s*\d/.test(reply)
+    || /horario.*(disponivel|livre)|esta disponivel|temos horario|valor e|custa/.test(text)
+}
+
 function shouldForceAvailabilityLookup(message = '', history = []) {
   const current = cleanText(message)
     .normalize('NFD')
@@ -1969,6 +2039,7 @@ async function respondWithPetbotAgent({
   storeSettings,
   runtimeConfig,
   customer,
+  llmInterpretation,
   products,
   services,
   appointments,
@@ -2082,15 +2153,19 @@ async function respondWithPetbotAgent({
       return {
         action: name,
         ...buildServiceAvailability({
-          serviceQuery: args.service_query,
-          orderType: args.order_type,
-          weightKg: args.weight_kg,
-          coatType: args.coat_type,
+          serviceQuery: args.service_query || llmInterpretation?.service_type,
+          orderType: args.order_type || llmInterpretation?.intent,
+          petName: args.pet_name || llmInterpretation?.pet_name,
+          species: args.species || llmInterpretation?.species,
+          breed: args.breed || llmInterpretation?.breed,
+          weightKg: args.weight_kg ?? llmInterpretation?.weight_kg,
+          coatType: args.coat_type || llmInterpretation?.coat_type,
           date: args.date,
           preferredTime: args.preferred_time,
           period: args.period,
           services: liveServices,
           appointments: liveAppointments,
+          requirePetIdentity: true,
         }),
       }
     }
@@ -2291,6 +2366,7 @@ async function respondWithPetbotAgent({
 
   let reply = cleanText(agentResult.reply)
   const preparedRun = latestSuccessfulTool(agentResult.toolRuns, 'prepare_petshop_order')
+  const availabilityRun = latestToolRun(agentResult.toolRuns, 'check_petshop_availability')
   const changedConfirmationRun = [...(agentResult.toolRuns || [])]
     .reverse()
     .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.changed && run?.result?.summary)
@@ -2298,6 +2374,18 @@ async function respondWithPetbotAgent({
     reply = cleanText(preparedRun.result.summary)
   } else if (changedConfirmationRun?.result?.summary && !orderResult) {
     reply = cleanText(changedConfirmationRun.result.summary)
+  } else if (availabilityRun?.result?.ok === false && availabilityRun.result.required_fields?.length) {
+    reply = serviceFieldQuestion(
+      availabilityRun.result.required_fields[0],
+      availabilityRun.result.available_services,
+    )
+  } else if (
+    replyClaimsServiceOperationalData(reply)
+    && !latestSuccessfulTool(agentResult.toolRuns, 'check_petshop_availability')
+    && !pendingOrder
+    && !orderResult
+  ) {
+    reply = 'Antes de informar preço ou disponibilidade, preciso validar o serviço exato no catálogo. Qual é o nome do seu pet?'
   }
   if (!reply) throw new HttpError(502, 'The PetBot agent response came back empty.')
 
@@ -2401,6 +2489,87 @@ async function respondWithPetbotAgent({
     tokens: agentResult.tokensUsed,
     guarded: false,
     engine: 'petbot_agent_v1',
+  })
+
+  return { reply, savedMessage: savedReply }
+}
+
+function isPetbotServiceConversation(intent = '', message = '', history = []) {
+  if (['banho_tosa', 'veterinaria'].includes(cleanText(intent))) return true
+  const text = [...(history || []).slice(-6).map((entry) => cleanText(entry.content)), cleanText(message)]
+    .join(' ')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+  return /\b(banho|tosa|agendar|agendamento|consulta|vacina|veterin)\b/.test(text)
+}
+
+async function respondWithPetbotSafeServiceFailure({
+  supabase,
+  session,
+  sessionId,
+  moduleId,
+  intent,
+  options,
+  error,
+}) {
+  const reply = 'Não consegui validar o serviço exato no catálogo e na agenda agora. Para não informar preço ou horário incorreto, encaminhei o atendimento para uma pessoa da equipe.'
+  const botSentAt = new Date().toISOString()
+  const existingContext = parseJsonObject(session.context)
+  const nextContext = {
+    ...existingContext,
+    petbot_agent: {
+      ...(existingContext.petbot_agent || {}),
+      version: 1,
+      engine_version: 'petbot_agent_v1',
+      updatedAt: botSentAt,
+      pending_order: null,
+      last_action: 'safe_service_handoff',
+      last_tools: [],
+      needs_human: true,
+      handoff_target: 'atendente',
+      order_saved: false,
+      failure: cleanText(error instanceof Error ? error.message : error).slice(0, 300),
+    },
+  }
+
+  const { error: sessionError } = await supabase
+    .from('chat_sessions')
+    .update({ status: 'human', context: nextContext, last_message_at: botSentAt })
+    .eq('id', sessionId)
+  if (sessionError) throw new HttpError(500, 'Unable to persist safe PetBot handoff.')
+
+  const { data: savedReply, error: replyError } = await supabase
+    .from('chat_messages')
+    .insert({
+      session_id: sessionId,
+      role: 'assistant',
+      content: reply,
+      metadata: {
+        source: options.source || 'dashboard_simulation',
+        engine_version: 'petbot_agent_v1',
+        safe_service_handoff: true,
+        ...(options.assistantMetadata || {}),
+      },
+      tokens_used: 0,
+      sent_at: botSentAt,
+    })
+    .select('id, role, content, metadata, tokens_used, sent_at')
+    .single()
+  if (replyError) throw new HttpError(500, 'Unable to save safe PetBot handoff reply.')
+
+  await recordPetbotEvent(supabase, {
+    tenant_id: session.tenant_id,
+    module_id: moduleId,
+    session_id: sessionId,
+    message_id: savedReply.id,
+    event_type: 'handoff',
+    engine_version: 'petbot_agent_v1',
+    intent,
+    action: 'safe_service_handoff',
+    outcome: 'agent_error',
+    handoff_target: 'atendente',
+    metadata: { source: options.source || 'dashboard_simulation' },
   })
 
   return { reply, savedMessage: savedReply }
@@ -2556,17 +2725,30 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         storeSettings,
         runtimeConfig,
         customer,
+        llmInterpretation,
         products,
         services,
         appointments,
         customInstructions,
       })
     } catch (error) {
-      logger.warn('PetBot agent failed; falling back to guarded runtime', {
+      logger.warn('PetBot agent failed', {
         sessionId,
         moduleId,
         error: error instanceof Error ? error.message : String(error),
       })
+      if (isPetbotServiceConversation(intent, trimmedMessage, history)) {
+        return respondWithPetbotSafeServiceFailure({
+          supabase,
+          session: sessionForGuard,
+          sessionId,
+          moduleId,
+          intent,
+          options,
+          error,
+        })
+      }
+      logger.warn('Falling back to guarded runtime for a non-service conversation', { sessionId, moduleId })
     }
   }
 
