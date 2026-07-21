@@ -1,34 +1,38 @@
+import { DateTime } from 'luxon'
 import { HttpError } from './http.js'
 import { serverEnv } from './env.js'
 import { logger } from './logger.js'
 import {
   buildPetbotSearchText,
-  buildPetbotConfirmationReply,
-  markPetbotOrderError,
-  markPetbotOrderSaved,
-  mergePetbotContext,
   recoverPetbotContextFromHistory,
-  runPetbotGuard,
-  snapshotPetbotState,
-} from './petbotGuard.js'
+} from './petbotContext.js'
 import {
   buildInterpretedPetbotSearchText,
   interpretPetbotMessageWithLlm,
-  redraftPetbotReplyWithLlm,
 } from './petbotAi.js'
 import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
 import {
   PETBOT_AGENT_TOOLS,
   buildServiceAvailability,
-  extractExplicitPetbotServiceFacts,
+  findPetshopSubscriptionBenefit,
   groundPetbotServiceArgs,
   isExplicitPetbotConfirmation,
   mergeInterpretedPetbotServiceFacts,
+  isServiceCatalogProduct,
+  listPetTransportOptions,
   mergePetshopServiceCatalogs,
+  normalizePetbotSchedulingSettings,
   preparePetshopOrderDraft,
+  resolvePetshopService,
   resolvePetTransportSelection,
   runPetbotAgent,
 } from './petbotAgent.js'
+import {
+  analyzeProductDifferentiation,
+  buildPetbotAgentV3Prompt,
+  normalizeProductQueryFacts,
+  validatePetbotOperationalReply,
+} from './petbotGrounding.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -87,6 +91,33 @@ const PRODUCT_STOP_WORDS = new Set([
 
 const DEFAULT_BOT_MODEL = serverEnv.openAiModel
 const DEFAULT_BOT_TEMPERATURE = 0.5
+const PETBOT_AGENT_REPLY_FORMAT = {
+  type: 'json_schema',
+  json_schema: {
+    name: 'petbot_agent_reply',
+    strict: true,
+    schema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        message: { type: 'string' },
+      },
+      required: ['message'],
+    },
+  },
+}
+
+function parsePetbotAgentReply(value = '') {
+  const text = cleanText(value)
+  if (!text) return { message: '' }
+  try {
+    const parsed = JSON.parse(text)
+    return { message: cleanText(parsed?.message) }
+  } catch {
+    return { message: text }
+  }
+}
+
 const DEFAULT_DELIVERY_FEE = 10
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
 const BUSY_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
@@ -236,49 +267,6 @@ function normalizeAppointmentRows(rows = []) {
   return [...byId.values()].filter((row) => row.scheduled_at)
 }
 
-function appointmentDurationMs(row = {}) {
-  const minutes = Number(row.duration_min || row.durationMin || 60)
-  return Math.max(15, Number.isFinite(minutes) ? minutes : 60) * 60 * 1000
-}
-
-function appointmentStartMs(row = {}) {
-  const scheduledAt = row.scheduled_at || normalizeAppointmentRows([row])[0]?.scheduled_at
-  const time = scheduledAt ? new Date(scheduledAt).getTime() : NaN
-  return Number.isFinite(time) ? time : null
-}
-
-function appointmentsOverlap(left = {}, right = {}) {
-  const leftStart = appointmentStartMs(left)
-  const rightStart = appointmentStartMs(right)
-  if (leftStart === null || rightStart === null) return false
-  return leftStart < rightStart + appointmentDurationMs(right)
-    && rightStart < leftStart + appointmentDurationMs(left)
-}
-
-async function hasBusyAppointmentConflict(supabase, session, scheduledAt, durationMin = 60) {
-  const dateIso = appointmentDateIso({ scheduled_at: scheduledAt })
-  if (!dateIso) return false
-  const { data, error } = await supabase
-    .from('appointments')
-    .select('id,status,scheduled_at,service_date,start_time,duration_min')
-    .eq('tenant_id', session.tenant_id)
-    .eq('module_id', session.module_id)
-    .gte('scheduled_at', `${dateIso}T00:00:00-03:00`)
-    .lte('scheduled_at', `${dateIso}T23:59:59-03:00`)
-    .limit(1000)
-
-  if (error) throw new Error(`Falha ao validar conflito de agenda: ${error.message}`)
-
-  const candidate = { scheduled_at: scheduledAt, duration_min: durationMin }
-  return normalizeAppointmentRows(data || [])
-    .filter((row) => BUSY_STATUSES.has(cleanText(row.status).toLowerCase()))
-    .some((row) => appointmentsOverlap(candidate, row))
-}
-
-function escapeIlike(value = '') {
-  return cleanText(value).replace(/[%_\\]/g, (char) => `\\${char}`)
-}
-
 function parseJsonObject(value) {
   if (!value) return {}
   if (typeof value === 'object' && !Array.isArray(value)) return value
@@ -406,27 +394,10 @@ function isMissingTenantColumnError(error) {
   )
 }
 
-function buildStockContext(products) {
-  if (!products?.length) {
-    return 'Nenhum produto disponivel confirmado no cadastro para esta busca.'
-  }
-
-  return products
-    .filter(isSellableProduct)
-    .map((product) => [
-      `ID: ${product.id}`,
-      `NOME: ${product.name}`,
-      `CAT: ${product.category || 'Sem categoria'}`,
-      `PRECO: R$ ${Number(product.price || 0).toFixed(2)}`,
-      `QTD: ${product.stock_quantity}`,
-      `FOTO: ${product.image_url ? 'sim' : 'nao'}`,
-    ].join(' | '))
-    .join('\n')
-}
-
 function isSellableProduct(product) {
   const name = String(product?.name || '').trim()
   return Boolean(product?.active)
+    && !isServiceCatalogProduct(product)
     && name.toLowerCase() !== 'produto importado'
     && Number(product?.stock_quantity) > 0
     && Number(product?.price) > 0
@@ -669,51 +640,6 @@ async function loadUpsellProducts(supabase, moduleId, tenantId, selectColumns) {
   return data || []
 }
 
-function buildAppointmentsContext(appointments) {
-  if (!appointments?.length) {
-    return 'Nenhum agendamento ocupado foi encontrado nos proximos dias. Isso nao significa agenda fechada: consulte check_petshop_availability antes de responder sobre horarios.'
-  }
-
-  const lines = appointments
-    .slice(0, 30)
-    .map((appointment) => {
-      const dateIso = appointmentDateIso(appointment)
-      const dateObj = dateIso ? new Date(`${dateIso}T12:00:00-03:00`) : new Date(appointment.scheduled_at)
-      const time = appointmentTimeText(appointment)
-      const date = dateObj.toLocaleDateString('pt-BR', {
-        day: '2-digit',
-        month: '2-digit',
-        timeZone: 'America/Sao_Paulo',
-      })
-      const status = cleanText(appointment.status).toLowerCase()
-      const availability = AVAILABLE_STATUSES.has(status)
-        ? 'DISPONIVEL'
-        : BUSY_STATUSES.has(status)
-          ? 'OCUPADO'
-          : `STATUS ${status || 'nao informado'}`
-      const price = Number(appointment.price || 0) > 0 ? ` | R$ ${Number(appointment.price).toFixed(2)}` : ''
-      return `${date} ${time} - ${appointment.service_type || 'Atendimento'} | ${availability}${price}`
-    })
-
-  if (!lines.some((line) => line.includes('DISPONIVEL'))) {
-    lines.push('A agenda acima registra principalmente compromissos ocupados. Calcule os horarios livres com check_petshop_availability; nao conclua indisponibilidade apenas pela ausencia de slots DISPONIVEL.')
-  }
-
-  return lines.join('\n')
-}
-
-function buildServicesContext(services) {
-  if (!services?.length) {
-    return 'Nenhum servico ativo foi carregado do cadastro. Nao invente servicos, precos ou duracoes.'
-  }
-
-  return services
-    .filter((service) => service.active !== false)
-    .slice(0, 40)
-    .map((service) => `${service.code} | ${service.name} | grupo ${service.group_type} | R$ ${Number(service.default_price || 0).toFixed(2)} | ${Number(service.default_duration_min || 60)} min`)
-    .join('\n')
-}
-
 function buildCustomerContext(customer) {
   if (!customer?.client) {
     return [
@@ -740,117 +666,11 @@ function buildCustomerContext(customer) {
   ].join('\n')
 }
 
-function buildSystemPrompt({
-  storeName,
-  storePhone,
-  storeAddress,
-  storeNeighborhood,
-  storeCity,
-  deliveryFee,
-  petTransportFee,
-  petTransportOptions,
-  customerContext,
-  stockContext,
-  servicesContext,
-  appointmentsContext,
-  examplesContext,
-  botPrompt,
-}) {
-  const customInstructions = String(botPrompt || '').trim()
-  const storeLocation = [
-    storeAddress,
-    storeNeighborhood,
-    storeCity,
-  ].filter(Boolean).join(' - ') || 'Nao informado'
-  const localNow = new Date().toLocaleString('pt-BR', {
-    timeZone: 'America/Sao_Paulo',
-    dateStyle: 'short',
-    timeStyle: 'short',
-  })
-
-  return [
-    `Voce e o atendente virtual oficial de ${storeName || 'esta loja'}.`,
-    'Responda em portugues do Brasil, com tom cordial, claro e objetivo.',
-    'Use somente os dados confirmados no contexto operacional abaixo.',
-    'Nunca invente preco, estoque, horario, disponibilidade, endereco, politica comercial ou procedimento veterinario.',
-    'Se o cliente pedir algo fora do contexto, peca os dados necessarios ou encaminhe para um atendente; em caso veterinario sensivel, para a veterinaria.',
-    'Para agendamentos, use check_petshop_availability no turno atual antes de afirmar que um horario esta livre ou ocupado. A ausencia de slots livres cadastrados nao significa indisponibilidade.',
-    'Nao diga "vou consultar", "um momento" ou equivalente. Chame a ferramenta silenciosamente e responda somente com o resultado real.',
-    'Para produtos, use search_petshop_products antes de afirmar estoque ou preco quando o item nao estiver claramente presente no contexto atual.',
-    'Nunca aplique desconto. Se pedirem desconto, responda gentilmente: "Infelizmente nao conseguimos aplicar desconto nesse pedido."',
-    'Mantenha respostas curtas e naturais para conversa de WhatsApp.',
-    'Você decide a próxima pergunta e a redação da resposta. O código apenas fornece dados, executa ferramentas e bloqueia operações inválidas.',
-    'Nunca afirme que salvou cadastro, separou produto, enviou foto, transferiu ou confirmou pedido sem a ferramenta correspondente retornar ok.',
-    'Seu foco e vender, mas sem pressionar: se o cliente recusar o upsell, continue o pedido normalmente.',
-    'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar um atendente; em caso veterinario, a veterinaria.',
-    'Colete nome do cliente e do pet de forma natural ao longo da conversa, sem bloquear uma consulta de catálogo que dependa apenas de dados técnicos já informados.',
-    '',
-    'Fluxo obrigatorio:',
-    'Produto: nome, intencao, dados minimos, opcoes reais, preco, um upsell compativel, resumo parcial, pagamento, entrega/retirada, endereco se entrega, resumo final, confirmar, salvar e avaliacao 0-10.',
-    'Servico: nome, intencao, dados minimos, horario real, resumo, transporte do pet quando banho/tosa, confirmar, salvar agendamento e avaliacao 0-10. Nao peca forma de pagamento para banho/tosa ou veterinaria no chat.',
-    'Para banho/tosa e veterinaria, nunca afirme que pagamento antecipado e obrigatorio. O chat apenas registra o agendamento; se perguntarem, diga que o pagamento sera tratado no atendimento conforme a politica da loja.',
-    'Se o dado ja estiver no cadastro/contexto, nao pergunte de novo.',
-    'Dados minimos produto: cliente, especie e idade/categoria quando relevante (adulto, filhote, castrado, senior). Para produtos que dependem tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento, pergunte o peso aproximado em kg.',
-    'Dados minimos para classificar banho/tosa: raca e peso aproximado ou faixa de peso suficiente para selecionar o servico. Se um deles ja estiver presente, pergunte apenas o outro; se ambos estiverem presentes, nao repita essas perguntas. Nome do cliente, nome do pet, data e horario podem ser coletados naturalmente antes da confirmacao final.',
-    'Para banho/tosa, nunca deduza peso, preco ou servico apenas pela raca. Consulte o catalogo real. A Classificacao do PetBot resolve a pelagem vinculada a raca; nao pergunte porte ou pelagem quando raca e peso ja forem suficientes para o catalogo. Nunca exponha regras internas, validacoes ou ferramentas. O resumo deve usar exatamente o nome e o codigo retornados pelo cadastro, nunca apenas "Banho" ou outro nome generico quando houver opcoes especificas.',
-    'Nao ofereca horarios sem uma data definida. Quando listar alternativas, associe cada horario a data consultada.',
-    'Dados minimos veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
-    'Nunca assuma especie. Se o cliente nao disse cachorro/gato, pergunte. Nao diga "e cachorro, certo?".',
-    'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
-    'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
-    'Ao vender racao por marca/raca/tamanho, priorize produtos cujo nome contenha a marca, a raca/tamanho e adulto/filhote/castrado informado. So diga que nao tem estoque se nenhum item do contexto operacional corresponder.',
-    'Quando todos os dados estiverem completos, use prepare_petshop_order para validar estoque/agenda, calcular o total e gerar o resumo final. Depois aguarde uma nova mensagem com confirmação explícita e só então use create_confirmed_petshop_order.',
-    'Ao chamar prepare_petshop_order, envie IDs reais do estoque ou agenda e todos os dados já confirmados. O código valida preços, estoque, horário e total; nunca calcule nem invente esses valores por conta própria. create_confirmed_petshop_order não recebe os itens novamente: ele confirma exatamente o pedido pendente validado anteriormente.',
-    'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmação final somente quando existe um pedido pendente preparado em mensagem anterior.',
-    'Depois de responder "Pedido confirmado", se o cliente enviar uma nota de 0 a 10, nao registre pedido de novo; apenas agradeca a avaliacao.',
-    'Faca uma pergunta operacional por vez. Produto: primeiro pagamento, depois entrega/retirada, depois endereco se for entrega. Servico: depois do horario, pergunte transporte do pet quando banho/tosa.',
-    'Se o cliente responder pagamento e entrega juntos em produto, aceite os dois e siga para endereco.',
-    'Entrega: informe explicitamente a taxa configurada antes do resumo final. Some a taxa ao total final. Nunca deixe a taxa de entrega fora do total.',
-    'Endereco de entrega minimo: rua/avenida, numero, bairro e ponto de referencia. Se faltar bairro ou referencia, peca o dado faltante antes de confirmar.',
-    '',
-    'Configuracao customizada deste tenant:',
-    customInstructions || 'Nenhuma instrucao customizada cadastrada.',
-    '',
-    'Contexto operacional do banco de dados:',
-    `Data e hora atual em Sao Paulo: ${localNow}`,
-    `Loja: ${storeName || 'Nao informado'}`,
-    `Telefone da loja: ${storePhone || 'Nao informado'}`,
-    `Endereco: ${storeLocation}`,
-    `Taxa de entrega: R$ ${Number(deliveryFee ?? DEFAULT_DELIVERY_FEE).toFixed(2)}`,
-    `Transporte do pet banho/tosa: use as opcoes MotoDog configuradas (${(Array.isArray(petTransportOptions) ? petTransportOptions : []).map((item) => `${item.label || item.id} R$ ${Number(item.fee || 0).toFixed(2)}`).join('; ') || `fallback R$ ${Number(petTransportFee ?? 20).toFixed(2)}`}).`,
-    '',
-    'Cliente atual:',
-    customerContext || 'Cliente nao carregado.',
-    '',
-    'Estoque relevante:',
-    stockContext || 'Nenhum produto confirmado para esta busca.',
-    '',
-    'Servicos ativos cadastrados:',
-    servicesContext || 'Nenhum servico ativo carregado.',
-    '',
-    'Agenda dos proximos dias:',
-    appointmentsContext || 'Agenda indisponivel no momento.',
-    '',
-    'Exemplos aprovados de conversa:',
-    examplesContext || 'Nenhum exemplo cadastrado para este contexto.',
-    'Use os exemplos apenas como modelo de estilo e fluxo. Nunca copie precos, estoque, horarios, nomes ou enderecos dos exemplos.',
-    '',
-    'Formato do resumo parcial:',
-    '**Pedido em andamento:**\n• Cliente: [NOME]\n• Pet: [NOME/ESPECIE/PORTE]\n• [PRODUTO/SERVICO]: [DETALHE]\n• Extra: [UPSELL OU "nao adicionado"]\n• Total parcial: R$ [VALOR]\n• Pagamento: aguardando\n• Entrega/retirada: aguardando',
-    '',
-    'Pagamento: apenas para produto, pergunte exatamente "Qual forma prefere? pix, dinheiro ou cartão?"',
-    'Entrega/retirada: pergunte exatamente "Será entrega ou retirada na loja?"',
-    'Se for entrega, antes do resumo final diga: "A taxa de entrega é R$ [TAXA]. O total com entrega fica R$ [TOTAL]."',
-    'Resumo final de entrega deve mostrar subtotal, taxa de entrega e total final. Termine perguntando "Confirma para separação?" ou, para servico, "Confirma o agendamento?"',
-    'Apos confirmar e registrar com a ferramenta, use a confirmacao do guardiao: pedido confirmado, comprovante Pix quando aplicavel, checklist de cadastro faltante e avaliacao 0-10.',
-  ].join('\n')
-}
-
 async function loadStoreSettings(supabase, moduleId, tenantId) {
   return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
       .from('settings')
-      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist,petbot_timezone,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity')
       .eq('module_id', moduleId)
 
     if (tenantId) {
@@ -858,7 +678,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
     }
 
     let result = await query.maybeSingle()
-    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist)/i.test(String(result.error.message || ''))) {
+    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist|petbot_timezone|petbot_business_hours|petbot_slot_interval_min|petbot_booking_lead_time_min|petbot_booking_capacity)/i.test(String(result.error.message || ''))) {
       let fallbackQuery = supabase
         .from('settings')
         .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
@@ -889,14 +709,21 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
       petTransportOptions: Array.isArray(data?.pet_transport_options) ? data.pet_transport_options : [],
       // Until the canary migration is applied, preserve the currently deployed
       // behavior instead of unexpectedly routing every conversation to a human.
-      autonomyMode: data?.petbot_autonomy_mode || 'enabled',
+      autonomyMode: data?.petbot_autonomy_mode || 'canary',
       autonomyAllowlist: Array.isArray(data?.petbot_autonomy_allowlist) ? data.petbot_autonomy_allowlist : [],
+      petbotTimezone: data?.petbot_timezone || 'America/Sao_Paulo',
+      petbotBusinessHours: data?.petbot_business_hours && typeof data.petbot_business_hours === 'object'
+        ? data.petbot_business_hours
+        : null,
+      petbotSlotIntervalMin: Number(data?.petbot_slot_interval_min || 30),
+      petbotBookingLeadTimeMin: Number(data?.petbot_booking_lead_time_min || 15),
+      petbotBookingCapacity: Number(data?.petbot_booking_capacity || 1),
     }
   })
 }
 
 function canPetbotCreateOrders(settings = {}, session = {}) {
-  const mode = cleanText(settings.autonomyMode).toLowerCase() || 'enabled'
+  const mode = cleanText(settings.autonomyMode).toLowerCase() || 'canary'
   if (mode === 'enabled') return true
   if (mode !== 'canary') return false
 
@@ -905,10 +732,6 @@ function canPetbotCreateOrders(settings = {}, session = {}) {
   return Boolean(phone) && allowlist
     .map((entry) => cleanText(entry).replace(/\D/g, ''))
     .includes(phone)
-}
-
-function canUsePetbotAgent(settings = {}, session = {}) {
-  return canPetbotCreateOrders(settings, session)
 }
 
 function isPetshopServicesSchemaError(error) {
@@ -955,7 +778,7 @@ async function loadPetshopServices(supabase, moduleId, tenantId) {
 
   let productQuery = supabase
     .from('products')
-    .select('id,name,category,description,price,active,bot_metadata,updated_at')
+    .select('id,name,category,description,species_target,price,active,bot_metadata,updated_at')
     .eq('module_id', moduleId)
     .eq('active', true)
     .limit(MAX_CACHED_PRODUCTS)
@@ -981,7 +804,7 @@ async function loadProductsByIds(supabase, moduleId, tenantId, productIds = []) 
 
   let query = supabase
     .from('products')
-    .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active')
+    .select('id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active, bot_metadata')
     .eq('module_id', moduleId)
     .in('id', ids)
 
@@ -992,7 +815,7 @@ async function loadProductsByIds(supabase, moduleId, tenantId, productIds = []) 
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
-  const selectColumns = 'id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active'
+  const selectColumns = 'id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active, bot_metadata'
   const loadCatalog = () => cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
     let query = supabase
       .from('products')
@@ -1038,16 +861,20 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
   return (catalog || []).slice(0, PRODUCT_CONTEXT_LIMIT)
 }
 
-async function queryAppointments(supabase, moduleId, tenantId) {
-  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-  const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
-  const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price, duration_min'
+async function queryAppointments(supabase, moduleId, tenantId, settings = {}) {
+  const schedule = normalizePetbotSchedulingSettings(settings)
+  const localNow = DateTime.now().setZone(schedule.timezone)
+  const today = localNow.toISODate()
+  const end = localNow.plus({ days: 14 }).toISODate()
+  const rangeStart = localNow.startOf('day').toUTC().toISO()
+  const rangeEnd = localNow.plus({ days: 14 }).endOf('day').toUTC().toISO()
+  const selectColumns = 'id, service_type, scheduled_at, service_date, start_time, status, price, duration_min, employee_id, groomer_id'
   let query = supabase
     .from('appointments')
     .select(selectColumns)
     .eq('module_id', moduleId)
-    .gte('scheduled_at', `${today}T00:00:00-03:00`)
-    .lte('scheduled_at', `${end}T23:59:59-03:00`)
+    .gte('scheduled_at', rangeStart)
+    .lte('scheduled_at', rangeEnd)
     .order('scheduled_at')
     .limit(1000)
 
@@ -1078,97 +905,19 @@ async function queryAppointments(supabase, moduleId, tenantId) {
   return normalizeAppointmentRows([...(data || []), ...byServiceDate])
 }
 
-async function loadAppointments(supabase, moduleId, tenantId) {
+async function loadAppointments(supabase, moduleId, tenantId, settings = {}) {
   return cachedLoad(
     appointmentsCache,
     scopeCacheKey(moduleId, tenantId),
     APPOINTMENTS_CACHE_MS,
-    () => queryAppointments(supabase, moduleId, tenantId),
+    () => queryAppointments(supabase, moduleId, tenantId, settings),
   )
 }
 
-async function loadAppointmentsFresh(supabase, moduleId, tenantId) {
-  const rows = await queryAppointments(supabase, moduleId, tenantId)
+async function loadAppointmentsFresh(supabase, moduleId, tenantId, settings = {}) {
+  const rows = await queryAppointments(supabase, moduleId, tenantId, settings)
   appointmentsCache.set(scopeCacheKey(moduleId, tenantId), { loadedAt: Date.now(), value: rows })
   return rows
-}
-
-function isBotExamplesSchemaError(error) {
-  const message = String(error?.message || '').toLowerCase()
-  return message.includes('bot_conversation_examples') && (
-    message.includes('does not exist')
-    || message.includes('schema cache')
-    || message.includes('relation')
-    || message.includes('column')
-  )
-}
-
-function scoreConversationExample(example, terms, intent) {
-  let score = 0
-  if (String(example.intent || '').toLowerCase() === String(intent || '').toLowerCase()) score += 12
-  if (String(example.intent || '').toLowerCase() === 'geral') score += 3
-
-  const haystack = [
-    example.intent,
-    example.stage,
-    example.user_message,
-    example.ideal_reply,
-    example.notes,
-    ...(Array.isArray(example.tags) ? example.tags : []),
-  ].join(' ').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
-
-  for (const term of terms) {
-    if (haystack.includes(term)) score += 2
-  }
-
-  return score
-}
-
-function buildExamplesContext(examples) {
-  if (!examples?.length) return ''
-
-  return examples
-    .slice(0, 3)
-    .map((example, index) => [
-      `Exemplo ${index + 1} (${example.intent || 'geral'} / ${example.stage || 'geral'}):`,
-      `Cliente: ${cleanText(example.user_message)}`,
-      `PetBot: ${cleanText(example.ideal_reply)}`,
-      cleanText(example.notes) ? `Notas: ${cleanText(example.notes)}` : null,
-    ].filter(Boolean).join('\n'))
-    .join('\n---\n')
-}
-
-async function loadConversationExamples(supabase, moduleId, tenantId, message, intent) {
-  let query = supabase
-    .from('bot_conversation_examples')
-    .select('intent,stage,user_message,ideal_reply,notes,tags,created_at')
-    .eq('module_id', moduleId)
-    .eq('active', true)
-    .limit(80)
-
-  if (tenantId) {
-    query = query.or(`tenant_id.eq.${tenantId},tenant_id.is.null`)
-  }
-
-  const { data, error } = await query
-  if (error) {
-    if (isBotExamplesSchemaError(error)) return ''
-    logger.warn('Conversation examples load failed', { tenantId, moduleId, error: error.message })
-    return ''
-  }
-
-  const terms = buildSearchTerms(message)
-  const ranked = (data || [])
-    .map((example) => ({
-      example,
-      score: scoreConversationExample(example, terms, intent),
-    }))
-    .sort((a, b) => b.score - a.score)
-    .filter((item) => item.score > 0)
-    .map((item) => item.example)
-
-  const selected = ranked.length > 0 ? ranked : (data || []).slice(0, 2)
-  return buildExamplesContext(selected)
 }
 
 async function loadRecentMessages(supabase, sessionId) {
@@ -1212,6 +961,108 @@ async function findClientByPhone(supabase, moduleId, tenantId, phone) {
   }
 
   return (data || []).find((client) => normalizePhone(client.phone) === digits) || null
+}
+
+async function loadCustomerPets(supabase, session) {
+  const phone = normalizePhone(session.customer_phone)
+  if (!phone) return []
+
+  try {
+    const { data, error } = await supabase
+      .from('pets')
+      .select('id,pet_name,species,breed,weight_kg,notes,updated_at')
+      .eq('tenant_id', session.tenant_id)
+      .eq('module_id', session.module_id)
+      .in('phone', [...new Set([phone, cleanText(session.customer_phone), `+${phone}`].filter(Boolean))])
+      .order('updated_at', { ascending: false })
+      .limit(20)
+
+    if (error) {
+      logger.warn('PetBot saved pets load failed', {
+        sessionId: session.id,
+        error: error.message,
+      })
+      return []
+    }
+
+    return (data || []).map((pet) => ({
+      id: cleanText(pet.id),
+      name: cleanText(pet.pet_name),
+      species: cleanText(pet.species),
+      breed: cleanText(pet.breed),
+      weight_kg: Number(pet.weight_kg || 0) || null,
+      notes: cleanText(pet.notes) || null,
+    })).filter((pet) => pet.name)
+  } catch (error) {
+    logger.warn('PetBot saved pets load failed', {
+      sessionId: session.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
+}
+
+async function loadCustomerSubscriptionBenefits(supabase, session, clientId) {
+  const resolvedClientId = cleanText(clientId)
+  if (!resolvedClientId) return []
+
+  try {
+    const { data, error } = await supabase
+      .from('client_subscriptions')
+      .select('id,services_used,started_at,subscription_plans(name,services)')
+      .eq('tenant_id', session.tenant_id)
+      .eq('module_id', session.module_id)
+      .eq('client_id', resolvedClientId)
+      .eq('status', 'active')
+      .order('started_at', { ascending: false })
+      .limit(10)
+
+    if (error) {
+      logger.warn('PetBot subscription benefits load failed', {
+        sessionId: session.id,
+        error: error.message,
+      })
+      return []
+    }
+
+    const benefits = []
+    for (const subscription of data || []) {
+      const plan = Array.isArray(subscription.subscription_plans)
+        ? subscription.subscription_plans[0]
+        : subscription.subscription_plans
+      const services = Array.isArray(plan?.services) ? plan.services : []
+      const usage = subscription.services_used && typeof subscription.services_used === 'object'
+        ? subscription.services_used
+        : {}
+      for (const service of services) {
+        const serviceType = cleanText(service?.service_type).toLowerCase()
+        const total = Math.max(0, Number(service?.qty_per_cycle || 0))
+        const used = Math.max(0, Number(usage?.[serviceType] || 0))
+        const remaining = Math.max(0, total - used)
+        if (!serviceType || remaining <= 0) continue
+        benefits.push({
+          subscription_id: cleanText(subscription.id),
+          plan_name: cleanText(plan?.name) || null,
+          service_type: serviceType,
+          remaining,
+          total,
+          used,
+        })
+      }
+    }
+
+    const byServiceType = new Map()
+    for (const benefit of benefits) {
+      if (!byServiceType.has(benefit.service_type)) byServiceType.set(benefit.service_type, benefit)
+    }
+    return [...byServiceType.values()]
+  } catch (error) {
+    logger.warn('PetBot subscription benefits load failed', {
+      sessionId: session.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return []
+  }
 }
 
 async function ensureCustomerProfile(supabase, session, patch = {}) {
@@ -1296,351 +1147,6 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
   }
 }
 
-async function createConfirmedPetshopOrder(supabase, session, settings, args = {}) {
-  const sessionContext = parseJsonObject(session.context)
-  if (sessionContext.last_sale_id) {
-    return {
-      sale_id: sessionContext.last_sale_id,
-      order_id: sessionContext.last_order_id || null,
-      appointment_id: sessionContext.last_appointment_id || null,
-      total: Number(sessionContext.last_total || 0),
-      payment_status: sessionContext.last_payment_status || null,
-      duplicated: true,
-    }
-  }
-
-  const customer = await ensureCustomerProfile(supabase, session, args)
-  const items = Array.isArray(args.items) ? args.items : []
-  if (!items.length) throw new Error('Pedido sem itens para registrar.')
-
-  if (args.order_type === 'produto' && !['pix', 'dinheiro', 'cartao'].includes(args.payment_method)) {
-    throw new Error('Forma de pagamento ausente ou invalida.')
-  }
-
-  const productIds = [...new Set(items.map((item) => cleanText(item.product_id)).filter(Boolean))]
-  let productMap = new Map()
-  let serviceDefinition = null
-  if (productIds.length > 0) {
-    const { data: productRows, error: productError } = await supabase
-      .from('products')
-      .select('id,name,price,stock_quantity,active')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .in('id', productIds)
-
-    if (productError) throw new Error(`Falha ao validar estoque: ${productError.message}`)
-    productMap = new Map((productRows || []).map((product) => [String(product.id), product]))
-  }
-
-  if (args.order_type !== 'produto') {
-    const serviceCode = cleanText(args.service_type)
-    if (!serviceCode) throw new Error('Servico exato do cadastro ausente.')
-    const { data: serviceRow, error: serviceError } = await supabase
-      .from('petshop_services')
-      .select('id,code,name,group_type,default_price,default_duration_min,active')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-      .eq('code', serviceCode)
-      .eq('active', true)
-      .limit(1)
-      .maybeSingle()
-    if (serviceError) throw new Error(`Falha ao validar servico: ${serviceError.message}`)
-    if (!serviceRow || Number(serviceRow.default_price || 0) <= 0) {
-      throw new Error('Servico nao encontrado, inativo ou sem preco valido.')
-    }
-    serviceDefinition = serviceRow
-    args.service_type = cleanText(serviceRow.code)
-    args.service_label = cleanText(serviceRow.name)
-    args.duration_min = Math.max(15, Number(serviceRow.default_duration_min || 60))
-  }
-
-  if (args.order_type === 'produto' && productIds.length !== items.length) {
-    throw new Error('Produto sem ID do estoque nao pode ser registrado.')
-  }
-
-  const normalizedItems = items.map((item) => {
-    const productId = cleanText(item.product_id)
-    const quantity = Math.max(1, Number(item.quantity || 1))
-    if (!productId) {
-      if (args.order_type === 'produto') throw new Error('Produto sem ID do estoque nao pode ser registrado.')
-      return {
-        product_id: null,
-        name: cleanText(serviceDefinition?.name) || cleanText(item.name) || cleanText(args.service_type) || 'Servico',
-        quantity,
-        unit_price: Number(serviceDefinition?.default_price || 0),
-        upsell: Boolean(item.upsell),
-      }
-    }
-
-    const product = productMap.get(productId)
-    if (!product || product.active === false) throw new Error(`Produto indisponivel no estoque: ${cleanText(item.name) || productId}`)
-    if (Number(product.stock_quantity || 0) < quantity) throw new Error(`Estoque insuficiente para ${product.name}.`)
-
-    return {
-      product_id: productId,
-      name: cleanText(product.name) || cleanText(item.name),
-      quantity,
-      unit_price: Number(product.price || 0),
-      upsell: Boolean(item.upsell),
-    }
-  })
-
-  if (args.order_type === 'produto') {
-    if (!['entrega', 'retirada'].includes(args.fulfillment_type)) {
-      throw new Error('Entrega ou retirada precisa estar definida antes de registrar.')
-    }
-    if (args.fulfillment_type === 'entrega') {
-      const deliveryAddress = cleanText(args.delivery_address)
-      const deliveryNeighborhood = cleanText(args.delivery_neighborhood)
-      const deliveryReference = cleanText(args.delivery_reference)
-      if (!deliveryAddress || !/\d/.test(deliveryAddress) || !deliveryNeighborhood || !deliveryReference) {
-        throw new Error('Endereco de entrega incompleto.')
-      }
-    }
-  }
-
-  let validatedAppointment = null
-  if (args.order_type !== 'produto') {
-    const appointmentId = cleanText(args.appointment_id)
-    const scheduledAt = cleanText(args.scheduled_at)
-    if (!appointmentId && !scheduledAt) throw new Error('Horario real da agenda ausente.')
-
-    let appointmentQuery = supabase
-      .from('appointments')
-      .select('id,service_type,scheduled_at,service_date,start_time,status,price,duration_min')
-      .eq('tenant_id', session.tenant_id)
-      .eq('module_id', session.module_id)
-
-    appointmentQuery = appointmentId ? appointmentQuery.eq('id', appointmentId) : appointmentQuery.eq('scheduled_at', scheduledAt)
-
-    const { data, error } = await appointmentQuery.limit(1).maybeSingle()
-    if (error) throw new Error(`Falha ao validar agenda: ${error.message}`)
-    if (!data) {
-      if (appointmentId) throw new Error('Horario nao encontrado na agenda.')
-      const durationMin = Math.max(15, Number(serviceDefinition?.default_duration_min || args.duration_min || 60))
-      if (await hasBusyAppointmentConflict(supabase, session, scheduledAt, durationMin)) {
-        throw new Error('Horario nao esta mais disponivel.')
-      }
-      validatedAppointment = {
-        id: null,
-        scheduled_at: scheduledAt,
-        service_type: cleanText(serviceDefinition?.code || args.service_type),
-        price: Number(serviceDefinition?.default_price || normalizedItems[0]?.unit_price || 0),
-        duration_min: durationMin,
-      }
-    } else {
-      const status = cleanText(data.status).toLowerCase()
-      if (!AVAILABLE_STATUSES.has(status)) throw new Error('Horario nao esta mais disponivel.')
-
-      validatedAppointment = data
-      args.scheduled_at = normalizeAppointmentRows([data])[0]?.scheduled_at || data.scheduled_at
-      args.service_type = cleanText(serviceDefinition?.code || args.service_type) || args.order_type
-      args.duration_min = Math.max(15, Number(serviceDefinition?.default_duration_min || data.duration_min || 60))
-      normalizedItems[0].unit_price = Number(serviceDefinition?.default_price || 0)
-      normalizedItems[0].name = cleanText(serviceDefinition?.name) || normalizedItems[0].name
-    }
-  }
-
-  const subtotal = normalizedItems.reduce((sum, item) => sum + Number(item.quantity || 1) * Number(item.unit_price || 0), 0)
-  const deliveryFee = args.fulfillment_type === 'entrega' ? Number(settings.deliveryFee ?? DEFAULT_DELIVERY_FEE) : 0
-  const transport = resolvePetTransportSelection({ args, settings, orderType: args.order_type })
-  if (!transport.ok) throw new Error('Opcao de transporte do pet invalida ou desatualizada.')
-  const serviceTransportFee = args.order_type === 'produto' ? 0 : Number(transport.fee || 0)
-  const total = subtotal + deliveryFee + serviceTransportFee
-  const paymentStatus = args.order_type === 'produto'
-    ? (args.payment_method === 'pix' ? 'aguardando_comprovante' : 'baixado')
-    : 'nao_aplicavel'
-  const orderType = args.order_type === 'produto' ? 'entrega' : 'servico'
-  const fulfillmentType = args.order_type === 'produto'
-    ? (args.fulfillment_type === 'retirada' ? 'balcao' : 'entrega')
-    : 'servico'
-  const inferredAddress = args.fulfillment_type === 'entrega'
-    ? await inferDeliveryAddressFromMessages(supabase, session.id)
-    : ''
-  const deliveryAddress = cleanText(args.delivery_address) || inferredAddress || customer.client.address || null
-  const deliveryNeighborhood = cleanText(args.delivery_neighborhood) || customer.client.neighborhood || null
-  const deliveryCity = cleanText(args.delivery_city) || customer.client.city || null
-  const deliveryLine = [deliveryAddress, deliveryNeighborhood, deliveryCity].filter(Boolean).join(' - ')
-  const resolvedItems = await resolveOrderItems(supabase, session, normalizedItems)
-  const itemSummary = resolvedItems
-    .map((item) => `${Number(item.quantity || 1)}x ${item.display_name} - R$ ${Number(item.subtotal || 0).toFixed(2)}`)
-    .join('; ')
-
-  const notes = [
-    `Origem: PetBot WhatsApp`,
-    `Sessao: ${session.id}`,
-    itemSummary ? `Itens: ${itemSummary}` : null,
-    deliveryLine ? `Endereco: ${deliveryLine}` : null,
-    cleanText(args.notes),
-    args.fulfillment_type === 'retirada' ? 'Retirada na loja' : null,
-    args.fulfillment_type === 'entrega' ? `Taxa de entrega: R$ ${deliveryFee.toFixed(2)}` : null,
-    cleanText(args.delivery_reference) ? `Referencia: ${cleanText(args.delivery_reference)}` : null,
-    cleanText(args.pet_name) ? `Pet: ${cleanText(args.pet_name)}` : null,
-    Number(args.weight_kg || 0) > 0 ? `Peso: ${Number(args.weight_kg)} kg` : null,
-    cleanText(args.coat_type) ? `Pelo: ${cleanText(args.coat_type)}` : null,
-    serviceTransportFee > 0 ? `Transporte do pet: R$ ${serviceTransportFee.toFixed(2)}` : null,
-    Number(args.change_for || 0) > 0 ? `Troco para R$ ${Number(args.change_for).toFixed(2)}` : null,
-  ].filter(Boolean).join(' | ')
-
-  const { data: sale, error: saleError } = await supabase
-    .from('sales')
-    .insert({
-      tenant_id: session.tenant_id,
-      module_id: session.module_id,
-      client_id: customer.client.id,
-      customer_name: cleanText(args.customer_name) || customer.client.name,
-      customer_phone: customer.phone,
-      payment_method: args.payment_method || null,
-      subtotal,
-      discount: 0,
-      total_price: total,
-      status: 'concluido',
-      payment_status: paymentStatus,
-      source: 'whatsapp',
-      fulfillment_type: fulfillmentType,
-      notes,
-    })
-    .select('id,total_price')
-    .single()
-
-  if (saleError) throw new Error(`Falha ao registrar venda: ${saleError.message}`)
-
-  const saleItems = resolvedItems.map(({ display_name, ...item }) => ({
-    ...item,
-    sale_id: sale.id,
-  }))
-
-  const { error: itemsError } = await supabase.from('sale_items').insert(saleItems)
-  if (itemsError) throw new Error(`Falha ao registrar itens: ${itemsError.message}`)
-
-  for (const item of saleItems) {
-    if (!item.product_id) continue
-    const { data: product } = await supabase
-      .from('products')
-      .select('stock_quantity')
-      .eq('id', item.product_id)
-      .maybeSingle()
-    if (!product) continue
-    const nextStock = Math.max(0, Number(product.stock_quantity || 0) - Number(item.quantity || 0))
-    await supabase.from('products').update({ stock_quantity: nextStock }).eq('id', item.product_id)
-  }
-
-  let appointment = null
-  if (args.order_type !== 'produto' && validatedAppointment) {
-    const payload = {
-      tenant_id: session.tenant_id,
-      module_id: session.module_id,
-      client_id: customer.client.id,
-      pet_id: null,
-      service_type: cleanText(serviceDefinition?.code || args.service_type) || args.order_type,
-      scheduled_at: cleanText(args.scheduled_at),
-      service_date: new Date(cleanText(args.scheduled_at)).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' }),
-      start_time: new Date(cleanText(args.scheduled_at)).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false, timeZone: 'America/Sao_Paulo' }),
-      duration_min: Math.max(15, Number(serviceDefinition?.default_duration_min || args.duration_min || 60)),
-      price: Number(serviceDefinition?.default_price || subtotal),
-      status: 'agendado',
-      source: 'whatsapp',
-      customer_name: cleanText(args.customer_name) || customer.client.name,
-      customer_phone: customer.phone,
-      description: notes,
-      notes,
-    }
-
-    const appointmentWrite = validatedAppointment.id
-      ? supabase.from('appointments').update(payload).eq('id', validatedAppointment.id)
-      : supabase.from('appointments').insert(payload)
-    const { data, error } = await appointmentWrite.select('id,scheduled_at').single()
-    if (error) {
-      await supabase.from('sales').delete().eq('id', sale.id)
-      throw new Error(`Falha ao registrar agendamento: ${error.message}`)
-    }
-    appointment = data
-  }
-
-  const orderPayload = {
-    tenant_id: session.tenant_id,
-    module_id: session.module_id,
-    sale_id: sale.id,
-    client_id: customer.client.id,
-    session_id: session.id,
-    idempotency_key: `petbot:${session.id}`,
-    source: 'whatsapp',
-    order_type: orderType,
-    status: orderType === 'servico' ? 'agendado' : 'separacao',
-    scheduled_for: appointment?.scheduled_at || null,
-    delivery_address: args.fulfillment_type === 'entrega' ? deliveryAddress : null,
-    delivery_neighborhood: args.fulfillment_type === 'entrega' ? deliveryNeighborhood : null,
-    delivery_city: args.fulfillment_type === 'entrega' ? deliveryCity : null,
-    contact_phone: customer.phone,
-    notes,
-  }
-
-  let { data: order, error: orderError } = await supabase
-    .from('service_delivery_orders')
-    .update(orderPayload)
-    .eq('sale_id', sale.id)
-    .select('id')
-    .maybeSingle()
-
-  if (!order && !orderError) {
-    const insertedOrder = await supabase
-      .from('service_delivery_orders')
-      .insert(orderPayload)
-      .select('id')
-      .single()
-    order = insertedOrder.data
-    orderError = insertedOrder.error
-  }
-
-  if (orderError && String(orderError.message || '').includes('duplicate')) {
-    const updatedOrder = await supabase
-      .from('service_delivery_orders')
-      .update({
-        status: orderPayload.status,
-        scheduled_for: orderPayload.scheduled_for,
-        delivery_address: orderPayload.delivery_address,
-        delivery_neighborhood: orderPayload.delivery_neighborhood,
-        delivery_city: orderPayload.delivery_city,
-        contact_phone: orderPayload.contact_phone,
-        notes: orderPayload.notes,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('sale_id', sale.id)
-      .select('id')
-      .maybeSingle()
-    order = updatedOrder.data
-    orderError = updatedOrder.error
-  }
-
-  if (orderError) {
-    throw new Error(`Falha ao registrar ordem operacional: ${orderError.message}`)
-  }
-
-  await supabase
-    .from('chat_sessions')
-    .update({
-      intent: 'pedido_confirmado',
-      context: {
-        ...(session.context || {}),
-        last_sale_id: sale.id,
-        last_order_id: order?.id || null,
-        last_appointment_id: appointment?.id || null,
-        last_total: total,
-        last_payment_status: paymentStatus,
-      },
-      last_message_at: new Date().toISOString(),
-    })
-    .eq('id', session.id)
-
-  return {
-    sale_id: sale.id,
-    order_id: order?.id || null,
-    appointment_id: appointment?.id || null,
-    total,
-    payment_status: paymentStatus,
-  }
-}
-
 function buildPetbotOrderTransactionPayload(session, customer, settings, args = {}) {
   const orderType = cleanText(args.order_type) || 'produto'
   const transport = resolvePetTransportSelection({ args, settings, orderType })
@@ -1650,6 +1156,9 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     session_id: session.id,
     tenant_id: session.tenant_id,
     module_id: session.module_id,
+    idempotency_key: cleanText(args.idempotency_key),
+    timezone: cleanText(settings.petbotTimezone) || 'America/Sao_Paulo',
+    booking_capacity: Math.max(1, Number(settings.petbotBookingCapacity || 1) || 1),
     client_id: customer.client?.id || null,
     customer_name: cleanText(args.customer_name) || cleanText(customer.client?.name) || session.customer_name || 'Cliente',
     customer_phone: customer.phone || session.customer_phone || null,
@@ -1680,8 +1189,10 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     expected_total: Number(args.total || 0),
     appointment_id: cleanText(args.appointment_id),
     scheduled_at: cleanText(args.scheduled_at),
+    service_product_id: cleanText(args.service_product_id),
     service_type: cleanText(args.service_type),
     service_label: cleanText(args.service_label),
+    service_kind: cleanText(args.service_kind),
     duration_min: Number(args.duration_min || 60),
     change_for: Number(args.change_for || 0),
     notes: cleanText(args.notes),
@@ -1703,19 +1214,9 @@ function isMissingPetbotTransactionRpcError(error) {
 }
 
 async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, args = {}) {
-  const sessionContext = parseJsonObject(session.context)
-  if (sessionContext.last_sale_id) {
-    return {
-      sale_id: sessionContext.last_sale_id,
-      order_id: sessionContext.last_order_id || null,
-      appointment_id: sessionContext.last_appointment_id || null,
-      total: Number(sessionContext.last_total || 0),
-      duplicated: true,
-    }
-  }
-
   const customer = await ensureCustomerProfile(supabase, session, args)
   const payload = buildPetbotOrderTransactionPayload(session, customer, settings, args)
+  if (!payload.idempotency_key) throw new Error('Chave idempotente do pedido ausente.')
   if (!payload.items.length) throw new Error('Pedido sem itens para registrar.')
   if (payload.order_type === 'produto' && !['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)) {
     throw new Error('Forma de pagamento ausente ou invalida.')
@@ -1727,7 +1228,7 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
 
   if (error) {
     if (isMissingPetbotTransactionRpcError(error)) {
-      return createConfirmedPetshopOrder(supabase, session, settings, args)
+      throw new Error('A migracao transacional do PetBot nao foi aplicada no banco de producao.')
     }
     throw new Error(`Falha ao registrar pedido transacional: ${error.message}`)
   }
@@ -1738,6 +1239,8 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
     appointment_id: cleanText(data?.appointment_id) || null,
     total: Number(data?.total || payload.expected_total || 0),
     payment_status: cleanText(data?.payment_status),
+    subscription_benefit_used: Boolean(data?.subscription_benefit_used),
+    subscription_plan_name: cleanText(data?.subscription_plan_name) || null,
     duplicated: Boolean(data?.duplicated),
   }
 }
@@ -1758,67 +1261,6 @@ async function saveSatisfactionRating(supabase, sessionId, rating) {
   if (error) {
     throw new HttpError(500, 'Unable to save satisfaction rating.')
   }
-}
-
-async function resolveOrderItems(supabase, session, items) {
-  const rows = []
-
-  for (const item of items) {
-    let productId = isUuid(item.product_id) ? cleanText(item.product_id) : null
-    let productName = cleanText(item.name)
-
-    if (!productId && productName) {
-      const { data: product } = await supabase
-        .from('products')
-        .select('id,name')
-        .eq('module_id', session.module_id)
-        .eq('tenant_id', session.tenant_id)
-        .ilike('name', productName)
-        .limit(1)
-        .maybeSingle()
-
-      if (product?.id) {
-        productId = product.id
-        productName ||= product.name
-      }
-    }
-
-    const quantity = Number(item.quantity || 1)
-    const unitPrice = Number(item.unit_price || 0)
-    rows.push({
-      tenant_id: session.tenant_id,
-      sale_id: null,
-      product_id: productId,
-      quantity,
-      unit_price: unitPrice,
-      subtotal: quantity * unitPrice,
-      upsell: Boolean(item.upsell),
-      display_name: productName || 'Produto nao identificado',
-    })
-  }
-
-  return rows
-}
-
-async function inferDeliveryAddressFromMessages(supabase, sessionId) {
-  const { data } = await supabase
-    .from('chat_messages')
-    .select('role, content')
-    .eq('session_id', sessionId)
-    .order('sent_at', { ascending: false })
-    .limit(20)
-
-  const candidates = (data || [])
-    .filter((message) => message.role === 'user')
-    .map((message) => cleanText(message.content))
-    .filter((text) => {
-      const normalized = normalizeSearchText(text)
-      return text.length >= 10
-        && /\d/.test(text)
-        && /\b(rua|r\.|avenida|av\.|travessa|alameda|rodovia|estrada|bairro|ap|apto|apartamento|casa|numero|nº|n )\b/.test(normalized)
-    })
-
-  return candidates[0] || ''
 }
 
 async function loadBotRuntimeConfig(supabase, tenantId, moduleId) {
@@ -1847,35 +1289,47 @@ async function loadBotRuntimeConfig(supabase, tenantId, moduleId) {
 }
 
 async function callOpenAIWithTimeout(params, timeoutMs) {
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs)
+  const maxRetries = Math.max(0, Number(serverEnv.openAiMaxRetries || 0))
+  let lastError = null
 
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${serverEnv.openAiApiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(params),
-    })
+  for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
 
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) {
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        signal: controller.signal,
+        headers: {
+          Authorization: `Bearer ${serverEnv.openAiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(params),
+      })
+
+      const payload = await response.json().catch(() => ({}))
+      if (response.ok) return payload
+
       const detail = payload?.error?.message || `HTTP ${response.status}`
-      throw new HttpError(502, `OpenAI request failed: ${detail}`)
+      const retryable = [408, 409, 429].includes(response.status) || response.status >= 500
+      const error = new HttpError(502, `OpenAI request failed: ${detail}`)
+      if (!retryable || attempt >= maxRetries) throw error
+      lastError = error
+    } catch (error) {
+      const timedOut = error?.name === 'AbortError'
+      const normalizedError = timedOut
+        ? new HttpError(504, 'AI response timed out. Please try again.')
+        : error
+      if ((!timedOut && error instanceof HttpError) || attempt >= maxRetries) throw normalizedError
+      lastError = normalizedError
+    } finally {
+      clearTimeout(timer)
     }
 
-    return payload
-  } catch (error) {
-    if (error.name === 'AbortError') {
-      throw new HttpError(504, 'AI response timed out. Please try again.')
-    }
-    throw error
-  } finally {
-    clearTimeout(timer)
+    await new Promise((resolve) => setTimeout(resolve, 250 * (2 ** attempt)))
   }
+
+  throw lastError || new HttpError(502, 'OpenAI request failed.')
 }
 
 function normalizeDashboardUserMessages(message, options = {}) {
@@ -1966,30 +1420,6 @@ function getPendingAgentOrder(context) {
   return pending
 }
 
-function latestSuccessfulTool(toolRuns, name) {
-  for (let index = (toolRuns || []).length - 1; index >= 0; index -= 1) {
-    const run = toolRuns[index]
-    if (run?.name === name && run?.result?.ok !== false) return run
-  }
-  return null
-}
-
-function latestToolRun(toolRuns, name) {
-  for (let index = (toolRuns || []).length - 1; index >= 0; index -= 1) {
-    const run = toolRuns[index]
-    if (run?.name === name) return run
-  }
-  return null
-}
-
-function replyClaimsServiceOperationalData(reply = '') {
-  const text = cleanText(reply)
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-  return /r\$\s*\d/.test(reply)
-    || /horario.*(disponivel|livre|ocupado|indisponivel)|esta disponivel|temos horario|nao temos horario|sem horario|valor e|custa|duracao|dura.*(?:min|hora)|leva.*(?:min|hora)/.test(text)
-}
 
 async function respondWithPetbotAgent({
   supabase,
@@ -1997,7 +1427,7 @@ async function respondWithPetbotAgent({
   trimmedMessage,
   options,
   session,
-  sessionForGuard,
+  sessionForAgent,
   moduleId,
   intent,
   history,
@@ -2010,11 +1440,9 @@ async function respondWithPetbotAgent({
   appointments,
   customInstructions,
 }) {
-  const pendingAtTurnStart = getPendingAgentOrder(sessionForGuard.context)
-  const previousAgentContext = parseJsonObject(sessionForGuard.context)?.petbot_agent || {}
-  const serviceFacts = extractExplicitPetbotServiceFacts({
-    history,
-    message: trimmedMessage,
+  const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
+  const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
+  let serviceFacts = mergeInterpretedPetbotServiceFacts({
     interpretation: llmInterpretation || {},
     previousFacts: previousAgentContext.facts || previousAgentContext.explicit_facts || {},
   })
@@ -2023,95 +1451,142 @@ async function respondWithPetbotAgent({
   let needsHuman = false
   let handoffTarget = null
   let updatedCustomerName = cleanText(session.customer_name)
+  let activeCustomer = customer
   const mediaMessages = []
   let liveProducts = Array.isArray(products) ? products : []
   let liveServices = Array.isArray(services) ? services : []
   let liveAppointments = Array.isArray(appointments) ? appointments : []
+  let liveSubscriptionBenefits = []
+  let resolvedServiceThisTurn = null
 
-  const examplesContext = await loadConversationExamples(
-    supabase,
-    moduleId,
-    session.tenant_id,
-    trimmedMessage,
-    intent,
-  )
+  const mergeServiceFactsFromToolArgs = (toolArgs = {}) => {
+    serviceFacts = mergeInterpretedPetbotServiceFacts({
+      interpretation: toolArgs,
+      previousFacts: serviceFacts,
+    })
+    return groundPetbotServiceArgs(toolArgs, serviceFacts)
+  }
 
-  const basePrompt = buildSystemPrompt({
-    ...storeSettings,
-    customerContext: buildCustomerContext(customer),
-    stockContext: buildStockContext(liveProducts),
-    servicesContext: buildServicesContext(liveServices),
-    appointmentsContext: buildAppointmentsContext(liveAppointments),
-    examplesContext,
-    botPrompt: customInstructions,
-  })
-  const pendingContext = pendingAtTurnStart
-    ? [
-      'Existe um pedido pendente preparado em mensagem anterior.',
-      `ID pendente: ${pendingAtTurnStart.id}`,
-      pendingAtTurnStart.summary,
-      'Se a mensagem atual for uma confirmação explícita e sem alteração, chame create_confirmed_petshop_order.',
-      'Se o cliente pedir qualquer alteração, prepare um novo pedido e não confirme o anterior.',
-    ].join('\n')
-    : [
-      'Não existe pedido pendente preparado.',
-      'Mesmo que o cliente diga para finalizar junto com os dados iniciais, primeiro prepare e mostre o resumo final; a confirmação deve ocorrer em uma mensagem posterior.',
-    ].join('\n')
+  const interpretedProfilePatch = {
+    customer_name: cleanText(llmInterpretation?.customer_name),
+    pet_name: cleanText(serviceFacts.pet_name),
+    species: cleanText(serviceFacts.species),
+    size: cleanText(llmInterpretation?.size),
+    breed: cleanText(serviceFacts.breed),
+    weight_kg: Number(serviceFacts.weight_kg || 0) || null,
+    coat_type: cleanText(serviceFacts.coat_type),
+    symptom: cleanText(llmInterpretation?.symptom),
+    address: cleanText(llmInterpretation?.delivery_address),
+    neighborhood: cleanText(llmInterpretation?.neighborhood),
+    city: cleanText(llmInterpretation?.city),
+  }
+  if (Object.values(interpretedProfilePatch).some(Boolean)) {
+    try {
+      const persistedCustomer = await ensureCustomerProfile(supabase, sessionForAgent, interpretedProfilePatch)
+      activeCustomer = persistedCustomer
+      updatedCustomerName = cleanText(persistedCustomer.client?.name) || updatedCustomerName
+    } catch (error) {
+      logger.warn('PetBot fact persistence failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
 
-  const systemPrompt = [
-    basePrompt,
-    '',
-    'Protocolo do agente:',
-    '1. Converse naturalmente e escolha a próxima ação.',
-    '2. Use update_customer_profile quando houver dados novos explícitos.',
-    '3. Assim que identificar banho/tosa ou veterinária, use check_petshop_availability para resolver o serviço exato do catálogo comercial em Estoque > Serviços. Passe os fatos interpretados da conversa; a ferramenta informará apenas quais dados ainda faltam e quais dados operacionais foram validados.',
-    '4. Em banho/tosa, a classificação depende de raça e peso aproximado. Se faltar um deles, formule uma pergunta natural para obter somente o que falta. Se os dois estiverem presentes, não volte a perguntar raça, peso, porte ou pelagem. A Classificação do PetBot resolve a pelagem. Você escolhe livremente a redação, preservando saudação, contexto e tom humano.',
-    '5. Preço, duração, serviço e agenda sempre vêm das ferramentas e do cadastro real. Nunca exponha regras internas, nomes de ferramentas ou validações ao cliente.',
-    '6. Para produto, use search_petshop_products quando precisar confirmar estoque, preço ou opções.',
-    '7. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
-    '8. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
-    '9. Use handoff_to_human quando não puder concluir com dados reais ou houver risco veterinário.',
-    '',
-    'Fatos estruturados interpretados da conversa:',
-    JSON.stringify({
+  const [savedPets, subscriptionBenefits] = await Promise.all([
+    loadCustomerPets(supabase, sessionForAgent),
+    loadCustomerSubscriptionBenefits(
+      supabase,
+      sessionForAgent,
+      activeCustomer?.client?.id || sessionForAgent.client_id,
+    ),
+  ])
+  liveSubscriptionBenefits = subscriptionBenefits
+
+  const systemPrompt = buildPetbotAgentV3Prompt({
+    storeName: storeSettings.storeName,
+    storePhone: storeSettings.storePhone,
+    storeLocation: [storeSettings.storeAddress, storeSettings.storeNeighborhood, storeSettings.storeCity].filter(Boolean).join(' - '),
+    customer: {
+      name: cleanText(updatedCustomerName) || null,
+      known: Boolean(activeCustomer?.isKnown),
+      phone: cleanText(activeCustomer?.phone || session.customer_phone) || null,
+      address: cleanText(activeCustomer?.client?.address) || null,
+      neighborhood: cleanText(activeCustomer?.client?.neighborhood) || null,
+      city: cleanText(activeCustomer?.client?.city) || null,
+      saved_pet: {
+        name: cleanText(activeCustomer?.client?.details?.pet_name) || null,
+        species: cleanText(activeCustomer?.client?.details?.species) || null,
+        breed: cleanText(activeCustomer?.client?.details?.breed) || null,
+        weight_kg: Number(activeCustomer?.client?.details?.weight_kg || 0) || null,
+        coat_type: cleanText(activeCustomer?.client?.details?.coat_type) || null,
+        size: cleanText(activeCustomer?.client?.details?.size) || null,
+      },
+      saved_pets: savedPets,
+      subscription_benefits: subscriptionBenefits,
+    },
+    facts: {
+      customer_name: cleanText(llmInterpretation?.customer_name) || cleanText(updatedCustomerName) || null,
       pet_name: serviceFacts.pet_name,
       species: serviceFacts.species,
       breed: serviceFacts.breed,
       weight_kg: serviceFacts.weight_kg,
       weight_label: serviceFacts.weight_label,
+      weight_estimated: serviceFacts.weight_estimated,
       coat_type: serviceFacts.coat_type,
-    }),
-    'Use esses fatos como memória da conversa. Não os exponha como JSON e não pergunte novamente um campo já preenchido.',
-    '',
-    'Estado transacional desta conversa:',
-    pendingContext,
-  ].join('\n')
+      intent: cleanText(llmInterpretation?.intent) || null,
+      service_type: cleanText(llmInterpretation?.service_type) || null,
+      service_date: cleanText(llmInterpretation?.service_date) || null,
+      service_time: cleanText(llmInterpretation?.service_preferred_time || llmInterpretation?.service_time_preference) || null,
+      product_kind: cleanText(llmInterpretation?.product_kind) || null,
+      age_category: cleanText(llmInterpretation?.age_category) || null,
+      brand: cleanText(llmInterpretation?.brand) || null,
+      package_kg: Number(llmInterpretation?.package_kg || 0) || null,
+    },
+    pendingOrder: pendingAtTurnStart,
+    customInstructions,
+    timezone: storeSettings.petbotTimezone,
+  })
 
   const executeTool = async (toolCall) => {
     const name = cleanText(toolCall?.function?.name)
     const args = parseAgentToolArguments(toolCall)
 
-    if (name === 'update_customer_profile') {
-      const groundedProfileArgs = groundPetbotServiceArgs(args, serviceFacts)
-      const updatedCustomer = await ensureCustomerProfile(supabase, sessionForGuard, groundedProfileArgs)
-      updatedCustomerName = cleanText(args.customer_name) || cleanText(updatedCustomer.client?.name) || updatedCustomerName
-      return {
-        ok: true,
-        action: name,
-        client_id: updatedCustomer.client?.id || null,
-        name_confirmed: Boolean(updatedCustomer.isKnown),
-      }
-    }
-
     if (name === 'search_petshop_products') {
-      const query = cleanText(args.query)
-      if (!query) return { ok: false, action: name, error: 'Informe o produto que deve ser pesquisado.' }
-      const found = await loadProducts(supabase, moduleId, session.tenant_id, query)
+      const query = [
+        cleanText(args.query),
+        cleanText(args.species),
+        cleanText(args.age_category),
+        cleanText(args.size),
+        cleanText(args.brand),
+        Number(args.package_kg || 0) > 0 ? `${Number(args.package_kg)} kg` : '',
+      ].filter(Boolean).join(' ')
+      if (!query) return { ok: false, action: name, status: 'invalid_input', error: 'missing_query' }
+      const searched = (await loadProducts(supabase, moduleId, session.tenant_id, query))
+        .filter(isSellableProduct)
+      const refreshed = await loadProductsByIds(
+        supabase,
+        moduleId,
+        session.tenant_id,
+        searched.map((product) => product.id),
+      )
+      const found = refreshed.filter(isSellableProduct)
       liveProducts = mergeProductsById(liveProducts, found)
+      const known = {
+        ...normalizeProductQueryFacts(llmInterpretation || {}, serviceFacts),
+        species: cleanText(args.species) || normalizeProductQueryFacts(llmInterpretation || {}, serviceFacts).species,
+        age_category: cleanText(args.age_category) || cleanText(llmInterpretation?.age_category),
+        size: cleanText(args.size) || cleanText(llmInterpretation?.size),
+        brand: cleanText(args.brand) || cleanText(llmInterpretation?.brand),
+        package_kg: Number(args.package_kg || llmInterpretation?.package_kg || 0) || null,
+      }
+      const differentiation = analyzeProductDifferentiation(found.slice(0, 12), known)
       return {
-        ok: true,
+        ok: found.length > 0,
         action: name,
         source: 'products',
+        status: differentiation.status,
+        differentiators: differentiation.differentiators,
         products: found.slice(0, 12).map((product) => ({
           id: product.id,
           name: product.name,
@@ -2121,45 +1596,105 @@ async function respondWithPetbotAgent({
           stock_quantity: Number(product.stock_quantity || 0),
           image_available: Boolean(cleanText(product.image_url)),
         })),
-        instruction: found.length
-          ? 'Responda usando somente estes produtos, preços e estoques.'
-          : 'Nenhum produto correspondente foi encontrado no estoque ativo.',
+      }
+    }
+
+    if (name === 'resolve_petshop_service') {
+      const groundedArgs = mergeServiceFactsFromToolArgs(args)
+      liveServices = await loadPetshopServices(supabase, moduleId, session.tenant_id)
+      const resolution = resolvePetshopService({
+        serviceQuery: args.service_query || llmInterpretation?.service_type || args.order_type,
+        orderType: args.order_type || llmInterpretation?.intent,
+        services: liveServices,
+        species: groundedArgs.species,
+        breed: groundedArgs.breed,
+        weightKg: groundedArgs.weight_kg,
+        coatType: groundedArgs.coat_type,
+      })
+      const subscriptionBenefit = resolution.ok && resolution.status === 'resolved'
+        ? findPetshopSubscriptionBenefit(resolution.service, liveSubscriptionBenefits)
+        : null
+      const resolvedService = resolution.ok && resolution.status === 'resolved'
+        ? {
+          ...resolution.service,
+          regular_price: Number(resolution.service.price || 0),
+          price: subscriptionBenefit ? 0 : Number(resolution.service.price || 0),
+          subscription_benefit: subscriptionBenefit,
+        }
+        : null
+      resolvedServiceThisTurn = resolvedService
+      return {
+        action: name,
+        ...resolution,
+        ...(resolvedService ? { service: resolvedService, candidates: [resolvedService], available_services: [resolvedService] } : {}),
       }
     }
 
     if (name === 'check_petshop_availability') {
-      const groundedArgs = groundPetbotServiceArgs(args, serviceFacts)
+      const requestedServiceId = cleanText(args.service_id)
+      const allowedServiceIds = new Set([
+        cleanText(resolvedServiceThisTurn?.id),
+        cleanText(resolvedServiceThisTurn?.code),
+        cleanText(resolvedServiceThisTurn?.product_id),
+      ].filter(Boolean))
+      if (!resolvedServiceThisTurn || !allowedServiceIds.has(requestedServiceId)) {
+        return {
+          ok: false,
+          action: name,
+          status: 'needs_service_resolution',
+          error: 'Resolva o serviço exato com os fatos do cliente antes de consultar a agenda.',
+        }
+      }
       const [freshServices, freshAppointments] = await Promise.all([
         loadPetshopServices(supabase, moduleId, session.tenant_id),
-        loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
+        loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings),
       ])
       liveServices = freshServices
       liveAppointments = freshAppointments
+      const availability = buildServiceAvailability({
+        serviceQuery: args.service_id,
+        orderType: args.order_type || llmInterpretation?.intent,
+        date: args.date,
+        preferredTime: args.preferred_time,
+        period: args.period,
+        services: liveServices,
+        appointments: liveAppointments,
+        settings: storeSettings,
+        requirePetIdentity: false,
+        requireServiceClassification: false,
+      })
+      const subscriptionBenefit = availability?.service
+        ? findPetshopSubscriptionBenefit(availability.service, liveSubscriptionBenefits)
+        : null
+      const decoratePrice = (entry = {}) => ({
+        ...entry,
+        regular_price: Number(entry.price || availability?.service?.price || 0),
+        price: subscriptionBenefit ? 0 : Number(entry.price || 0),
+        subscription_benefit: subscriptionBenefit,
+      })
       return {
         action: name,
-        ...buildServiceAvailability({
-          serviceQuery: args.service_query || llmInterpretation?.service_type,
-          orderType: args.order_type || llmInterpretation?.intent,
-          petName: groundedArgs.pet_name,
-          species: groundedArgs.species,
-          breed: groundedArgs.breed,
-          weightKg: groundedArgs.weight_kg,
-          coatType: groundedArgs.coat_type,
-          date: args.date,
-          preferredTime: args.preferred_time,
-          period: args.period,
-          services: liveServices,
-          appointments: liveAppointments,
-          requirePetIdentity: false,
-          requireServiceClassification: true,
-        }),
+        ...availability,
+        ...(availability?.service ? { service: decoratePrice(availability.service) } : {}),
+        available_slots: (availability?.available_slots || []).map(decoratePrice),
+      }
+    }
+
+    if (name === 'get_petshop_transport_options') {
+      const options = listPetTransportOptions(storeSettings)
+      return {
+        ok: true,
+        action: name,
+        status: options.length ? 'available' : 'unavailable',
+        no_transport_allowed: true,
+        options,
       }
     }
 
     if (name === 'prepare_petshop_order') {
       const effectiveArgs = args.order_type === 'produto'
         ? args
-        : groundPetbotServiceArgs(args, serviceFacts)
+        : mergeServiceFactsFromToolArgs(args)
       if (effectiveArgs.order_type === 'produto') {
         const productIds = (Array.isArray(effectiveArgs.items) ? effectiveArgs.items : [])
           .map((item) => cleanText(item.product_id))
@@ -2169,7 +1704,7 @@ async function respondWithPetbotAgent({
       } else {
         const [freshServices, freshAppointments] = await Promise.all([
           loadPetshopServices(supabase, moduleId, session.tenant_id),
-          loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
+          loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings),
         ])
         liveServices = freshServices
         liveAppointments = freshAppointments
@@ -2180,14 +1715,15 @@ async function respondWithPetbotAgent({
         products: liveProducts,
         services: liveServices,
         appointments: liveAppointments,
+        subscriptionBenefits: liveSubscriptionBenefits,
         settings: storeSettings,
       })
       if (!prepared.ok) {
         return {
           ok: false,
           action: name,
-          missing: prepared.missing || [],
-          instruction: 'Pergunte apenas o próximo dado ausente. Não invente nem confirme o pedido.',
+          status: 'needs_input',
+          missing_fields: prepared.missing || [],
         }
       }
 
@@ -2201,8 +1737,9 @@ async function respondWithPetbotAgent({
         ok: true,
         action: name,
         pending_order_id: pendingOrder.id,
+        status: 'prepared',
         summary: pendingOrder.summary,
-        instruction: 'Mostre exatamente este resumo e aguarde confirmação em uma nova mensagem.',
+        order: pendingOrder.order,
       }
     }
 
@@ -2221,7 +1758,7 @@ async function respondWithPetbotAgent({
           error: 'Não existe pedido preparado em mensagem anterior. Prepare e apresente o resumo primeiro.',
         }
       }
-      if (!canPetbotCreateOrders(storeSettings, sessionForGuard)) {
+      if (!canPetbotCreateOrders(storeSettings, sessionForAgent)) {
         needsHuman = true
         handoffTarget = 'atendente'
         return {
@@ -2244,10 +1781,15 @@ async function respondWithPetbotAgent({
       } else {
         ;[refreshedServices, refreshedAppointments] = await Promise.all([
           loadPetshopServices(supabase, moduleId, session.tenant_id),
-          loadAppointmentsFresh(supabase, moduleId, session.tenant_id),
+          loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings),
         ])
         liveServices = refreshedServices
         liveAppointments = refreshedAppointments
+        liveSubscriptionBenefits = await loadCustomerSubscriptionBenefits(
+          supabase,
+          sessionForAgent,
+          activeCustomer?.client?.id || sessionForAgent.client_id,
+        )
       }
 
       const groundedPendingOrder = pendingAtTurnStart.order.order_type === 'produto'
@@ -2258,15 +1800,16 @@ async function respondWithPetbotAgent({
         products: pendingAtTurnStart.order.order_type === 'produto' ? refreshedProducts : liveProducts,
         services: refreshedServices,
         appointments: refreshedAppointments,
+        subscriptionBenefits: liveSubscriptionBenefits,
         settings: storeSettings,
       })
       if (!revalidated.ok) {
         return {
           ok: false,
           action: name,
-          error: 'Os dados operacionais mudaram antes da confirmação.',
-          missing: revalidated.missing || [],
-          instruction: 'Explique que o pedido precisa ser atualizado e pergunte apenas o próximo dado necessário.',
+          status: 'needs_refresh',
+          reason: 'operational_data_changed',
+          missing_fields: revalidated.missing || [],
         }
       }
 
@@ -2280,30 +1823,48 @@ async function respondWithPetbotAgent({
         return {
           ok: false,
           action: name,
+          status: 'changed',
           changed: true,
+          pending_order_id: pendingOrder.id,
           summary: revalidated.summary,
-          instruction: 'Preço, estoque, agenda ou transporte mudou. Mostre exatamente o novo resumo e aguarde uma nova confirmação.',
+          order: revalidated.order,
         }
       }
 
       orderResult = await createConfirmedPetshopOrderViaRpc(
         supabase,
-        sessionForGuard,
+        sessionForAgent,
         storeSettings,
-        revalidated.order,
+        {
+          ...revalidated.order,
+          idempotency_key: `${sessionId}:${pendingAtTurnStart.id}`,
+        },
       )
       pendingOrder = null
       return {
         ok: true,
         action: name,
+        status: orderResult.duplicated ? 'already_committed' : 'committed',
         sale_id: orderResult.sale_id,
         order_id: orderResult.order_id,
         appointment_id: orderResult.appointment_id,
         total: orderResult.total,
         payment_status: orderResult.payment_status,
+        subscription_benefit_used: Boolean(orderResult.subscription_benefit_used),
+        subscription_plan_name: orderResult.subscription_plan_name || null,
         pix_key: pendingAtTurnStart.order.payment_method === 'pix' ? storeSettings.pixKey || null : null,
         pix_holder_name: pendingAtTurnStart.order.payment_method === 'pix' ? storeSettings.pixHolderName || null : null,
-        instruction: 'Confirme ao cliente que foi registrado e peça uma avaliação de 0 a 10.',
+      }
+    }
+
+    if (name === 'cancel_pending_petshop_order') {
+      const hadPendingOrder = Boolean(pendingOrder)
+      pendingOrder = null
+      return {
+        ok: true,
+        action: name,
+        status: hadPendingOrder ? 'cancelled' : 'nothing_to_cancel',
+        reason: cleanText(args.reason).slice(0, 240) || null,
       }
     }
 
@@ -2352,50 +1913,60 @@ async function respondWithPetbotAgent({
     callModel: (params) => callOpenAIWithTimeout(params, serverEnv.openAiTimeoutMs),
     executeTool,
     initialToolChoice,
+    responseFormat: PETBOT_AGENT_REPLY_FORMAT,
+    parseReply: parsePetbotAgentReply,
     validateReply: ({ reply: draftReply, toolRuns }) => {
-      if (!replyClaimsServiceOperationalData(draftReply)) return { ok: true }
-
-      const hasValidatedOperationalData = Boolean(
-        latestSuccessfulTool(toolRuns, 'check_petshop_availability')
-        || latestSuccessfulTool(toolRuns, 'prepare_petshop_order')
-        || orderResult
-        || pendingAtTurnStart,
-      )
-      if (hasValidatedOperationalData) return { ok: true }
-
-      const availability = latestToolRun(toolRuns, 'check_petshop_availability')
-      const blockedConfirmation = [...(toolRuns || [])]
-        .reverse()
-        .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.ok === false)
-      const missing = availability?.result?.required_fields
-        || blockedConfirmation?.result?.missing
-        || []
+      const validation = validatePetbotOperationalReply({
+        reply: draftReply,
+        toolRuns,
+        pendingOrder,
+        orderResult,
+        timezone: storeSettings.petbotTimezone,
+      })
+      if (validation.ok) return { ok: true }
 
       return {
         ok: false,
         instruction: [
-          'A resposta anterior afirmou preço, serviço ou disponibilidade sem validação operacional bem-sucedida.',
-          missing.length ? `Dados ainda ausentes: ${missing.join(', ')}.` : 'Ainda faltam dados para consultar o catálogo ou a agenda.',
-          'Reescreva a resposta no tom natural da conversa. Faça no máximo uma pergunta útil e não mencione regras internas, validações ou ferramentas.',
+          'A resposta anterior contém dados operacionais que não constam nos resultados confiáveis desta conversa.',
+          `Afirmações inválidas: ${validation.problems.join('; ')}.`,
+          'Reescreva naturalmente. Use somente os dados retornados pelas ferramentas ou faça uma pergunta útil para obter o próximo fato necessário.',
+          'Não mencione validações, ferramentas, regras internas ou este aviso.',
         ].join('\n'),
       }
     },
   })
 
-  let reply = cleanText(agentResult.reply)
-  const preparedRun = latestSuccessfulTool(agentResult.toolRuns, 'prepare_petshop_order')
-  const changedConfirmationRun = [...(agentResult.toolRuns || [])]
-    .reverse()
-    .find((run) => run?.name === 'create_confirmed_petshop_order' && run?.result?.changed && run?.result?.summary)
-  if (preparedRun?.result?.summary && !orderResult) {
-    reply = cleanText(preparedRun.result.summary)
-  } else if (changedConfirmationRun?.result?.summary && !orderResult) {
-    reply = cleanText(changedConfirmationRun.result.summary)
-  }
+  const reply = cleanText(agentResult.reply)
   if (!reply) throw new HttpError(502, 'The PetBot agent response came back empty.')
 
+  // Tool calls may extract a customer fact that the lightweight interpreter
+  // omitted. Persist the final structured state after the autonomous loop, but
+  // never let a profile write failure replace a valid customer response.
+  const finalProfilePatch = {
+    customer_name: cleanText(llmInterpretation?.customer_name) || cleanText(updatedCustomerName),
+    pet_name: cleanText(serviceFacts.pet_name),
+    species: cleanText(serviceFacts.species),
+    breed: cleanText(serviceFacts.breed),
+    weight_kg: Number(serviceFacts.weight_kg || 0) || null,
+    coat_type: cleanText(serviceFacts.coat_type),
+    symptom: cleanText(llmInterpretation?.symptom),
+  }
+  if (Object.values(finalProfilePatch).some(Boolean)) {
+    try {
+      const persistedCustomer = await ensureCustomerProfile(supabase, sessionForAgent, finalProfilePatch)
+      activeCustomer = persistedCustomer
+      updatedCustomerName = cleanText(persistedCustomer.client?.name) || updatedCustomerName
+    } catch (error) {
+      logger.warn('PetBot final fact persistence failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
   const botSentAt = new Date().toISOString()
-  const existingContext = parseJsonObject(sessionForGuard.context)
+  const existingContext = parseJsonObject(sessionForAgent.context)
   const nextContext = {
     ...existingContext,
     ...(orderResult ? {
@@ -2406,13 +1977,13 @@ async function respondWithPetbotAgent({
       last_total: Number(orderResult.total || 0),
     } : {}),
     petbot_agent: {
-      version: 2,
-      engine_version: 'petbot_agent_v2',
+      version: 3,
+      engine_version: 'petbot_agent_v3',
       updatedAt: botSentAt,
       pending_order: pendingOrder,
       facts: serviceFacts,
       last_action: agentResult.toolRuns.at(-1)?.name || 'reply',
-      last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
+      last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null })),
       needs_human: needsHuman,
       handoff_target: handoffTarget,
       order_saved: Boolean(orderResult),
@@ -2453,9 +2024,12 @@ async function respondWithPetbotAgent({
           media_attachments: mediaMessages,
         } : {}),
         petbot_agent: {
-          engine_version: 'petbot_agent_v1',
+          engine_version: 'petbot_agent_v3',
           model: runtimeConfig.modelName,
-          tool_calls: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
+          tool_calls: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null, duration_ms: run.duration_ms || 0 })),
+          steps: agentResult.steps || 0,
+          validation_retries: agentResult.validationRetries || 0,
+          duration_ms: agentResult.durationMs || 0,
           pending_order_id: pendingOrder?.id || null,
           order_saved: Boolean(orderResult),
           needs_human: needsHuman,
@@ -2476,13 +2050,16 @@ async function respondWithPetbotAgent({
     session_id: sessionId,
     message_id: savedReply.id,
     event_type: orderResult ? 'order_saved' : (needsHuman ? 'handoff' : 'turn'),
-    engine_version: 'petbot_agent_v1',
+    engine_version: 'petbot_agent_v3',
     intent,
     action: agentResult.toolRuns.at(-1)?.name || 'reply',
     outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : 'ok'),
     handoff_target: needsHuman ? handoffTarget : null,
     metadata: {
-      tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
+      tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null, duration_ms: run.duration_ms || 0 })),
+      steps: agentResult.steps || 0,
+      validation_retries: agentResult.validationRetries || 0,
+      duration_ms: agentResult.durationMs || 0,
       pending_order_id: pendingOrder?.id || null,
       source: options.source || 'dashboard_simulation',
     },
@@ -2494,7 +2071,7 @@ async function respondWithPetbotAgent({
     intent,
     tokens: agentResult.tokensUsed,
     guarded: false,
-    engine: 'petbot_agent_v1',
+    engine: 'petbot_agent_v3',
   })
 
   return { reply, savedMessage: savedReply }
@@ -2510,7 +2087,7 @@ function isPetbotServiceConversation(intent = '', message = '', history = []) {
   return /\b(banho|tosa|agendar|agendamento|consulta|vacina|veterin)\b/.test(text)
 }
 
-async function respondWithPetbotSafeServiceFailure({
+async function respondWithPetbotSafeFailure({
   supabase,
   session,
   sessionId,
@@ -2519,18 +2096,21 @@ async function respondWithPetbotSafeServiceFailure({
   options,
   error,
 }) {
-  const reply = 'Não consegui validar o serviço exato no catálogo e na agenda agora. Para não informar preço ou horário incorreto, encaminhei o atendimento para uma pessoa da equipe.'
+  const serviceConversation = isPetbotServiceConversation(intent)
+  const reply = serviceConversation
+    ? 'Tive um problema ao consultar o catálogo de serviços e a agenda. Para não informar preço ou horário incorreto, encaminhei o atendimento para uma pessoa da equipe.'
+    : 'Tive um problema ao consultar o catálogo e concluir este atendimento com segurança. Encaminhei a conversa para uma pessoa da equipe continuar com você.'
   const botSentAt = new Date().toISOString()
   const existingContext = parseJsonObject(session.context)
   const nextContext = {
     ...existingContext,
     petbot_agent: {
       ...(existingContext.petbot_agent || {}),
-      version: 1,
-      engine_version: 'petbot_agent_v1',
+      version: 3,
+      engine_version: 'petbot_agent_v3',
       updatedAt: botSentAt,
       pending_order: null,
-      last_action: 'safe_service_handoff',
+      last_action: 'safe_agent_handoff',
       last_tools: [],
       needs_human: true,
       handoff_target: 'atendente',
@@ -2553,8 +2133,8 @@ async function respondWithPetbotSafeServiceFailure({
       content: reply,
       metadata: {
         source: options.source || 'dashboard_simulation',
-        engine_version: 'petbot_agent_v1',
-        safe_service_handoff: true,
+        engine_version: 'petbot_agent_v3',
+        safe_agent_handoff: true,
         ...(options.assistantMetadata || {}),
       },
       tokens_used: 0,
@@ -2570,9 +2150,9 @@ async function respondWithPetbotSafeServiceFailure({
     session_id: sessionId,
     message_id: savedReply.id,
     event_type: 'handoff',
-    engine_version: 'petbot_agent_v1',
+    engine_version: 'petbot_agent_v3',
     intent,
-    action: 'safe_service_handoff',
+    action: 'safe_agent_handoff',
     outcome: 'agent_error',
     handoff_target: 'atendente',
     metadata: { source: options.source || 'dashboard_simulation' },
@@ -2680,11 +2260,11 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const intent = detectIntent(trimmedMessage)
   const history = await loadRecentMessages(supabase, sessionId)
   const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
-  const sessionForGuard = { ...session, context: recoveredContext }
+  const sessionForAgent = { ...session, context: recoveredContext }
   const [storeSettings, runtimeConfig, customer] = await Promise.all([
     loadStoreSettings(supabase, moduleId, session.tenant_id),
     loadBotRuntimeConfig(supabase, session.tenant_id, moduleId),
-    ensureCustomerProfile(supabase, sessionForGuard),
+    ensureCustomerProfile(supabase, sessionForAgent),
   ])
   const customInstructions = [storeSettings.botPrompt, runtimeConfig.systemPrompt]
     .filter(Boolean)
@@ -2708,7 +2288,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const [products, services, appointments] = await Promise.all([
     loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
     loadPetshopServices(supabase, moduleId, session.tenant_id),
-    loadAppointments(supabase, moduleId, session.tenant_id),
+    loadAppointments(supabase, moduleId, session.tenant_id, storeSettings),
   ])
 
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
@@ -2716,242 +2296,40 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     await insertUserMessages(supabase, sessionId, userMessages)
   }
 
-  if (canUsePetbotAgent(storeSettings, sessionForGuard)) {
-    try {
-      return await respondWithPetbotAgent({
-        supabase,
-        sessionId,
-        trimmedMessage,
-        options,
-        session,
-        sessionForGuard,
-        moduleId,
-        intent,
-        history,
-        storeSettings,
-        runtimeConfig,
-        customer,
-        llmInterpretation,
-        products,
-        services,
-        appointments,
-        customInstructions,
-      })
-    } catch (error) {
-      logger.warn('PetBot agent failed', {
-        sessionId,
-        moduleId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-      if (isPetbotServiceConversation(intent, trimmedMessage, history)) {
-        return respondWithPetbotSafeServiceFailure({
-          supabase,
-          session: sessionForGuard,
-          sessionId,
-          moduleId,
-          intent,
-          options,
-          error,
-        })
-      }
-      logger.warn('Falling back to guarded runtime for a non-service conversation', { sessionId, moduleId })
-    }
-  }
-
-  let guard = runPetbotGuard({
-    message: trimmedMessage,
-    session: sessionForGuard,
-    customer,
-    products,
-    appointments,
-    settings: storeSettings,
-    interpretation: llmInterpretation,
-  })
-  let reply = guard.reply?.trim()
-  let state = guard.state
-  let orderResult = null
-  let redraftResult = null
-  const mediaMessages = Array.isArray(guard.mediaMessages) ? guard.mediaMessages : []
-  const primaryImage = mediaMessages.find((item) => item?.type === 'image' && item.imageUrl)
-
-  if (guard.shouldSaveOrder && !canPetbotCreateOrders(storeSettings, sessionForGuard)) {
-    state = {
-      ...state,
-      blockedReasons: [...new Set([...(state?.blockedReasons || []), 'canary_not_enabled_for_contact'])],
-    }
-    reply = 'Recebi sua confirmacao. Nesta fase de teste, vou encaminhar o pedido para a equipe concluir com voce.'
-    guard = { ...guard, shouldSaveOrder: false, needsHuman: true, action: 'canary_handoff', handoffTarget: 'atendente' }
-  } else if (guard.shouldSaveOrder) {
-    try {
-      orderResult = await createConfirmedPetshopOrderViaRpc(supabase, sessionForGuard, storeSettings, guard.orderArgs)
-      state = markPetbotOrderSaved(state, orderResult)
-      reply = buildPetbotConfirmationReply(state, storeSettings)
-    } catch (error) {
-      state = markPetbotOrderError(state, error)
-      reply = 'Parece que houve um problema ao registrar o pedido. Vou chamar um atendente para resolver isso antes de finalizar.'
-      guard = { ...guard, needsHuman: true, action: 'salvamento_falhou', handoffTarget: 'atendente' }
-      logger.warn('PetBot guarded order save failed', {
-        sessionId,
-        moduleId,
-        error: error instanceof Error ? error.message : String(error),
-      })
-    }
-  }
-
-  if (guard.guardDirective?.allowLlmRedraft) {
-    redraftResult = await redraftPetbotReplyWithLlm({
-      apiKey: serverEnv.openAiApiKey,
-      model: runtimeConfig.modelName,
-      temperature: runtimeConfig.temperature,
-      timeoutMs: serverEnv.openAiTimeoutMs,
-      message: trimmedMessage,
+  try {
+    return await respondWithPetbotAgent({
+      supabase,
+      sessionId,
+      trimmedMessage,
+      options,
+      session,
+      sessionForAgent,
+      moduleId,
+      intent,
       history,
-      directive: guard.guardDirective,
-      fallbackReply: reply,
+      storeSettings,
+      runtimeConfig,
+      customer,
+      llmInterpretation,
+      products,
+      services,
+      appointments,
       customInstructions,
     })
-    if (redraftResult?.reply) reply = redraftResult.reply
-  }
-
-  if (!reply) {
-    throw new HttpError(502, 'The PetBot response came back empty.')
-  }
-
-  const botSentAt = new Date().toISOString()
-  const nextContext = mergePetbotContext({
-    ...(sessionForGuard.context || {}),
-    ...(orderResult ? {
-      last_sale_id: orderResult.sale_id,
-      last_order_id: orderResult.order_id || null,
-      last_appointment_id: orderResult.appointment_id || null,
-      last_payment_status: orderResult.payment_status || null,
-    } : {}),
-  }, state)
-
-  const sessionPatch = {
-    intent: guard.intent || intent,
-    context: nextContext,
-    ...(state?.customerName ? { customer_name: state.customerName } : {}),
-    ...(guard.shouldSaveRating ? { csat_score: guard.rating, status: 'closed', closed_at: botSentAt } : {}),
-    ...(guard.needsHuman ? { status: 'human' } : {}),
-    last_message_at: botSentAt,
-  }
-
-  const { data: updatedSession, error: sessionUpdateError } = await supabase
-    .from('chat_sessions')
-    .update(sessionPatch)
-    .eq('id', sessionId)
-    .select('id, context')
-    .maybeSingle()
-
-  if (sessionUpdateError) {
-    logger.error('Unable to persist PetBot session state', {
+  } catch (error) {
+    logger.warn('PetBot agent failed', {
       sessionId,
       moduleId,
-      code: sessionUpdateError.code,
-      message: sessionUpdateError.message,
+      error: error instanceof Error ? error.message : String(error),
     })
-    throw new HttpError(500, `Unable to update chat session: ${sessionUpdateError.message}`)
-  }
-
-  if (!updatedSession || !hasPetbotState(updatedSession.context)) {
-    logger.error('PetBot session update did not persist context.petbot', {
+    return respondWithPetbotSafeFailure({
+      supabase,
+      session: sessionForAgent,
       sessionId,
       moduleId,
-      hasUpdatedSession: Boolean(updatedSession),
+      intent,
+      options,
+      error,
     })
-    throw new HttpError(500, 'Unable to persist PetBot session state.')
-  }
-
-  const { data: savedReply, error: replyInsertError } = await supabase
-    .from('chat_messages')
-    .insert({
-      session_id: sessionId,
-      role: 'assistant',
-      content: reply,
-      metadata: {
-        source: options.source || 'dashboard_simulation',
-        ...(options.assistantMetadata || {}),
-        ...(primaryImage ? {
-          image_url: primaryImage.imageUrl,
-          media_attachments: mediaMessages,
-        } : {}),
-        petbot_state: snapshotPetbotState(state),
-        petbot_guard: {
-          version: state?.version || 1,
-          intent: guard.intent,
-          action: guard.action,
-          blocked_reasons: state?.blockedReasons || [],
-          needs_human: Boolean(guard.needsHuman),
-          needs_handoff: Boolean(guard.needsHuman),
-          handoff_target: guard.handoffTarget || (guard.intent === 'veterinaria' ? 'veterinaria' : 'atendente'),
-          allow_llm_redraft: Boolean(guard.guardDirective?.allowLlmRedraft),
-          llm_interpretation: llmInterpretation,
-          llm_redraft_used: Boolean(redraftResult?.used),
-          llm_redraft_validation: redraftResult?.validation || null,
-          order_saved: Boolean(orderResult),
-        },
-      },
-      tokens_used: 0,
-      sent_at: botSentAt,
-    })
-    .select('id, role, content, metadata, tokens_used, sent_at')
-    .single()
-
-  if (replyInsertError) {
-    throw new HttpError(500, 'Unable to save assistant response.')
-  }
-
-  await recordPetbotEvent(supabase, {
-    tenant_id: session.tenant_id,
-    module_id: moduleId,
-    session_id: sessionId,
-    message_id: savedReply.id,
-    event_type: orderResult ? 'order_saved' : (guard.needsHuman ? 'handoff' : 'turn'),
-    engine_version: 'petbot_guard_v2',
-    intent: guard.intent || intent,
-    action: guard.action || null,
-    outcome: orderResult ? 'saved' : (guard.needsHuman ? 'handoff' : 'ok'),
-    handoff_target: guard.needsHuman ? (guard.handoffTarget || 'atendente') : null,
-    metadata: {
-      blocked_reasons: state?.blockedReasons || [],
-      order_saved: Boolean(orderResult),
-      source: options.source || 'dashboard_simulation',
-    },
-  })
-
-  const { data: finalSession, error: finalSessionError } = await supabase
-    .from('chat_sessions')
-    .update({
-      context: nextContext,
-      last_message_at: botSentAt,
-    })
-    .eq('id', sessionId)
-    .select('id, context')
-    .maybeSingle()
-
-  if (finalSessionError || !finalSession || !hasPetbotState(finalSession.context)) {
-    logger.error('PetBot final session state did not persist after assistant message', {
-      sessionId,
-      moduleId,
-      code: finalSessionError?.code,
-      message: finalSessionError?.message,
-      hasFinalSession: Boolean(finalSession),
-    })
-    throw new HttpError(500, 'Unable to persist PetBot session state after assistant response.')
-  }
-
-  logger.info('Chat response generated', {
-    sessionId,
-    moduleId,
-    intent: guard.intent || intent,
-    tokens: 0,
-    guarded: true,
-    engine: 'petbot_guard_v1',
-  })
-
-  return {
-    reply,
-    savedMessage: savedReply,
   }
 }

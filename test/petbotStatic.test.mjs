@@ -18,24 +18,24 @@ test('lista de chats nao recarrega em todo insert global de mensagens', () => {
   assert.doesNotMatch(sessionsSubscription, /table:\s*'chat_messages'/)
 })
 
-test('pedido PetBot usa RPC transacional no backend local e serverless', () => {
+test('pedido PetBot usa uma unica RPC transacional compartilhada por painel e WhatsApp', () => {
   const localChat = read('server/lib/chat.js')
   const webhook = read('serverless/whatsappWebhook.ts')
-  const migration = read('database/petbot_order_transaction_rpc.sql')
+  const migration = read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
 
   assert.match(localChat, /createConfirmedPetshopOrderViaRpc/)
-  assert.match(webhook, /createConfirmedPetshopOrderViaRpc/)
-  assert.match(migration, /create_petbot_order_transaction/)
+  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
+  assert.doesNotMatch(webhook, /createConfirmedPetshopOrderViaRpc/)
+  assert.match(migration, /create or replace function public\.create_petbot_order_transaction/)
   assert.match(migration, /if v_order_type = 'produto' then[\s\S]*insert into public\.sale_items/)
   assert.match(localChat, /pet_name: cleanText\(args\.pet_name\)/)
-  assert.match(webhook, /pet_name: clean\(args\.pet_name\)/)
   assert.match(migration, /insert into public\.pets/)
   assert.match(migration, /pet_id = v_pet_id/)
   assert.match(migration, /then 'banho_e_tosa'/)
   assert.match(migration, /then 'consulta'/)
 })
 
-test('resposta do PetBot so e salva depois do estado da sessao persistir', () => {
+test('resposta do PetBot so e salva depois do estado autonomo persistir', () => {
   const localChat = read('server/lib/chat.js')
   const webhook = read('serverless/whatsappWebhook.ts')
 
@@ -44,20 +44,14 @@ test('resposta do PetBot so e salva depois do estado da sessao persistir', () =>
   assert.ok(localPersistIndex > -1)
   assert.ok(localReplyIndex > -1)
   assert.ok(localPersistIndex < localReplyIndex)
-  assert.match(localChat, /customer_name: state\.customerName/)
+  assert.match(localChat, /petbot_agent: \{/)
+  assert.match(localChat, /facts: serviceFacts/)
   assert.match(localChat, /hasPetbotState\(updatedSession\.context\)/)
   assert.match(localChat, /recoverPetbotContextFromHistory/)
-  assert.match(localChat, /petbot_state: snapshotPetbotState\(state\)/)
 
-  const webhookPersistIndex = webhook.indexOf('const sessionUpdate = await supabase')
-  const webhookReplyIndex = webhook.indexOf('const savedReply = await saveAssistantMessage')
-  assert.ok(webhookPersistIndex > -1)
-  assert.ok(webhookReplyIndex > -1)
-  assert.ok(webhookPersistIndex < webhookReplyIndex)
-  assert.match(webhook, /customer_name: state\.customerName/)
-  assert.match(webhook, /hasPetbotState\(sessionUpdate\.data\.context\)/)
-  assert.match(webhook, /recoverPetbotContextFromHistory/)
-  assert.match(webhook, /petbot_state: snapshotPetbotState\(state\)/)
+  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
+  assert.match(webhook, /skipUserPersistence: true/)
+  assert.doesNotMatch(webhook, /runPetbotGuard/)
 })
 
 test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {
@@ -93,28 +87,29 @@ test('ordens mantem cards ativos de hoje e historico concluido em tabela', () =>
   assert.match(hook, /\.limit\(limit\)/)
 })
 
-test('PetBot usa temperatura 0.5 para respostas da LLM', () => {
+test('PetBot usa configuracao de modelo e temperatura no runtime compartilhado', () => {
   const localChat = read('server/lib/chat.js')
   const webhook = read('serverless/whatsappWebhook.ts')
 
   assert.match(localChat, /DEFAULT_BOT_TEMPERATURE = 0\.5/)
-  assert.match(webhook, /temperature: 0\.5/)
-  assert.doesNotMatch(webhook, /temperature: 0\.2/)
+  assert.match(localChat, /runtimeConfig\.temperature/)
+  assert.match(webhook, /respondToChatMessage/)
+  assert.match(webhook, /temperature: 0/)
 })
 
-test('PetBot usa LLM como interpretador antes do guardiao', () => {
+test('PetBot usa LLM para interpretar e conduzir o agente sem guardiao conversacional', () => {
   const localChat = read('server/lib/chat.js')
   const webhook = read('serverless/whatsappWebhook.ts')
   const ai = read('server/lib/petbotAi.js')
+  const agent = read('server/lib/petbotAgent.js')
 
   assert.match(ai, /interpretPetbotMessageWithLlm/)
-  assert.match(ai, /redraftPetbotReplyWithLlm/)
   assert.match(localChat, /interpretPetbotMessageWithLlm/)
-  assert.match(localChat, /interpretation: llmInterpretation/)
-  assert.match(localChat, /redraftPetbotReplyWithLlm/)
-  assert.match(webhook, /interpretPetbotMessageWithLlm/)
-  assert.match(webhook, /interpretation: llmInterpretation/)
-  assert.match(webhook, /redraftPetbotReplyWithLlm/)
+  assert.match(localChat, /runPetbotAgent/)
+  assert.match(localChat, /mergeServiceFactsFromToolArgs/)
+  assert.match(agent, /structured interpreter is the preferred semantic source/)
+  assert.doesNotMatch(localChat, /runPetbotGuard/)
+  assert.doesNotMatch(webhook, /runPetbotGuard/)
 })
 
 test('WhatsApp e painel usam o mesmo runtime auditavel do PetBot', () => {
@@ -124,10 +119,10 @@ test('WhatsApp e painel usam o mesmo runtime auditavel do PetBot', () => {
 
   assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
   assert.match(webhook, /skipUserPersistence: true/)
-  assert.match(webhook, /shared_petbot_runtime/)
+  assert.match(webhook, /engine: 'petbot_agent_v3'/)
   assert.match(localChat, /customInstructions/)
   assert.match(localChat, /recordPetbotEvent/)
-  assert.match(localChat, /idempotency_key: `petbot:\$\{session\.id\}`/)
+  assert.match(localChat, /idempotency_key: `\$\{sessionId\}:\$\{pendingAtTurnStart\.id\}`/)
   assert.match(migration, /create table if not exists public\.petbot_events/)
   assert.match(migration, /payment_status := 'aguardando_comprovante'/)
   assert.match(migration, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
@@ -139,7 +134,7 @@ test('canario impede a criacao automatica fora dos contatos autorizados', () => 
   const migration = read('supabase/migrations/20260720006000_petbot_canary_controls.sql')
 
   assert.match(localChat, /function canPetbotCreateOrders/)
-  assert.match(localChat, /canary_not_enabled_for_contact/)
+  assert.match(localChat, /Este contato não está habilitado para criação autônoma de pedidos/)
   assert.match(localChat, /autonomyAllowlist/)
   assert.match(settings, /Autonomia do PetBot/)
   assert.match(settings, /Contatos autorizados no canario/)
@@ -162,25 +157,39 @@ test('fluxo legado do WhatsApp tem MotoDog, Pix e checklist configuraveis', () =
   assert.match(guard, /aguardando_comprovante/)
 })
 
-test('PetBot exige servico exato por peso/pelo e possui fallback quando RPC nao foi aplicada', () => {
+test('PetBot v3 deixa a conversa com a LLM e exige operacoes transacionais validadas', () => {
   const localChat = read('server/lib/chat.js')
   const agent = read('server/lib/petbotAgent.js')
-  const migration = read('supabase/migrations/20260721002000_petbot_service_catalog_booking_fix.sql')
+  const grounding = read('server/lib/petbotGrounding.js')
+  const migration = read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
 
-  assert.match(agent, /peso aproximado do pet/)
   assert.match(agent, /mergeInterpretedPetbotServiceFacts/)
-  assert.match(agent, /specialized\.length/)
+  assert.match(agent, /resolvePetshopService/)
+  assert.match(agent, /sameScheduledInstant/)
   assert.match(agent, /validateReply = null/)
-  assert.match(localChat, /isMissingPetbotTransactionRpcError/)
-  assert.match(localChat, /return createConfirmedPetshopOrder\(supabase, session, settings, args\)/)
-  assert.match(localChat, /validatedAppointment\.id[\s\S]*from\('appointments'\)\.insert\(payload\)/)
-  assert.match(localChat, /nunca afirme que pagamento antecipado e obrigatorio/i)
-  assert.match(localChat, /Fatos estruturados interpretados da conversa/)
+  assert.match(agent, /parallel_tool_calls: false/)
+  assert.match(localChat, /buildPetbotAgentV3Prompt/)
+  assert.match(localChat, /validatePetbotOperationalReply/)
+  assert.match(localChat, /createConfirmedPetshopOrderViaRpc/)
+  assert.match(localChat, /A migracao transacional do PetBot nao foi aplicada/)
+  assert.doesNotMatch(localChat, /return createConfirmedPetshopOrder\(supabase, session, settings, args\)/)
+  assert.match(localChat, /idempotency_key: `\$\{sessionId\}:\$\{pendingAtTurnStart\.id\}`/)
   assert.match(localChat, /const initialToolChoice = 'auto'/)
-  assert.match(localChat, /validateReply:/)
+  assert.match(localChat, /engine_version: 'petbot_agent_v3'/)
   assert.doesNotMatch(localChat, /buildNaturalPetbotServiceQuestion/)
+  assert.match(grounding, /valor não validado/)
+  assert.match(grounding, /disponibilidade de agenda sem consulta/)
+  assert.match(grounding, /conclusão de pedido sem transação confirmada/)
+  assert.match(migration, /create table if not exists public\.petbot_order_commits/)
+  assert.match(migration, /from public\.products/)
   assert.match(migration, /from public\.petshop_services/)
-  assert.match(migration, /and code = v_service_type/)
-  assert.match(migration, /v_subtotal := v_service\.default_price/)
   assert.match(migration, /insert into public\.appointments/)
+  assert.match(migration, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
+})
+
+
+test('webhook nao mantem um segundo agente ou fluxo conversacional legado', () => {
+  const webhook = read('serverless/whatsappWebhook.ts')
+  assert.match(webhook, /respondToChatMessage/)
+  assert.doesNotMatch(webhook, /PETBOT_TOOLS|buildSystemPrompt|runPetbotGuard|preparePetshopOrderDraft/)
 })

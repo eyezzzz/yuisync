@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Settings, Save, Store, Printer, MapPin, Phone, RefreshCw, AlertCircle, Check,
-  FileText, Building2, Users2, Plus, Bot, Truck,
+  FileText, Building2, Users2, Plus, Bot, Truck, Clock,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import { useAuthCtx } from '../../context/AuthContext'
@@ -9,6 +9,21 @@ import { useModuleCtx } from '../../context/ModuleContext'
 import { MODULES } from '../../config/modules'
 import { buildTenantPayload, isTenantSchemaError, runWithTenantFallback } from '../../lib/tenant'
 import { DEFAULT_PETBOT_PROMPT } from '../../../shared/petbotPrompt'
+
+const DEFAULT_PETBOT_BUSINESS_HOURS = {
+  1: [{ open: '08:00', close: '18:00' }],
+  2: [{ open: '08:00', close: '18:00' }],
+  3: [{ open: '08:00', close: '18:00' }],
+  4: [{ open: '08:00', close: '18:00' }],
+  5: [{ open: '08:00', close: '18:00' }],
+  6: [{ open: '08:00', close: '18:00' }],
+  7: [{ open: '08:00', close: '18:00' }],
+}
+
+const PETBOT_WEEKDAYS = [
+  [1, 'Segunda'], [2, 'Terça'], [3, 'Quarta'], [4, 'Quinta'],
+  [5, 'Sexta'], [6, 'Sábado'], [7, 'Domingo'],
+]
 
 const DEFAULT_PET_TRANSPORT_OPTIONS = [
   { id: 'buscar_e_levar', label: 'Buscar e levar', fee: '20.00', maxWeightKg: '10', active: true },
@@ -54,8 +69,13 @@ const INITIAL_FORM = {
   provider_base_url: '',
   fiscal_notes: '',
   bot_prompt: DEFAULT_PETBOT_PROMPT,
-  petbot_autonomy_mode: 'enabled',
+  petbot_autonomy_mode: 'canary',
   petbot_autonomy_allowlist: '',
+  petbot_timezone: 'America/Sao_Paulo',
+  petbot_business_hours: DEFAULT_PETBOT_BUSINESS_HOURS,
+  petbot_slot_interval_min: '30',
+  petbot_booking_lead_time_min: '15',
+  petbot_booking_capacity: '1',
   delivery_fee: '10.00',
   pet_transport_fee: '20.00',
   pix_key: '',
@@ -99,6 +119,11 @@ function isFeeSchemaError(error) {
     || msg.includes('pet_transport_options')
     || msg.includes('petbot_autonomy_mode')
     || msg.includes('petbot_autonomy_allowlist')
+    || msg.includes('petbot_timezone')
+    || msg.includes('petbot_business_hours')
+    || msg.includes('petbot_slot_interval_min')
+    || msg.includes('petbot_booking_lead_time_min')
+    || msg.includes('petbot_booking_capacity')
   ) && (
     msg.includes('schema cache')
     || msg.includes('column')
@@ -126,6 +151,19 @@ function normalizeTransportOptions(value) {
 
 function normalizeTemplates(value) {
   return { ...DEFAULT_MESSAGE_TEMPLATES, ...(value && typeof value === 'object' ? value : {}) }
+}
+
+function normalizeBusinessHours(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value)
+    ? value
+    : DEFAULT_PETBOT_BUSINESS_HOURS
+  return Object.fromEntries(PETBOT_WEEKDAYS.map(([weekday]) => {
+    const rows = Array.isArray(source[weekday] ?? source[String(weekday)])
+      ? (source[weekday] ?? source[String(weekday)])
+      : DEFAULT_PETBOT_BUSINESS_HOURS[weekday]
+    const first = rows?.[0]
+    return [weekday, first?.open && first?.close ? [{ open: first.open, close: first.close }] : []]
+  }))
 }
 
 function serializeTransportOptions(rows = []) {
@@ -229,8 +267,13 @@ export default function SettingsPage() {
           printer_width: data.printer_width === '58' ? '58' : '80',
           fiscal_id: data.fiscal_id || '',
           bot_prompt: data.bot_prompt || DEFAULT_PETBOT_PROMPT,
-          petbot_autonomy_mode: ['assist', 'canary', 'enabled'].includes(data.petbot_autonomy_mode) ? data.petbot_autonomy_mode : 'enabled',
+          petbot_autonomy_mode: ['assist', 'canary', 'enabled'].includes(data.petbot_autonomy_mode) ? data.petbot_autonomy_mode : 'canary',
           petbot_autonomy_allowlist: Array.isArray(data.petbot_autonomy_allowlist) ? data.petbot_autonomy_allowlist.join(', ') : '',
+          petbot_timezone: data.petbot_timezone || 'America/Sao_Paulo',
+          petbot_business_hours: normalizeBusinessHours(data.petbot_business_hours),
+          petbot_slot_interval_min: data.petbot_slot_interval_min != null ? String(data.petbot_slot_interval_min) : '30',
+          petbot_booking_lead_time_min: data.petbot_booking_lead_time_min != null ? String(data.petbot_booking_lead_time_min) : '15',
+          petbot_booking_capacity: data.petbot_booking_capacity != null ? String(data.petbot_booking_capacity) : '1',
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '10.00',
           pet_transport_fee: data.pet_transport_fee != null ? String(data.pet_transport_fee) : '20.00',
           pix_key: data.pix_key || '',
@@ -325,6 +368,11 @@ export default function SettingsPage() {
           pet_transport_options: serializeTransportOptions(form.pet_transport_options),
           message_templates: normalizeTemplates(form.message_templates),
           petbot_autonomy_allowlist: String(form.petbot_autonomy_allowlist || '').split(/[,\n]/).map((value) => value.trim()).filter(Boolean),
+          petbot_timezone: String(form.petbot_timezone || 'America/Sao_Paulo').trim(),
+          petbot_business_hours: normalizeBusinessHours(form.petbot_business_hours),
+          petbot_slot_interval_min: Math.max(5, Number(form.petbot_slot_interval_min || 30)),
+          petbot_booking_lead_time_min: Math.max(0, Number(form.petbot_booking_lead_time_min || 15)),
+          petbot_booking_capacity: Math.max(1, Number(form.petbot_booking_capacity || 1)),
           updated_at: new Date().toISOString(),
         }, activeTenantId, includeTenant)
 
@@ -340,6 +388,11 @@ export default function SettingsPage() {
           delete fallbackRow.pet_transport_options
           delete fallbackRow.petbot_autonomy_mode
           delete fallbackRow.petbot_autonomy_allowlist
+          delete fallbackRow.petbot_timezone
+          delete fallbackRow.petbot_business_hours
+          delete fallbackRow.petbot_slot_interval_min
+          delete fallbackRow.petbot_booking_lead_time_min
+          delete fallbackRow.petbot_booking_capacity
           return supabase.from('settings').upsert(fallbackRow, { onConflict: conflict })
         }
         return firstTry
@@ -731,6 +784,106 @@ export default function SettingsPage() {
                   </div>
                 </div>
               </div>
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-5">
+                <div className="flex items-center gap-2">
+                  <Clock size={16} />
+                  <div>
+                    <h4 className="font-bold">Agenda usada pelo PetBot</h4>
+                    <p className="text-xs text-muted">Esses dados definem os horários que o agente pode oferecer e confirmar.</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  <div className="md:col-span-2">
+                    <label className="inp-label">Fuso horário</label>
+                    <input
+                      className="inp"
+                      disabled={!canEdit}
+                      value={form.petbot_timezone}
+                      placeholder="America/Sao_Paulo"
+                      onChange={(event) => setForm((prev) => ({ ...prev, petbot_timezone: event.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="inp-label">Intervalo dos horários</label>
+                    <input
+                      className="inp"
+                      type="number"
+                      min="5"
+                      step="5"
+                      disabled={!canEdit}
+                      value={form.petbot_slot_interval_min}
+                      onChange={(event) => setForm((prev) => ({ ...prev, petbot_slot_interval_min: event.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="inp-label">Capacidade simultânea</label>
+                    <input
+                      className="inp"
+                      type="number"
+                      min="1"
+                      step="1"
+                      disabled={!canEdit}
+                      value={form.petbot_booking_capacity}
+                      onChange={(event) => setForm((prev) => ({ ...prev, petbot_booking_capacity: event.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="inp-label">Antecedência mínima (min)</label>
+                    <input
+                      className="inp"
+                      type="number"
+                      min="0"
+                      step="5"
+                      disabled={!canEdit}
+                      value={form.petbot_booking_lead_time_min}
+                      onChange={(event) => setForm((prev) => ({ ...prev, petbot_booking_lead_time_min: event.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  {PETBOT_WEEKDAYS.map(([weekday, label]) => {
+                    const periods = normalizeBusinessHours(form.petbot_business_hours)[weekday] || []
+                    const open = periods[0]?.open || '08:00'
+                    const close = periods[0]?.close || '18:00'
+                    const enabled = periods.length > 0
+                    const updateDay = (next) => setForm((prev) => ({
+                      ...prev,
+                      petbot_business_hours: {
+                        ...normalizeBusinessHours(prev.petbot_business_hours),
+                        [weekday]: next,
+                      },
+                    }))
+                    return (
+                      <div key={weekday} className="grid grid-cols-[110px_80px_1fr_1fr] items-center gap-3 rounded-xl border border-white/5 p-3">
+                        <span className="text-sm font-medium">{label}</span>
+                        <label className="flex items-center gap-2 text-xs text-muted">
+                          <input
+                            type="checkbox"
+                            disabled={!canEdit}
+                            checked={enabled}
+                            onChange={(event) => updateDay(event.target.checked ? [{ open, close }] : [])}
+                          />
+                          Aberto
+                        </label>
+                        <input
+                          className="inp"
+                          type="time"
+                          disabled={!canEdit || !enabled}
+                          value={open}
+                          onChange={(event) => updateDay([{ open: event.target.value, close }])}
+                        />
+                        <input
+                          className="inp"
+                          type="time"
+                          disabled={!canEdit || !enabled}
+                          value={close}
+                          onChange={(event) => updateDay([{ open, close: event.target.value }])}
+                        />
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
             </div>
 
             <div className={showGeneralSettings ? 'space-y-4' : 'hidden'}>
@@ -793,7 +946,7 @@ export default function SettingsPage() {
                   >
                     <option value="assist">Somente assistido — equipe conclui todos os pedidos</option>
                     <option value="canary">Canario — somente contatos autorizados concluem automaticamente</option>
-                    <option value="enabled">Autonomo — pedidos permitidos pelo guardiao sao concluidos</option>
+                    <option value="enabled">Autônomo — o agente pode concluir pedidos validados</option>
                   </select>
                 </div>
                 {form.petbot_autonomy_mode === 'canary' && (

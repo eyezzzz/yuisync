@@ -41,7 +41,7 @@ SUPABASE_ANON_KEY=sua-chave-publica-anon
 SUPABASE_SERVICE_ROLE_KEY=sua-chave-server-only
 
 OPENAI_API_KEY=sua-chave-openai-server-only
-OPENAI_MODEL=gpt-4o-mini
+OPENAI_MODEL=gpt-4o-mini-2024-07-18
 
 API_PORT=3090
 API_ALLOWED_ORIGINS=http://localhost:3080

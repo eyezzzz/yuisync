@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { DateTime } from 'luxon'
 import { classifyCommonPetBreed, normalizePetbotBreedText } from '../../shared/petbotBreedCatalog.js'
 
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
@@ -13,10 +14,20 @@ const BUSY_STATUSES = new Set([
   'scheduled',
   'pendente',
 ])
-const MAX_AGENT_STEPS = 5
-const STORE_OPEN_MINUTES = 8 * 60
-const STORE_CLOSE_MINUTES = 18 * 60
-const SLOT_INTERVAL_MINUTES = 30
+const MAX_AGENT_STEPS = 7
+const DEFAULT_TIMEZONE = 'America/Sao_Paulo'
+const DEFAULT_SLOT_INTERVAL_MINUTES = 30
+const DEFAULT_BOOKING_LEAD_MINUTES = 15
+const DEFAULT_BOOKING_CAPACITY = 1
+const DEFAULT_BUSINESS_HOURS = {
+  1: [{ open: '08:00', close: '18:00' }],
+  2: [{ open: '08:00', close: '18:00' }],
+  3: [{ open: '08:00', close: '18:00' }],
+  4: [{ open: '08:00', close: '18:00' }],
+  5: [{ open: '08:00', close: '18:00' }],
+  6: [{ open: '08:00', close: '18:00' }],
+  7: [{ open: '08:00', close: '18:00' }],
+}
 
 function clean(value = '') {
   return String(value ?? '').trim()
@@ -45,148 +56,6 @@ function normalizeCode(value = '') {
     .replace(/^_+|_+$/g, '')
 }
 
-function normalizeFactText(value = '') {
-  return normalizePetbotBreedText(value)
-}
-
-function userConversationTexts(history = [], message = '') {
-  const texts = (history || [])
-    .filter((entry) => !entry?.role || entry.role === 'user' || entry.role === 'customer')
-    .map((entry) => clean(entry?.content))
-    .filter(Boolean)
-  const current = clean(message)
-  if (current) texts.push(current)
-  return texts
-}
-
-function extractExplicitWeight(texts = []) {
-  const numberWords = new Map([
-    ['um', 1], ['uma', 1], ['dois', 2], ['duas', 2], ['tres', 3], ['quatro', 4],
-    ['cinco', 5], ['seis', 6], ['sete', 7], ['oito', 8], ['nove', 9], ['dez', 10],
-    ['onze', 11], ['doze', 12], ['treze', 13], ['quatorze', 14], ['catorze', 14],
-    ['quinze', 15], ['dezesseis', 16], ['dezessete', 17], ['dezoito', 18], ['dezenove', 19], ['vinte', 20],
-  ])
-
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = normalize(texts[index])
-    const numeric = text.match(/(?:pesa|peso(?:\s+(?:dele|dela|do pet|da pet))?\s*(?:e|eh|de|:)?\s*)?(\d{1,3}(?:[.,]\d{1,2})?)\s*(?:kg|kgs|quilo|quilos)\b/)
-    if (numeric) {
-      const value = Number(numeric[1].replace(',', '.'))
-      if (Number.isFinite(value) && value > 0 && value <= 200) return value
-    }
-    const written = text.match(/(?:pesa|peso(?:\s+(?:dele|dela|do pet|da pet))?\s*(?:e|eh|de|:)?\s*)(um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez|onze|doze|treze|quatorze|catorze|quinze|dezesseis|dezessete|dezoito|dezenove|vinte)\s*(?:kg|kgs|quilo|quilos)?\b/)
-    if (written && numberWords.has(written[1])) return numberWords.get(written[1])
-  }
-  return null
-}
-
-function extractExplicitCoat(texts = []) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = normalize(texts[index])
-    const match = text.match(/(?:pelo|pelagem)\s+(curt[oa]?|medi[oa]?|long[oa]?|dupl[oa]?)/)
-    if (match) return normalizeCoatType(match[1])
-  }
-  return null
-}
-
-function extractExplicitSpecies(texts = []) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = normalize(texts[index])
-    if (/\b(gato|gata|felino|felina)\b/.test(text)) return 'cat'
-    if (/\b(cachorro|cachorra|cao|cadela|canino|canina)\b/.test(text)) return 'dog'
-  }
-  return null
-}
-
-function extractExplicitBreed(texts = [], interpretedBreed = '') {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const classification = classifyCommonPetBreed(texts[index])
-    if (classification?.canonical) return classification.canonical
-  }
-
-  const candidate = clean(interpretedBreed)
-  const normalizedCandidate = normalizeFactText(candidate)
-  if (!normalizedCandidate) return null
-  const grounded = texts.some((text) => {
-    const normalizedText = ` ${normalizeFactText(text)} `
-    return normalizedText.includes(` ${normalizedCandidate} `)
-  })
-  return grounded ? candidate : null
-}
-
-function plausiblePetName(value = '', customerName = '') {
-  const candidate = clean(value)
-    .replace(/\s+(?:e|ele|ela|que|com|da raca|da raça|eh|é)\b.*$/i, '')
-    .replace(/^[^A-Za-zÀ-ÿ]+|[^A-Za-zÀ-ÿ' -]+$/g, '')
-    .trim()
-  const normalized = normalizeFactText(candidate)
-  if (!normalized || normalized.length < 2 || normalized.length > 40) return null
-  if (normalizeFactText(customerName) === normalized) return null
-  if (classifyCommonPetBreed(candidate)) return null
-  if (/^(meu|minha|pet|cachorro|cachorra|cao|gato|gata|ele|ela|um|uma|banho|tosa|hoje|amanha)$/.test(normalized)) return null
-  return candidate.split(/\s+/).slice(0, 3).join(' ')
-}
-
-function extractExplicitPetName(texts = [], interpretedPetName = '', customerName = '') {
-  const patterns = [
-    /(?:se chama|chama-se|nome (?:dele|dela|do pet|da pet|do meu pet|da minha pet) (?:e|eh|é|:)?|(?:ele|ela) (?:se chama|chama)|(?:meu|minha) pet (?:se chama|chama|e|eh|é))\s+([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ' -]{1,38})/i,
-    /(?:banho|tosa|consulta|vacina)\s+(?:pro|pra|para o|para a)\s+(?!meu\b|minha\b)([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,24})/i,
-    /(?:e|eh)\s+(?:o|a)\s+(?!meu\b|minha\b|um\b|uma\b)([A-Za-zÀ-ÿ][A-Za-zÀ-ÿ'-]{1,24})(?:[,.!?]|$)/i,
-  ]
-
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    for (const pattern of patterns) {
-      const match = clean(texts[index]).match(pattern)
-      const candidate = plausiblePetName(match?.[1], customerName)
-      if (candidate) return candidate
-    }
-  }
-
-  const interpreted = plausiblePetName(interpretedPetName, customerName)
-  if (!interpreted) return null
-  const normalizedCandidate = normalizeFactText(interpreted)
-  const grounded = texts.some((text) => {
-    const normalizedText = ` ${normalizeFactText(text)} `
-    return normalizedText.includes(` ${normalizedCandidate} `)
-  })
-  return grounded ? interpreted : null
-}
-
-export function extractExplicitPetbotServiceFacts({
-  history = [],
-  message = '',
-  interpretation = {},
-  previousFacts = {},
-} = {}) {
-  const texts = userConversationTexts(history, message)
-  const customerName = clean(interpretation?.customer_name || previousFacts?.customer_name)
-  const currentPetName = extractExplicitPetName(texts, interpretation?.pet_name, customerName)
-  const previousPetName = previousFacts?.pet_name_explicit ? clean(previousFacts?.pet_name) : null
-  const currentBreed = extractExplicitBreed(texts, interpretation?.breed)
-  const previousBreed = previousFacts?.breed_explicit ? clean(previousFacts?.breed) : null
-  const breed = currentBreed || previousBreed || null
-  const breedClassification = classifyCommonPetBreed(breed)
-  const currentSpecies = extractExplicitSpecies(texts)
-  const previousSpecies = previousFacts?.species_explicit ? clean(previousFacts?.species) : null
-  const currentWeight = extractExplicitWeight(texts)
-  const previousWeight = previousFacts?.weight_explicit ? positiveNumber(previousFacts?.weight_kg, 0) || null : null
-  const explicitCoat = extractExplicitCoat(texts)
-
-  return {
-    pet_name: currentPetName || previousPetName || null,
-    pet_name_explicit: Boolean(currentPetName || previousPetName),
-    species: currentSpecies || breedClassification?.species || previousSpecies || null,
-    species_explicit: Boolean(currentSpecies || breedClassification?.species || previousSpecies),
-    breed,
-    breed_explicit: Boolean(currentBreed || previousBreed),
-    weight_kg: currentWeight || previousWeight || null,
-    weight_explicit: Boolean(currentWeight || previousWeight),
-    coat_type: explicitCoat || breedClassification?.coat_type || normalizeCoatType(previousFacts?.coat_type),
-    coat_type_explicit: Boolean(explicitCoat || previousFacts?.coat_type_explicit),
-    coat_type_source: explicitCoat ? 'customer' : (breedClassification?.coat_type ? 'breed_catalog' : clean(previousFacts?.coat_type_source) || null),
-  }
-}
-
 function formatWeightValue(value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return ''
@@ -202,24 +71,41 @@ export function mergeInterpretedPetbotServiceFacts({
   const current = interpretation && typeof interpretation === 'object' ? interpretation : {}
   const previous = previousFacts && typeof previousFacts === 'object' ? previousFacts : {}
 
-  const petName = clean(current.pet_name) || clean(previous.pet_name) || null
-  const breed = clean(current.breed) || clean(previous.breed) || null
+  const currentPetName = clean(current.pet_name)
+  const previousPetName = clean(previous.pet_name)
+  const currentBreed = clean(current.breed)
+  const previousBreed = clean(previous.breed)
+  const currentSpecies = clean(current.species)
+  const previousSpecies = clean(previous.species)
+  const petIdentityChanged = Boolean(
+    (currentPetName && previousPetName && normalize(currentPetName) !== normalize(previousPetName))
+    || (currentSpecies && previousSpecies && normalizeServiceSpecies(currentSpecies) !== normalizeServiceSpecies(previousSpecies)),
+  )
+  const breedChanged = Boolean(
+    currentBreed && previousBreed
+    && normalizePetbotBreedText(currentBreed) !== normalizePetbotBreedText(previousBreed),
+  )
+  const inherited = petIdentityChanged ? {} : previous
+
+  const petName = currentPetName || clean(inherited.pet_name) || null
+  const breed = currentBreed || clean(inherited.breed) || null
   const breedClassification = classifyCommonPetBreed(breed)
-  const species = clean(current.species)
+  const species = currentSpecies
     || breedClassification?.species
-    || clean(previous.species)
+    || clean(inherited.species)
     || null
   const weightKg = positiveNumber(current.weight_kg, 0)
-    || positiveNumber(previous.weight_kg, 0)
+    || positiveNumber(inherited.weight_kg, 0)
     || null
   const weightLabel = clean(current.weight_label)
-    || clean(previous.weight_label)
+    || clean(inherited.weight_label)
     || (weightKg ? `${formatWeightValue(weightKg)} kg` : null)
   const hasCurrentWeight = positiveNumber(current.weight_kg, 0) > 0
   const coatFromCustomer = normalizeCoatType(current.coat_type)
+  const inheritedCoat = breedChanged ? null : normalizeCoatType(inherited.coat_type)
   const coatType = coatFromCustomer
     || breedClassification?.coat_type
-    || normalizeCoatType(previous.coat_type)
+    || inheritedCoat
     || null
 
   return {
@@ -233,26 +119,46 @@ export function mergeInterpretedPetbotServiceFacts({
     weight_label: weightLabel,
     weight_estimated: hasCurrentWeight
       ? Boolean(current.weight_estimated)
-      : Boolean(previous.weight_estimated),
+      : Boolean(inherited.weight_estimated),
     weight_explicit: Boolean(weightKg),
     coat_type: coatType,
     coat_type_explicit: Boolean(coatFromCustomer),
     coat_type_source: coatFromCustomer
       ? 'customer'
-      : (breedClassification?.coat_type ? 'breed_catalog' : clean(previous.coat_type_source) || null),
+      : (breedClassification?.coat_type ? 'breed_catalog' : clean(inherited.coat_type_source) || null),
+    pet_identity_changed: petIdentityChanged,
   }
 }
 
 export function groundPetbotServiceArgs(args = {}, facts = {}) {
+  // The structured interpreter is the preferred semantic source, but the
+  // autonomous agent may also extract the same customer facts while deciding
+  // which tool to call. Accept those semantic arguments as a fallback instead
+  // of forcing a deterministic dialogue layer. Operational fields (catalog,
+  // price, stock and schedule) are still resolved and validated server-side.
+  const factWeight = facts.weight_explicit ? positiveNumber(facts.weight_kg, 0) : 0
+  const argumentWeight = positiveNumber(args.weight_kg, 0)
+  const weightKg = factWeight || argumentWeight || null
+
   return {
     ...args,
-    pet_name: facts.pet_name_explicit ? clean(facts.pet_name) || null : null,
-    species: facts.species_explicit ? clean(facts.species) || null : null,
-    breed: facts.breed_explicit ? clean(facts.breed) || null : null,
-    weight_kg: facts.weight_explicit ? positiveNumber(facts.weight_kg, 0) || null : null,
-    weight_label: facts.weight_explicit ? clean(facts.weight_label) || null : null,
-    weight_estimated: facts.weight_explicit ? Boolean(facts.weight_estimated) : false,
-    coat_type: clean(facts.coat_type) || null,
+    pet_name: facts.pet_name_explicit
+      ? clean(facts.pet_name) || null
+      : clean(args.pet_name) || null,
+    species: facts.species_explicit
+      ? clean(facts.species) || null
+      : clean(args.species) || null,
+    breed: facts.breed_explicit
+      ? clean(facts.breed) || null
+      : clean(args.breed) || null,
+    weight_kg: weightKg,
+    weight_label: facts.weight_explicit
+      ? clean(facts.weight_label) || null
+      : clean(args.weight_label) || (weightKg ? `${formatWeightValue(weightKg)} kg` : null),
+    weight_estimated: facts.weight_explicit
+      ? Boolean(facts.weight_estimated)
+      : Boolean(args.weight_estimated),
+    coat_type: clean(facts.coat_type) || clean(args.coat_type) || null,
   }
 }
 
@@ -273,6 +179,35 @@ function formatTimeMinutes(value) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
+function normalizeBusinessHours(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : DEFAULT_BUSINESS_HOURS
+  const normalized = {}
+  for (let weekday = 1; weekday <= 7; weekday += 1) {
+    const raw = source[weekday] ?? source[String(weekday)] ?? DEFAULT_BUSINESS_HOURS[weekday] ?? []
+    const periods = (Array.isArray(raw) ? raw : [])
+      .map((period) => {
+        const open = clean(period?.open)
+        const close = clean(period?.close)
+        const openMinutes = parseTimeMinutes(open)
+        const closeMinutes = parseTimeMinutes(close)
+        if (openMinutes === null || closeMinutes === null || closeMinutes <= openMinutes) return null
+        return { open, close, openMinutes, closeMinutes }
+      })
+      .filter(Boolean)
+    normalized[weekday] = periods
+  }
+  return normalized
+}
+
+export function normalizePetbotSchedulingSettings(settings = {}) {
+  const timezone = clean(settings.timezone || settings.petbotTimezone) || DEFAULT_TIMEZONE
+  const slotIntervalMin = Math.max(5, Math.min(240, Number(settings.slotIntervalMin || settings.petbotSlotIntervalMin || DEFAULT_SLOT_INTERVAL_MINUTES) || DEFAULT_SLOT_INTERVAL_MINUTES))
+  const leadTimeMin = Math.max(0, Math.min(10080, Number(settings.bookingLeadTimeMin || settings.petbotBookingLeadTimeMin || DEFAULT_BOOKING_LEAD_MINUTES) || 0))
+  const capacity = Math.max(1, Math.min(100, Number(settings.bookingCapacity || settings.petbotBookingCapacity || DEFAULT_BOOKING_CAPACITY) || DEFAULT_BOOKING_CAPACITY))
+  const businessHours = normalizeBusinessHours(settings.businessHours || settings.petbotBusinessHours)
+  return { timezone, slotIntervalMin, leadTimeMin, capacity, businessHours }
+}
+
 function serviceGroupForOrder(orderType = '') {
   return clean(orderType) === 'veterinaria' ? 'veterinaria' : 'banho_tosa'
 }
@@ -290,6 +225,15 @@ function normalizeCoatType(value = '') {
   if (/medi/.test(text)) return 'medio'
   if (/curt/.test(text)) return 'curto'
   if (/todas|qualquer|todos/.test(text)) return 'todas'
+  return normalizeCode(value) || null
+}
+
+function normalizeServiceSpecies(value = '') {
+  const text = normalize(value)
+  if (!text) return null
+  if (['dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino'].includes(text)) return 'dog'
+  if (['cat', 'gato', 'gata', 'felino'].includes(text)) return 'cat'
+  if (['other', 'outro', 'outra'].includes(text)) return 'other'
   return normalizeCode(value) || null
 }
 
@@ -350,10 +294,21 @@ export function serviceFromCatalogProduct(product = {}) {
     sort_order: Number(product.sort_order || 500),
     source_product_id: clean(product.id),
     catalog_source: 'products',
-    species: clean(metadata.species) || clean(product.species_target) || null,
+    species: normalizeServiceSpecies(metadata.species || product.species_target),
     breeds: Array.isArray(metadata.breed) ? metadata.breed : (clean(metadata.breed) ? [metadata.breed] : []),
     all_breeds: metadata.all_breeds === true,
     coat_type: normalizeCoatType(metadata.coat_type) || extractCoatType(name),
+    weight_range: (
+      Number.isFinite(Number(metadata.weight_min_kg)) || Number.isFinite(Number(metadata.weight_max_kg))
+        ? {
+          min: Number.isFinite(Number(metadata.weight_min_kg)) ? Number(metadata.weight_min_kg) : null,
+          max: Number.isFinite(Number(metadata.weight_max_kg)) ? Number(metadata.weight_max_kg) : null,
+        }
+        : extractWeightRange(name)
+    ),
+    required_facts: Array.isArray(metadata.required_facts)
+      ? metadata.required_facts.map((value) => normalizeCode(value)).filter(Boolean)
+      : [],
     classification_version: Number(metadata.classification_version || 0) || null,
   }
 }
@@ -435,12 +390,16 @@ function normalizeService(row = {}) {
     source_product_id: sourceProductId || null,
     catalog_source: clean(row.catalog_source) || (sourceProductId ? 'products' : 'petshop_services'),
     service_kind: serviceKind(`${code} ${name}`),
+    species: normalizeServiceSpecies(row.species || row.species_target),
     weight_range: row.weight_range || extractWeightRange(name),
     coat_type: normalizeCoatType(row.coat_type) || extractCoatType(name),
     breeds: Array.isArray(row.breeds)
       ? row.breeds.map((value) => normalizePetbotBreedText(value)).filter(Boolean)
       : [],
     all_breeds: row.all_breeds === true,
+    required_facts: Array.isArray(row.required_facts)
+      ? row.required_facts.map((value) => normalizeCode(value)).filter(Boolean)
+      : [],
   }
 }
 
@@ -474,6 +433,21 @@ function serviceMatchesBreedPreset(service, breed = '') {
   )))
 }
 
+function preferExactCoatWithinWeightRanges(services = [], coatType = '') {
+  const groups = new Map()
+  for (const service of services) {
+    const range = service.weight_range
+    const key = range ? `${range.min ?? ''}:${range.max ?? ''}` : 'sem_faixa'
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(service)
+  }
+
+  return [...groups.values()].flatMap((group) => {
+    const exact = group.filter((service) => service.coat_type === coatType)
+    return exact.length ? exact : group
+  })
+}
+
 function inferredCoatTypeForBreed(breed = '', candidates = []) {
   const classification = classifyCommonPetBreed(breed)
   if (classification?.coat_type) return classification.coat_type
@@ -488,12 +462,13 @@ function inferredCoatTypeForBreed(breed = '', candidates = []) {
   return null
 }
 
-function serviceSelection({ serviceQuery = '', orderType = '', services = [], weightKg = null, coatType = null, breed = null } = {}) {
+function serviceSelection({ serviceQuery = '', orderType = '', services = [], weightKg = null, coatType = null, breed = null, species = null } = {}) {
   const query = normalize(serviceQuery)
   const code = normalizeCode(serviceQuery)
   const group = serviceGroupForOrder(orderType)
   const normalizedWeight = positiveNumber(weightKg, 0) || null
   let normalizedCoat = normalizeCoatType(coatType)
+  const normalizedSpecies = normalizeServiceSpecies(species)
   const allCandidates = (services || [])
     .map(normalizeService)
     .filter((service) => service.active && (!group || service.group_type === group))
@@ -503,7 +478,7 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
   }
 
   const queryKind = serviceKind(serviceQuery)
-  const exactId = allCandidates.find((service) => clean(service.id) === clean(serviceQuery))
+  const exactId = allCandidates.find((service) => clean(service.id) === clean(serviceQuery) || clean(service.source_product_id) === clean(serviceQuery))
   const exactCatalogMatches = allCandidates.filter((service) => (
     service.code === code || normalize(service.name) === query
   ))
@@ -549,10 +524,29 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
     }
   }
 
-  const specialized = candidates.filter((service) => service.weight_range || service.coat_type)
+  const specialized = candidates.filter((service) => service.weight_range || service.coat_type || service.species)
   if (specialized.length) candidates = specialized
 
   const requiredFields = []
+  const distinctSpecies = new Set(candidates.map((service) => service.species).filter(Boolean))
+  if (normalizedSpecies) {
+    const exactSpecies = candidates.filter((service) => service.species === normalizedSpecies)
+    if (exactSpecies.length) {
+      candidates = exactSpecies
+    } else {
+      candidates = candidates.filter((service) => !service.species)
+    }
+    if (!candidates.length) {
+      return {
+        service: null,
+        candidates: allCandidates,
+        required_fields: [],
+        error: `Nenhum serviço cadastrado atende a espécie informada (${clean(species)}).`,
+      }
+    }
+  } else if (distinctSpecies.size > 1) {
+    requiredFields.push('espécie do pet')
+  }
   if (candidates.some((service) => service.weight_range) && normalizedWeight === null) {
     requiredFields.push('peso aproximado do pet')
   }
@@ -592,8 +586,7 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
   }
   if (normalizedCoat) {
     filtered = filtered.filter((service) => serviceMatchesCoat(service, normalizedCoat))
-    const exactCoatMatches = filtered.filter((service) => service.coat_type === normalizedCoat)
-    if (exactCoatMatches.length) filtered = exactCoatMatches
+    filtered = preferExactCoatWithinWeightRanges(filtered, normalizedCoat)
   }
   if (normalizedCoat && !filtered.length) {
     return {
@@ -602,6 +595,21 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
       required_fields: [],
       error: `Nenhum serviço cadastrado atende o tipo de pelo informado (${clean(coatType)}).`,
     }
+  }
+
+  const factValues = {
+    species: normalizedSpecies,
+    breed: clean(breed),
+    weight_kg: normalizedWeight,
+    coat_type: normalizedCoat,
+  }
+  const requiredFacts = new Set(filtered.flatMap((service) => service.required_facts || []))
+  for (const fact of requiredFacts) {
+    if (factValues[fact]) continue
+    if (fact === 'species') requiredFields.push('espécie do pet')
+    if (fact === 'breed') requiredFields.push('raça do pet')
+    if (fact === 'weight_kg') requiredFields.push('peso aproximado do pet')
+    if (fact === 'coat_type') requiredFields.push('tipo de pelo do pet')
   }
 
   if (requiredFields.length) {
@@ -618,6 +626,45 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
   }
 }
 
+function normalizeMissingServiceField(value = '') {
+  const normalized = normalize(value)
+  if (/raca/.test(normalized)) return 'breed'
+  if (/peso/.test(normalized)) return 'weight_kg'
+  if (/pelo|pelagem/.test(normalized)) return 'coat_type'
+  if (/servico/.test(normalized)) return 'service_choice'
+  if (/data/.test(normalized)) return 'date'
+  return normalizeCode(value)
+}
+
+export function resolvePetshopService(options = {}) {
+  const selection = serviceSelection(options)
+  if (selection.service) {
+    const service = publicService(selection.service)
+    return {
+      ok: true,
+      status: 'resolved',
+      service,
+      missing_fields: [],
+      required_fields: [],
+      candidates: [service],
+      available_services: [service],
+    }
+  }
+
+  const requiredFields = [...new Set(selection.required_fields || [])]
+  const missingFields = [...new Set(requiredFields.map(normalizeMissingServiceField).filter(Boolean))]
+  const candidates = (selection.candidates || []).slice(0, 12).map(publicService)
+  return {
+    ok: false,
+    status: missingFields.length ? 'needs_input' : (selection.candidates?.length ? 'ambiguous' : 'not_found'),
+    error: selection.error || null,
+    missing_fields: missingFields,
+    required_fields: requiredFields,
+    candidates,
+    available_services: candidates,
+  }
+}
+
 function resolveServiceDefinition(options = {}) {
   return serviceSelection(options).service
 }
@@ -625,13 +672,36 @@ function resolveServiceDefinition(options = {}) {
 function publicService(service) {
   return {
     id: service.id,
+    product_id: service.source_product_id || null,
     code: service.code,
     name: service.name,
     price: service.default_price,
     duration_min: service.default_duration_min,
+    service_kind: service.service_kind || serviceKind(`${service.code || ''} ${service.name || ''}`),
     weight_min_kg: service.weight_range?.min ?? null,
     weight_max_kg: service.weight_range?.max ?? null,
     coat_type: service.coat_type || null,
+    species: service.species || null,
+    catalog_source: service.catalog_source || null,
+  }
+}
+
+export function findPetshopSubscriptionBenefit(service = {}, benefits = []) {
+  const normalizedService = normalizeService(service)
+  const kind = normalizedService.service_kind || serviceKind(`${normalizedService.code || ''} ${normalizedService.name || ''}`)
+  if (!kind) return null
+
+  const benefit = (Array.isArray(benefits) ? benefits : []).find((entry) => (
+    normalizeCode(entry?.service_type) === kind
+    && Number(entry?.remaining || 0) > 0
+  ))
+  if (!benefit) return null
+
+  return {
+    subscription_id: clean(benefit.subscription_id) || null,
+    plan_name: clean(benefit.plan_name) || null,
+    service_type: kind,
+    remaining: Math.max(0, Number(benefit.remaining || 0)),
   }
 }
 
@@ -672,6 +742,14 @@ function normalizeTransportOptions(settings = {}) {
   const fallbackFee = Number(settings.petTransportFee ?? 0)
   if (!Number.isFinite(fallbackFee) || fallbackFee <= 0) return []
   return [{ id: 'buscar_e_levar', label: 'Buscar e levar', fee: fallbackFee, active: true }]
+}
+
+export function listPetTransportOptions(settings = {}) {
+  return normalizeTransportOptions(settings).map((option) => ({
+    id: option.id,
+    label: option.label,
+    fee: option.fee,
+  }))
 }
 
 export function resolvePetTransportSelection({ args = {}, settings = {}, orderType = '' } = {}) {
@@ -718,44 +796,43 @@ function money(value) {
   })
 }
 
-function appointmentDateIso(row = {}) {
+function appointmentDateIso(row = {}, timezone = DEFAULT_TIMEZONE) {
   if (row.service_date) return String(row.service_date).slice(0, 10)
   if (!row.scheduled_at) return ''
-  return new Date(row.scheduled_at).toLocaleDateString('sv-SE', { timeZone: 'America/Sao_Paulo' })
+  const parsed = DateTime.fromISO(clean(row.scheduled_at), { setZone: true }).setZone(timezone)
+  return parsed.isValid ? parsed.toISODate() : ''
 }
 
-function appointmentTimeText(row = {}) {
+function appointmentTimeText(row = {}, timezone = DEFAULT_TIMEZONE) {
   if (row.start_time) return String(row.start_time).slice(0, 5)
   if (!row.scheduled_at) return ''
-  return new Date(row.scheduled_at).toLocaleTimeString('pt-BR', {
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'America/Sao_Paulo',
-  })
+  const parsed = DateTime.fromISO(clean(row.scheduled_at), { setZone: true }).setZone(timezone)
+  return parsed.isValid ? parsed.toFormat('HH:mm') : ''
 }
 
-function normalizeAppointment(row = {}) {
-  const date = appointmentDateIso(row)
-  const time = appointmentTimeText(row)
+function normalizeAppointment(row = {}, timezone = DEFAULT_TIMEZONE) {
+  const date = appointmentDateIso(row, timezone)
+  const time = appointmentTimeText(row, timezone)
+  const scheduledAt = clean(row.scheduled_at)
+    || (date && time ? DateTime.fromISO(`${date}T${time}`, { zone: timezone }).toISO({ suppressMilliseconds: true }) : null)
   return {
     ...row,
-    scheduled_at: row.scheduled_at || (date && time ? `${date}T${time}:00-03:00` : null),
+    scheduled_at: scheduledAt,
     service_date: row.service_date || date || null,
     start_time: row.start_time || (time ? `${time}:00` : null),
   }
 }
 
-function formatScheduledAt(value) {
-  const date = new Date(value)
-  if (Number.isNaN(date.getTime())) return clean(value)
-  return date.toLocaleString('pt-BR', {
-    day: '2-digit',
-    month: '2-digit',
-    year: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    timeZone: 'America/Sao_Paulo',
-  })
+function formatScheduledAt(value, timezone = DEFAULT_TIMEZONE) {
+  const parsed = DateTime.fromISO(clean(value), { setZone: true }).setZone(timezone)
+  if (!parsed.isValid) return clean(value)
+  return parsed.setLocale('pt-BR').toFormat('dd/MM/yyyy, HH:mm')
+}
+
+function sameScheduledInstant(left = '', right = '') {
+  const leftDate = DateTime.fromISO(clean(left), { setZone: true })
+  const rightDate = DateTime.fromISO(clean(right), { setZone: true })
+  return leftDate.isValid && rightDate.isValid && leftDate.toMillis() === rightDate.toMillis()
 }
 
 function buildPendingOrderId(order) {
@@ -772,7 +849,7 @@ function formatOrderSummary(order, settings = {}) {
       order.species,
       order.breed,
       order.size,
-      order.weight_label || (order.weight_kg ? `${order.weight_kg} kg` : null),
+      order.weight_label || (order.weight_kg ? `${formatWeightValue(order.weight_kg)} kg` : null),
       order.coat_type ? `pelo ${order.coat_type}` : null,
     ].filter(Boolean).join(' / ')
     lines.push(`• Pet: ${pet}`)
@@ -783,9 +860,17 @@ function formatOrderSummary(order, settings = {}) {
     lines.push(`• ${quantity}x ${item.name}: ${money(quantity * Number(item.unit_price || 0))}`)
   }
 
+  if (order.subscription_benefit) {
+    const planLabel = clean(order.subscription_benefit.plan_name) || 'plano ativo'
+    lines.push(`• Benefício do plano: ${planLabel} aplicado`)
+    if (Number(order.regular_service_price || 0) > 0) {
+      lines.push(`• Valor avulso do serviço: ${money(order.regular_service_price)}`)
+    }
+  }
+
   if (order.order_type !== 'produto') {
     lines.push(`• Serviço: ${order.service_label || order.service_type || order.order_type}`)
-    lines.push(`• Horário: ${formatScheduledAt(order.scheduled_at)}`)
+    lines.push(`• Horário: ${formatScheduledAt(order.scheduled_at, normalizePetbotSchedulingSettings(settings).timezone)}`)
     if (order.service_grooming_detail) lines.push(`• Acabamento: ${order.service_grooming_detail}`)
     if (Number(order.service_transport_fee || 0) > 0) {
       lines.push(`• Transporte do pet: ${money(order.service_transport_fee)}`)
@@ -824,34 +909,8 @@ export const PETBOT_AGENT_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'update_customer_profile',
-      description: 'Salva dados de cliente ou pet que foram informados explicitamente na conversa.',
-      strict: true,
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          customer_name: strictNullableString(),
-          pet_name: strictNullableString(),
-          species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
-          size: strictNullableString(),
-          breed: strictNullableString(),
-          weight_kg: strictNullableNumber('Peso informado explicitamente pelo cliente, em kg.'),
-          coat_type: strictNullableString('Tipo de pelo informado: curto, medio, longo, duplo ou todas.'),
-          symptom: strictNullableString(),
-          address: strictNullableString(),
-          neighborhood: strictNullableString(),
-          city: strictNullableString(),
-        },
-        required: ['customer_name', 'pet_name', 'species', 'size', 'breed', 'weight_kg', 'coat_type', 'symptom', 'address', 'neighborhood', 'city'],
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
       name: 'search_petshop_products',
-      description: 'Consulta o estoque real e os preços atuais antes de afirmar que um produto existe, está disponível ou custa determinado valor.',
+      description: 'Pesquisa produtos reais e retorna candidatos, estoque, preços e os atributos que ainda diferenciam as opções.',
       strict: true,
       parameters: {
         type: 'object',
@@ -859,16 +918,20 @@ export const PETBOT_AGENT_TOOLS = [
         properties: {
           query: { type: 'string' },
           species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
+          age_category: strictNullableString(),
+          size: strictNullableString(),
+          brand: strictNullableString(),
+          package_kg: strictNullableNumber(),
         },
-        required: ['query', 'species'],
+        required: ['query', 'species', 'age_category', 'size', 'brand', 'package_kg'],
       },
     },
   },
   {
     type: 'function',
     function: {
-      name: 'check_petshop_availability',
-      description: 'Seleciona o serviço exato do cadastro por peso e pela classificação editável de raça/pelagem do PetBot, e calcula horários livres contra a agenda atual. Use antes de informar preço, duração ou disponibilidade.',
+      name: 'resolve_petshop_service',
+      description: 'Resolve um serviço exato do catálogo comercial usando somente os fatos já informados. Retorna o serviço ou os campos realmente ausentes.',
       strict: true,
       parameters: {
         type: 'object',
@@ -876,16 +939,46 @@ export const PETBOT_AGENT_TOOLS = [
         properties: {
           service_query: { type: 'string' },
           order_type: { type: 'string', enum: ['banho_tosa', 'veterinaria'] },
-          pet_name: strictNullableString('Nome do pet informado explicitamente.'),
           species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
-          breed: strictNullableString('Raça informada explicitamente, sem usar a raça para deduzir peso.'),
-          weight_kg: strictNullableNumber('Peso exato do pet em kg quando o catálogo de serviços varia por peso.'),
-          coat_type: strictNullableString('Tipo de pelo: curto, medio, longo, duplo ou todas.'),
-          date: strictNullableString('Data exata no formato YYYY-MM-DD. Resolva hoje/amanhã usando a data atual do prompt.'),
-          preferred_time: strictNullableString('Horário exato no formato HH:mm, quando informado.'),
+          breed: strictNullableString(),
+          weight_kg: strictNullableNumber(),
+          coat_type: strictNullableString(),
+        },
+        required: ['service_query', 'order_type', 'species', 'breed', 'weight_kg', 'coat_type'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'check_petshop_availability',
+      description: 'Consulta a agenda real para um serviço já resolvido. Use antes de afirmar disponibilidade ou oferecer horários.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          service_id: { type: 'string', description: 'ID ou código exato retornado por resolve_petshop_service.' },
+          order_type: { type: 'string', enum: ['banho_tosa', 'veterinaria'] },
+          date: strictNullableString('Data YYYY-MM-DD.'),
+          preferred_time: strictNullableString('Horário HH:mm quando informado.'),
           period: { type: ['string', 'null'], enum: ['specific', 'morning', 'afternoon', 'any', null] },
         },
-        required: ['service_query', 'order_type', 'pet_name', 'species', 'breed', 'weight_kg', 'coat_type', 'date', 'preferred_time', 'period'],
+        required: ['service_id', 'order_type', 'date', 'preferred_time', 'period'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_petshop_transport_options',
+      description: 'Consulta as opções e taxas reais de transporte do pet configuradas pela loja. Use antes de oferecer MotoDog ou citar taxa.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {},
+        required: [],
       },
     },
   },
@@ -893,7 +986,7 @@ export const PETBOT_AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'prepare_petshop_order',
-      description: 'Valida produto ou serviço exato do cadastro, agenda, preço e total, e prepara o resumo final. Não registra a venda.',
+      description: 'Revalida catálogo, preço, estoque, agenda, taxas e total e cria um pedido pendente para confirmação. Não registra a venda.',
       strict: true,
       parameters: {
         type: 'object',
@@ -904,8 +997,10 @@ export const PETBOT_AGENT_TOOLS = [
           species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
           size: strictNullableString(),
           breed: strictNullableString(),
-          weight_kg: strictNullableNumber('Peso exato do pet em kg, quando o serviço cadastrado varia por peso.'),
-          coat_type: strictNullableString('Tipo de pelo: curto, medio, longo, duplo ou todas.'),
+          weight_kg: strictNullableNumber(),
+          weight_label: strictNullableString(),
+          weight_estimated: { type: 'boolean' },
+          coat_type: strictNullableString(),
           symptom: strictNullableString(),
           order_type: { type: 'string', enum: ['produto', 'banho_tosa', 'veterinaria'] },
           items: {
@@ -914,7 +1009,7 @@ export const PETBOT_AGENT_TOOLS = [
               type: 'object',
               additionalProperties: false,
               properties: {
-                product_id: strictNullableString('ID exato do produto exibido no contexto.'),
+                product_id: strictNullableString(),
                 name: { type: 'string' },
                 quantity: { type: 'number' },
                 upsell: { type: 'boolean' },
@@ -924,6 +1019,7 @@ export const PETBOT_AGENT_TOOLS = [
           },
           appointment_id: strictNullableString(),
           scheduled_at: strictNullableString(),
+          service_product_id: strictNullableString('UUID do produto-serviço resolvido no catálogo comercial.'),
           service_code: strictNullableString(),
           service_type: strictNullableString(),
           service_grooming_detail: strictNullableString(),
@@ -944,12 +1040,12 @@ export const PETBOT_AGENT_TOOLS = [
           notes: strictNullableString(),
         },
         required: [
-          'customer_name', 'pet_name', 'species', 'size', 'breed', 'weight_kg', 'coat_type', 'symptom', 'order_type', 'items',
-          'appointment_id', 'scheduled_at', 'service_code', 'service_type', 'service_grooming_detail', 'payment_method',
-          'fulfillment_type', 'delivery_address', 'delivery_neighborhood', 'delivery_city', 'delivery_reference',
-          'change_for', 'service_transport_fee', 'service_transport_mode', 'service_transport_label',
-          'service_transport_address', 'service_transport_neighborhood', 'service_transport_city',
-          'service_transport_reference', 'notes',
+          'customer_name', 'pet_name', 'species', 'size', 'breed', 'weight_kg', 'weight_label', 'weight_estimated',
+          'coat_type', 'symptom', 'order_type', 'items', 'appointment_id', 'scheduled_at', 'service_product_id',
+          'service_code', 'service_type', 'service_grooming_detail', 'payment_method', 'fulfillment_type',
+          'delivery_address', 'delivery_neighborhood', 'delivery_city', 'delivery_reference', 'change_for',
+          'service_transport_fee', 'service_transport_mode', 'service_transport_label', 'service_transport_address',
+          'service_transport_neighborhood', 'service_transport_city', 'service_transport_reference', 'notes'
         ],
       },
     },
@@ -958,14 +1054,12 @@ export const PETBOT_AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'create_confirmed_petshop_order',
-      description: 'Registra o pedido que já foi preparado em uma mensagem anterior. Use somente após confirmação explícita do cliente.',
+      description: 'Registra exatamente o pedido pendente validado em um turno anterior após confirmação inequívoca.',
       strict: true,
       parameters: {
         type: 'object',
         additionalProperties: false,
-        properties: {
-          confirmation: { type: 'boolean', description: 'Deve ser true somente quando o cliente confirmou explicitamente.' },
-        },
+        properties: { confirmation: { type: 'boolean' } },
         required: ['confirmation'],
       },
     },
@@ -973,15 +1067,29 @@ export const PETBOT_AGENT_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'send_product_image',
-      description: 'Seleciona a foto cadastrada de um produto real para envio ao cliente.',
+      name: 'cancel_pending_petshop_order',
+      description: 'Cancela e descarta o pedido pendente quando o cliente desiste ou pede para recomeçar. Não cancela pedidos já registrados.',
       strict: true,
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
-          product_id: { type: 'string' },
+          reason: strictNullableString(),
         },
+        required: ['reason'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'send_product_image',
+      description: 'Anexa a foto cadastrada de um produto real.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { product_id: { type: 'string' } },
         required: ['product_id'],
       },
     },
@@ -990,7 +1098,7 @@ export const PETBOT_AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'handoff_to_human',
-      description: 'Transfere a conversa quando faltar dado operacional, houver risco veterinário ou o cliente pedir uma pessoa.',
+      description: 'Transfere para uma pessoa quando a autonomia não consegue concluir com segurança ou o cliente solicita.',
       strict: true,
       parameters: {
         type: 'object',
@@ -1015,9 +1123,9 @@ export function isExplicitPetbotConfirmation(message = '') {
 export function buildServiceAvailability({
   serviceQuery = '',
   orderType = 'banho_tosa',
-  petName = '',
-  species = '',
-  breed = '',
+  petName = null,
+  species = null,
+  breed = null,
   weightKg = null,
   coatType = null,
   date = null,
@@ -1025,87 +1133,88 @@ export function buildServiceAvailability({
   period = null,
   services = [],
   appointments = [],
+  settings = {},
   now = new Date(),
   requirePetIdentity = false,
   requireServiceClassification = false,
 } = {}) {
   if (requirePetIdentity) {
-    const requiredIdentity = []
-    if (!clean(petName)) requiredIdentity.push('nome do pet')
-    if (!clean(species)) requiredIdentity.push('espécie do pet')
-    if (requiredIdentity.length) {
-      return {
-        ok: false,
-        error: 'Faltam dados básicos do pet antes da consulta operacional.',
-        required_fields: requiredIdentity,
-        available_services: [],
-        instruction: `Pergunte somente: ${requiredIdentity[0]}. Não informe preço, duração ou disponibilidade antes de identificar o pet e o serviço exato.`,
-      }
+    const missingFields = []
+    if (!clean(petName)) missingFields.push('pet_name')
+    if (!clean(species)) missingFields.push('species')
+    if (missingFields.length) {
+      const requiredFields = missingFields.map((field) => field === 'pet_name' ? 'nome do pet' : 'espécie do pet')
+      return { ok: false, status: 'needs_input', missing_fields: missingFields, required_fields: requiredFields, candidates: [], available_services: [] }
     }
   }
 
   if (requireServiceClassification && clean(orderType) === 'banho_tosa') {
-    const requiredClassification = []
-    if (!clean(breed)) requiredClassification.push('raça do pet')
-    if (!positiveNumber(weightKg, 0)) requiredClassification.push('peso aproximado do pet')
-    if (requiredClassification.length) {
-      return {
-        ok: false,
-        error: 'Faltam dados para selecionar o serviço correto no catálogo.',
-        required_fields: requiredClassification,
-        available_services: [],
-        instruction: 'Conduza a conversa naturalmente e peça somente os dados ausentes. Não exponha regras internas e não informe preço ou disponibilidade antes da validação do catálogo.',
-      }
+    const missingFields = []
+    if (!clean(breed)) missingFields.push('breed')
+    if (!positiveNumber(weightKg, 0)) missingFields.push('weight_kg')
+    if (missingFields.length) {
+      const requiredFields = missingFields.map((field) => field === 'breed' ? 'raça do pet' : 'peso aproximado do pet')
+      return { ok: false, status: 'needs_input', missing_fields: missingFields, required_fields: requiredFields, candidates: [], available_services: [] }
     }
   }
 
-  const selection = serviceSelection({ serviceQuery, orderType, services, weightKg, coatType, breed })
-  const service = selection.service
-  if (!service) {
-    return {
-      ok: false,
-      error: selection.error || 'Faltam dados para selecionar o serviço exato do cadastro real.',
-      required_fields: selection.required_fields,
-      available_services: selection.candidates.map(publicService),
-      instruction: selection.required_fields.length
-        ? 'Peça naturalmente apenas o dado necessário para eliminar a ambiguidade. Não exponha regras internas e não invente preço ou serviço.'
-        : 'Não invente serviço, preço ou disponibilidade. Use apenas uma opção exata retornada pelo cadastro.',
-    }
-  }
+  const resolved = resolvePetshopService({ serviceQuery, orderType, services, weightKg, coatType, breed, species })
+  if (!resolved.ok) return resolved
+  const resolvedId = clean(resolved.service.id)
+  const resolvedCode = normalizeCode(resolved.service.code)
+  const resolvedProductId = clean(resolved.service.product_id)
+  const service = normalizeService((services || []).find((item) => (
+    (resolvedProductId && clean(item.source_product_id) === resolvedProductId)
+    || (resolvedId && clean(item.id) === resolvedId)
+    || (resolvedCode && normalizeCode(item.code || item.name) === resolvedCode)
+  )) || resolved.service)
 
-  if (service.default_price <= 0) {
-    return { ok: false, error: 'Serviço cadastrado sem preço válido.', service: { code: service.code, name: service.name } }
+  if (Number(service.default_price ?? service.price ?? 0) <= 0) {
+    return { ok: false, status: 'invalid_catalog', error: 'service_without_price', service: publicService(service) }
   }
 
   const requestedDate = clean(date)
   if (!requestedDate) {
-    return {
-      ok: false,
-      error: 'A data do agendamento ainda não foi informada.',
-      required_fields: ['data do agendamento'],
-      service: publicService(service),
-      instruction: 'Pergunte a data desejada antes de oferecer horários. Não misture horários de dias diferentes.',
-    }
+    return { ok: false, status: 'needs_input', missing_fields: ['date'], required_fields: ['data do agendamento'], candidates: [publicService(service)], available_services: [publicService(service)], service: publicService(service) }
   }
-  if (requestedDate && !/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
-    return { ok: false, error: 'Data inválida. Use YYYY-MM-DD.' }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(requestedDate)) {
+    return { ok: false, status: 'invalid_input', error: 'invalid_date', service: publicService(service) }
   }
 
-  const dates = [requestedDate]
+  const schedule = normalizePetbotSchedulingSettings(settings)
+  const day = DateTime.fromISO(requestedDate, { zone: schedule.timezone })
+  if (!day.isValid) return { ok: false, status: 'invalid_input', error: 'invalid_date', service: publicService(service) }
+
   const requestedMinutes = preferredTime ? parseTimeMinutes(preferredTime) : null
   if (preferredTime && requestedMinutes === null) {
-    return { ok: false, error: 'Horário inválido. Use HH:mm.' }
+    return { ok: false, status: 'invalid_input', error: 'invalid_time', service: publicService(service) }
   }
 
+  const periods = schedule.businessHours[day.weekday] || []
+  const durationMin = Math.max(15, Number(service.default_duration_min ?? service.duration_min ?? 60) || 60)
   const busyAppointments = (appointments || [])
-    .map(normalizeAppointment)
+    .map((row) => normalizeAppointment(row, schedule.timezone))
     .filter((row) => BUSY_STATUSES.has(normalize(row.status)))
   const explicitAvailable = (appointments || [])
-    .map(normalizeAppointment)
+    .map((row) => normalizeAppointment(row, schedule.timezone))
     .filter((row) => AVAILABLE_STATUSES.has(normalize(row.status)))
-  const nowMs = now.getTime()
-  const durationMin = service.default_duration_min
+  const nowDateTime = DateTime.fromJSDate(now).setZone(schedule.timezone)
   const slots = []
+
+  const appointmentInterval = (row) => {
+    const source = clean(row.scheduled_at)
+    const start = source
+      ? DateTime.fromISO(source, { setZone: true }).setZone(schedule.timezone)
+      : DateTime.fromISO(`${appointmentDateIso(row, schedule.timezone)}T${appointmentTimeText(row, schedule.timezone)}`, { zone: schedule.timezone })
+    if (!start.isValid) return null
+    const duration = Math.max(15, Number(row.duration_min || 60) || 60)
+    return { start, end: start.plus({ minutes: duration }) }
+  }
+
+  const candidateOverlaps = (candidateStart, candidateEnd, row) => {
+    const interval = appointmentInterval(row)
+    return Boolean(interval && candidateStart < interval.end && interval.start < candidateEnd)
+  }
 
   const periodMatches = (minutes) => {
     if (period === 'morning') return minutes < 12 * 60
@@ -1113,76 +1222,91 @@ export function buildServiceAvailability({
     return true
   }
 
-  for (const dateIso of dates) {
-    const candidateMinutes = []
-    if (requestedMinutes !== null) candidateMinutes.push(requestedMinutes)
-    for (let minutes = STORE_OPEN_MINUTES; minutes + durationMin <= STORE_CLOSE_MINUTES; minutes += SLOT_INTERVAL_MINUTES) {
+  const candidateMinutes = []
+  if (requestedMinutes !== null) candidateMinutes.push(requestedMinutes)
+  for (const businessPeriod of periods) {
+    for (
+      let minutes = businessPeriod.openMinutes;
+      minutes + durationMin <= businessPeriod.closeMinutes;
+      minutes += schedule.slotIntervalMin
+    ) {
       if (!candidateMinutes.includes(minutes)) candidateMinutes.push(minutes)
-    }
-
-    for (const minutes of candidateMinutes) {
-      if (minutes < STORE_OPEN_MINUTES || minutes + durationMin > STORE_CLOSE_MINUTES) continue
-      if (!periodMatches(minutes) && minutes !== requestedMinutes) continue
-      const time = formatTimeMinutes(minutes)
-      const scheduledAt = `${dateIso}T${time}:00-03:00`
-      const scheduledMs = new Date(scheduledAt).getTime()
-      if (scheduledMs <= nowMs + 15 * 60 * 1000) continue
-
-      const explicitSlot = explicitAvailable.find((row) => appointmentStartMs(row) === scheduledMs)
-      const candidate = {
-        id: explicitSlot?.id || null,
-        service_type: service.code,
-        scheduled_at: scheduledAt,
-        service_date: dateIso,
-        start_time: `${time}:00`,
-        duration_min: Number(explicitSlot?.duration_min || durationMin),
-        price: Number(explicitSlot?.price || service.default_price),
-        status: 'available',
-        virtual: !explicitSlot,
-      }
-      if (busyAppointments.some((row) => appointmentsOverlap(candidate, row))) continue
-      slots.push(candidate)
     }
   }
 
+  for (const minutes of candidateMinutes) {
+    const containingPeriod = periods.find((businessPeriod) => (
+      minutes >= businessPeriod.openMinutes && minutes + durationMin <= businessPeriod.closeMinutes
+    ))
+    if (!containingPeriod) continue
+    if (!periodMatches(minutes) && minutes !== requestedMinutes) continue
+
+    const time = formatTimeMinutes(minutes)
+    const start = DateTime.fromISO(`${requestedDate}T${time}`, { zone: schedule.timezone })
+    const end = start.plus({ minutes: durationMin })
+    if (!start.isValid || start <= nowDateTime.plus({ minutes: schedule.leadTimeMin })) continue
+
+    const overlapCount = busyAppointments.filter((row) => candidateOverlaps(start, end, row)).length
+    if (overlapCount >= schedule.capacity) continue
+
+    const explicitSlot = explicitAvailable.find((row) => {
+      const interval = appointmentInterval(row)
+      return interval?.start.toMillis() === start.toMillis()
+    })
+    const scheduledAt = start.toISO({ suppressMilliseconds: true })
+    slots.push({
+      id: explicitSlot?.id || null,
+      service_type: service.code,
+      service_product_id: service.source_product_id || null,
+      scheduled_at: scheduledAt,
+      service_date: requestedDate,
+      start_time: `${time}:00`,
+      duration_min: Number(explicitSlot?.duration_min || durationMin),
+      price: Number(explicitSlot?.price || service.default_price || service.price),
+      status: 'available',
+      virtual: !explicitSlot,
+      capacity_remaining: Math.max(0, schedule.capacity - overlapCount),
+    })
+  }
+
   slots.sort((left, right) => {
-    if (requestedMinutes === null || !requestedDate) return new Date(left.scheduled_at) - new Date(right.scheduled_at)
-    const leftMinutes = parseTimeMinutes(appointmentTimeText(left)) ?? 0
-    const rightMinutes = parseTimeMinutes(appointmentTimeText(right)) ?? 0
+    if (requestedMinutes === null) return new Date(left.scheduled_at) - new Date(right.scheduled_at)
+    const leftMinutes = parseTimeMinutes(appointmentTimeText(left, schedule.timezone)) ?? 0
+    const rightMinutes = parseTimeMinutes(appointmentTimeText(right, schedule.timezone)) ?? 0
     return Math.abs(leftMinutes - requestedMinutes) - Math.abs(rightMinutes - requestedMinutes)
   })
 
-  const requestedScheduledAt = requestedDate && requestedMinutes !== null
-    ? `${requestedDate}T${formatTimeMinutes(requestedMinutes)}:00-03:00`
+  const requestedScheduledAt = requestedMinutes !== null
+    ? DateTime.fromISO(`${requestedDate}T${formatTimeMinutes(requestedMinutes)}`, { zone: schedule.timezone }).toISO({ suppressMilliseconds: true })
     : null
   const requestedSlot = requestedScheduledAt
-    ? slots.find((slot) => slot.scheduled_at === requestedScheduledAt) || null
+    ? slots.find((slot) => DateTime.fromISO(slot.scheduled_at).toMillis() === DateTime.fromISO(requestedScheduledAt).toMillis()) || null
     : null
 
   return {
     ok: true,
-    source: 'petshop_services+appointments',
+    status: slots.length ? 'available' : 'unavailable',
+    source: 'products+appointments',
+    timezone: schedule.timezone,
+    business_date: requestedDate,
     service: publicService(service),
     requested_slot: requestedScheduledAt
       ? { scheduled_at: requestedScheduledAt, available: Boolean(requestedSlot) }
       : null,
-    available_slots: slots.slice(0, 8).map((slot) => ({
+    available_slots: slots.slice(0, 12).map((slot) => ({
       appointment_id: slot.id,
+      service_product_id: slot.service_product_id,
       scheduled_at: slot.scheduled_at,
       date: slot.service_date,
-      time: appointmentTimeText(slot),
+      time: appointmentTimeText(slot, schedule.timezone),
       price: slot.price,
       duration_min: slot.duration_min,
+      capacity_remaining: slot.capacity_remaining,
     })),
-    instruction: requestedSlot
-      ? 'O horário solicitado está livre. Use exatamente o scheduled_at e o service.code retornados ao preparar o agendamento.'
-      : slots.length
-        ? 'O horário solicitado não está livre ou não foi informado. Ofereça apenas os horários retornados.'
-        : 'Não há horário livre no período consultado. Não invente alternativas.',
   }
 }
 
-export function preparePetshopOrderDraft({ args = {}, products = [], services = [], appointments = [], settings = {}, now = new Date() } = {}) {
+export function preparePetshopOrderDraft({ args = {}, products = [], services = [], appointments = [], subscriptionBenefits = [], settings = {}, now = new Date() } = {}) {
   const customerName = clean(args.customer_name)
   const orderType = clean(args.order_type)
   const missing = []
@@ -1196,7 +1320,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     size: nullableString(args.size, 60),
     breed: nullableString(args.breed, 80),
     weight_kg: positiveNumber(args.weight_kg, 0) || null,
-    weight_label: nullableString(args.weight_label, 40),
+    weight_label: nullableString(args.weight_label, 80),
     weight_estimated: Boolean(args.weight_estimated),
     coat_type: normalizeCoatType(args.coat_type),
     symptom: nullableString(args.symptom, 200),
@@ -1290,7 +1414,8 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   }
   if (orderType === 'veterinaria' && !base.symptom) missing.push('problema principal')
 
-  const normalizedAppointments = (appointments || []).map(normalizeAppointment)
+  const schedule = normalizePetbotSchedulingSettings(settings)
+  const normalizedAppointments = (appointments || []).map((row) => normalizeAppointment(row, schedule.timezone))
   const requestedAppointmentId = clean(args.appointment_id)
   let requestedScheduledAt = clean(args.scheduled_at)
   const explicitAppointment = requestedAppointmentId
@@ -1298,7 +1423,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     : null
   if (explicitAppointment?.scheduled_at) requestedScheduledAt = clean(explicitAppointment.scheduled_at)
 
-  const serviceQuery = clean(args.service_code || args.service_type || explicitAppointment?.service_type)
+  const serviceQuery = clean(args.service_product_id || args.service_code || args.service_type || explicitAppointment?.service_type)
   const selection = serviceSelection({
     serviceQuery,
     orderType,
@@ -1306,6 +1431,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     weightKg: base.weight_kg,
     coatType: base.coat_type,
     breed: base.breed,
+    species: base.species,
   })
   const serviceDefinition = selection.service
   if (serviceDefinition && !base.coat_type) {
@@ -1319,8 +1445,8 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   }
   if (!requestedScheduledAt) missing.push('horário real da agenda')
 
-  const requestedDate = appointmentDateIso({ scheduled_at: requestedScheduledAt })
-  const requestedTime = appointmentTimeText({ scheduled_at: requestedScheduledAt })
+  const requestedDate = appointmentDateIso({ scheduled_at: requestedScheduledAt }, schedule.timezone)
+  const requestedTime = appointmentTimeText({ scheduled_at: requestedScheduledAt }, schedule.timezone)
   const availability = serviceDefinition && requestedDate && requestedTime
     ? buildServiceAvailability({
       serviceQuery: serviceDefinition.code,
@@ -1328,19 +1454,25 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
       weightKg: base.weight_kg,
       coatType: base.coat_type,
       breed: base.breed,
+      species: base.species,
       date: requestedDate,
       preferredTime: requestedTime,
       period: 'specific',
       services,
       appointments,
+      settings,
       now,
     })
     : null
-  const availableSlot = availability?.available_slots?.find((slot) => clean(slot.scheduled_at) === requestedScheduledAt) || null
+  const availableSlot = availability?.available_slots?.find((slot) => sameScheduledInstant(slot.scheduled_at, requestedScheduledAt)) || null
   if (requestedScheduledAt && (!availability?.ok || !availableSlot)) missing.push('horário disponível')
 
-  const servicePrice = Number(availableSlot?.price ?? serviceDefinition?.default_price ?? 0)
-  if (serviceDefinition && servicePrice <= 0) missing.push('preço confirmado do serviço')
+  const regularServicePrice = Number(availableSlot?.price ?? serviceDefinition?.default_price ?? 0)
+  if (serviceDefinition && regularServicePrice <= 0) missing.push('preço confirmado do serviço')
+  const subscriptionBenefit = serviceDefinition
+    ? findPetshopSubscriptionBenefit(serviceDefinition, subscriptionBenefits)
+    : null
+  const servicePrice = subscriptionBenefit ? 0 : regularServicePrice
 
   const transport = resolvePetTransportSelection({ args, settings, orderType })
   if (!transport.ok) missing.push(transport.error)
@@ -1368,9 +1500,13 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
       upsell: false,
     }],
     appointment_id: availableSlot.appointment_id || null,
-    scheduled_at: requestedScheduledAt,
+    scheduled_at: availableSlot.scheduled_at,
+    service_product_id: serviceDefinition.source_product_id || null,
     service_type: serviceType,
     service_label: serviceDefinition.name,
+    service_kind: serviceDefinition.service_kind || serviceKind(`${serviceDefinition.code || ''} ${serviceDefinition.name || ''}`),
+    regular_service_price: regularServicePrice,
+    subscription_benefit: subscriptionBenefit,
     duration_min: Number(availableSlot.duration_min || serviceDefinition.default_duration_min || 60),
     payment_method: null,
     fulfillment_type: 'servico',
@@ -1414,6 +1550,8 @@ export async function runPetbotAgent({
   maxSteps = MAX_AGENT_STEPS,
   initialToolChoice = 'auto',
   validateReply = null,
+  responseFormat = null,
+  parseReply = null,
 } = {}) {
   if (typeof callModel !== 'function') throw new TypeError('callModel is required')
   if (typeof executeTool !== 'function') throw new TypeError('executeTool is required')
@@ -1425,6 +1563,8 @@ export async function runPetbotAgent({
   ]
   const toolRuns = []
   let tokensUsed = 0
+  let validationRetries = 0
+  const startedAt = Date.now()
 
   for (let step = 0; step < Math.max(1, maxSteps); step += 1) {
     const response = await callModel({
@@ -1435,12 +1575,19 @@ export async function runPetbotAgent({
       tool_choice: step === 0 ? initialToolChoice : 'auto',
       parallel_tool_calls: false,
       max_tokens: 800,
+      ...(responseFormat ? { response_format: responseFormat } : {}),
     })
     tokensUsed += Number(response?.usage?.total_tokens || 0)
 
     const assistantMessage = response?.choices?.[0]?.message || {}
     const toolCalls = Array.isArray(assistantMessage.tool_calls) ? assistantMessage.tool_calls : []
-    const content = clean(assistantMessage.content)
+    const rawContent = clean(assistantMessage.content)
+    let parsedContent = rawContent
+    if (typeof parseReply === 'function') {
+      const parsed = parseReply(rawContent)
+      parsedContent = parsed && typeof parsed === 'object' ? parsed.message : parsed
+    }
+    const content = clean(parsedContent)
 
     if (!toolCalls.length) {
       if (!content) throw new Error('O agente retornou uma resposta vazia.')
@@ -1454,6 +1601,7 @@ export async function runPetbotAgent({
           if (step >= Math.max(1, maxSteps) - 1) {
             throw new Error(validation.error || 'O agente não conseguiu produzir uma resposta operacionalmente válida.')
           }
+          validationRetries += 1
           messages.push({ role: 'assistant', content })
           messages.push({
             role: 'system',
@@ -1463,7 +1611,15 @@ export async function runPetbotAgent({
           continue
         }
       }
-      return { reply: content, toolRuns, tokensUsed, messages }
+      return {
+        reply: content,
+        toolRuns,
+        tokensUsed,
+        messages,
+        validationRetries,
+        steps: step + 1,
+        durationMs: Date.now() - startedAt,
+      }
     }
 
     messages.push({
@@ -1474,6 +1630,7 @@ export async function runPetbotAgent({
 
     for (const toolCall of toolCalls) {
       let result
+      const toolStartedAt = Date.now()
       try {
         result = await executeTool(toolCall)
       } catch (error) {
@@ -1482,6 +1639,8 @@ export async function runPetbotAgent({
       toolRuns.push({
         name: clean(toolCall?.function?.name),
         ok: result?.ok !== false,
+        status: clean(result?.status) || null,
+        duration_ms: Date.now() - toolStartedAt,
         result,
       })
       messages.push({

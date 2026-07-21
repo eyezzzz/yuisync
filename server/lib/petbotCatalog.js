@@ -190,17 +190,25 @@ export function classifyProduct(product = {}) {
   const text = productText(product)
   const category = normalizeCatalogText(product.category)
   const name = normalizeCatalogText(product.name)
-  const isBulk = /\bgranel\b/.test(text) || /\ba granel\b/.test(text)
-  const brand = detectBrand(text)
-  const breed = detectBreed(text)
-  const age = detectAge(text)
-  const species = detectSpecies(text)
-  const size = detectSize(text)
-  const packageKg = isBulk ? null : extractPackageKg(text)
-  let type = 'outro'
+  const metadata = product.bot_metadata && typeof product.bot_metadata === 'object'
+    ? product.bot_metadata
+    : {}
+  const isBulk = metadata.is_bulk === true || /\bgranel\b/.test(text) || /\ba granel\b/.test(text)
+  const brand = normalizeCatalogText(metadata.brand) || detectBrand(text)
+  const breed = metadata.breed
+    ? { label: String(metadata.breed).trim(), normalized: normalizeCatalogText(metadata.breed) }
+    : detectBreed(text)
+  const age = normalizeCatalogText(metadata.age_category || metadata.age) || detectAge(text)
+  const species = normalizeCatalogText(metadata.species || product.species_target) || detectSpecies(text)
+  const size = normalizeCatalogText(metadata.size || metadata.pet_size) || detectSize(text)
+  const metadataPackageKg = Number(metadata.package_kg || metadata.packageKg || 0)
+  const packageKg = isBulk ? null : (metadataPackageKg > 0 ? metadataPackageKg : extractPackageKg(text))
+  let type = normalizeCatalogText(metadata.product_type || metadata.type) || 'outro'
 
   if (isBulk) {
     type = 'granel'
+  } else if (type !== 'outro') {
+    // Editable catalog metadata wins over name heuristics.
   } else if (hasAny(text, TYPE_ALIASES.antipulgas)) {
     type = 'antipulgas'
   } else if (hasAny(text, TYPE_ALIASES.areia)) {

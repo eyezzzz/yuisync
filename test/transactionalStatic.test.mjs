@@ -210,7 +210,7 @@ test('modo noturno e persistido e tem alternancia no menu', async () => {
 })
 
 test('catalogo comercial de servicos sincroniza com a agenda transacional', async () => {
-  const migration = await read('supabase/migrations/20260721003000_sync_service_products_catalog.sql')
+  const migration = await read('supabase/migrations/20260721003500_sync_service_products_catalog.sql')
   assert.match(migration, /add column if not exists source_product_id/)
   assert.match(migration, /create trigger trg_sync_product_service_catalog/)
   assert.match(migration, /from public\.products product/)
@@ -218,15 +218,39 @@ test('catalogo comercial de servicos sincroniza com a agenda transacional', asyn
   assert.match(migration, /default_price = excluded\.default_price/)
 })
 
-test('falha do agente em servico nao retorna ao guardiao com precos genericos', async () => {
+test('falha do agente faz handoff seguro sem retornar ao fluxo hardcoded', async () => {
   const source = await read('server/lib/chat.js')
+  const webhook = await read('serverless/whatsappWebhook.ts')
+  const grounding = await read('server/lib/petbotGrounding.js')
   const catchStart = source.indexOf("logger.warn('PetBot agent failed'")
-  const guardStart = source.indexOf('let guard = runPetbotGuard', catchStart)
-  const segment = source.slice(catchStart, guardStart)
-  assert.match(segment, /isPetbotServiceConversation/)
-  assert.match(segment, /respondWithPetbotSafeServiceFailure/)
+  const segment = source.slice(catchStart)
+  assert.match(segment, /respondWithPetbotSafeFailure/)
+  assert.match(source, /safe_agent_handoff/)
+  assert.doesNotMatch(source, /runPetbotGuard/)
+  assert.doesNotMatch(webhook, /runPetbotGuard/)
   assert.match(source, /mergePetshopServiceCatalogs/)
-  assert.match(source, /replyClaimsServiceOperationalData/)
+  assert.match(source, /validatePetbotOperationalReply/)
+  assert.match(grounding, /situação de estoque sem consulta ao catálogo/)
+  assert.match(grounding, /disponibilidade de agenda sem consulta/)
+})
+
+test('PetBot v3 confirma pedidos de forma idempotente e usa configuracao real da loja', async () => {
+  const migration = await read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
+
+  assert.match(migration, /create table if not exists public\.petbot_order_commits/)
+  assert.match(migration, /primary key \(tenant_id, idempotency_key\)/)
+  assert.match(migration, /pg_advisory_xact_lock/)
+  assert.match(migration, /status = 'completed'/)
+  assert.doesNotMatch(migration, /last_sale_id is not null/)
+  assert.match(migration, /petbot_business_hours/)
+  assert.match(migration, /petbot_booking_capacity/)
+  assert.match(migration, /pet_transport_options/)
+  assert.match(migration, /p\.species_target/)
+  assert.match(migration, /from public\.products/)
+  assert.match(migration, /from public\.petshop_services/)
+  assert.doesNotMatch(migration, /service_transport_fee'\)::numeric/)
+  assert.match(migration, /revoke all on function public\.create_petbot_order_transaction\(jsonb\) from public, anon, authenticated/)
+  assert.match(migration, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
 })
 
 test('classificacao PetBot preenche racas comuns por pelagem sem sobrescrever ajustes manuais', async () => {
@@ -260,4 +284,16 @@ test('classificacao exclusiva armazena uma unica grafia canonica por raca', asyn
   assert.doesNotMatch(migration, /"shitzu"/)
   assert.match(catalog, /commonCanonicalBreedsForCoatType/)
   assert.match(catalog, /classification_source: CLASSIFICATION_SOURCE/)
+})
+
+
+test('PetBot v3 movimenta estoque e consome beneficio de plano na mesma transacao', async () => {
+  const migration = await read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
+  assert.match(migration, /insert into public\.stock_movements/)
+  assert.match(migration, /'Venda PetBot'/)
+  assert.match(migration, /from public\.client_subscriptions subscription/)
+  assert.match(migration, /for update of subscription/)
+  assert.match(migration, /services_used = jsonb_set/)
+  assert.match(migration, /subscription_benefit_used = v_subscription_benefit_used/)
+  assert.match(migration, /'subscription_plan_name', v_subscription_plan_name/)
 })

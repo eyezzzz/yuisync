@@ -307,12 +307,12 @@ test('schemas das ferramentas usam modo estrito compatível', () => {
   }
 })
 
-test('runtime tenta o agente antes do guardião legado', async () => {
+test('runtime usa somente o agente autonomo e handoff seguro', async () => {
   const source = await import('node:fs/promises').then((fs) => fs.readFile(new URL('../server/lib/chat.js', import.meta.url), 'utf8'))
   const agentIndex = source.indexOf('return await respondWithPetbotAgent')
-  const guardIndex = source.indexOf('let guard = runPetbotGuard', agentIndex)
   assert.ok(agentIndex > 0)
-  assert.ok(guardIndex > agentIndex)
+  assert.doesNotMatch(source, /runPetbotGuard/)
+  assert.match(source, /respondWithPetbotSafeFailure/)
   assert.match(source, /pendingAtTurnStart/)
   assert.match(source, /isExplicitPetbotConfirmation\(trimmedMessage\)/)
   assert.match(source, /loadPetshopServices/)
@@ -320,7 +320,7 @@ test('runtime tenta o agente antes do guardião legado', async () => {
   assert.match(source, /check_petshop_availability/)
   assert.match(source, /resolvePetTransportSelection/)
   assert.match(source, /mergeInterpretedPetbotServiceFacts/)
-  assert.match(source, /groundPetbotServiceArgs\(args, serviceFacts\)/)
+  assert.match(source, /mergeServiceFactsFromToolArgs/)
   assert.match(source, /groundPetbotServiceArgs\(pendingAtTurnStart\.order, serviceFacts\)/)
   assert.match(source, /validateReply:/)
   assert.doesNotMatch(source, /buildNaturalPetbotServiceQuestion/)

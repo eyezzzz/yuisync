@@ -1,10 +1,10 @@
-import { renderGuardedPetbotReply } from './petbotGuard.js'
+import { classifyCommonPetBreed } from '../../shared/petbotBreedCatalog.js'
 
 const DEFAULT_TEMPERATURE = 0.5
 const DEFAULT_TIMEOUT_MS = 12_000
 
 const INTENTS = new Set(['produto', 'banho_tosa', 'veterinaria', 'multi'])
-const SPECIES = new Set(['dog', 'cat'])
+const SPECIES = new Set(['dog', 'cat', 'other'])
 const PRODUCT_KINDS = new Set(['food', 'flea', 'litter', 'specific'])
 const PAYMENTS = new Set(['pix', 'dinheiro', 'cartao'])
 const FULFILLMENTS = new Set(['entrega', 'retirada'])
@@ -43,6 +43,7 @@ function normalizeSpecies(value) {
   const normalized = norm(value)
   if (['dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino'].includes(normalized)) return 'dog'
   if (['cat', 'gato', 'gata', 'felino'].includes(normalized)) return 'cat'
+  if (['other', 'outro', 'outra', 'ave', 'passaro', 'pássaro', 'coelho', 'roedor', 'reptil', 'réptil'].includes(normalized)) return 'other'
   return ''
 }
 
@@ -55,14 +56,9 @@ function normalizePayment(value) {
 }
 
 function normalizeBreed(value) {
-  const normalized = norm(value).replace(/\s+/g, ' ')
-  if (['shih tzu', 'shi tzu', 'shihtzu', 'shitzu'].includes(normalized)) return 'Shih Tzu'
-  if (normalized.includes('spitz')) return 'Spitz'
-  if (normalized.includes('poodle')) return 'Poodle'
-  if (normalized.includes('pinscher')) return 'Pinscher'
-  if (normalized.includes('golden')) return 'Golden Retriever'
-  if (normalized.includes('labrador')) return 'Labrador'
-  return pickString(value, 60)
+  const text = pickString(value, 80)
+  if (!text) return ''
+  return classifyCommonPetBreed(text)?.canonical || text
 }
 
 function safeJsonParse(text = '') {
@@ -207,6 +203,61 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
   ]
 }
 
+const PETBOT_INTERPRETATION_SCHEMA = {
+  name: 'petbot_turn_interpretation',
+  strict: true,
+  schema: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      customer_name: { type: ['string', 'null'] },
+      intent: { type: ['string', 'null'], enum: ['produto', 'banho_tosa', 'veterinaria', 'multi', null] },
+      pet_name: { type: ['string', 'null'] },
+      species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
+      breed: { type: ['string', 'null'] },
+      size: { type: ['string', 'null'], enum: ['pequeno', 'medio', 'grande', null] },
+      weight_kg: { type: ['number', 'null'] },
+      weight_label: { type: ['string', 'null'] },
+      weight_estimated: { type: 'boolean' },
+      coat_type: { type: ['string', 'null'] },
+      age_category: { type: ['string', 'null'], enum: ['filhote', 'adulto', 'castrado', 'senior', null] },
+      product_kind: { type: ['string', 'null'], enum: ['food', 'flea', 'litter', 'specific', null] },
+      brand: { type: ['string', 'null'] },
+      package_preference: { type: ['string', 'null'] },
+      package_kg: { type: ['number', 'null'] },
+      quantity: { type: ['number', 'null'] },
+      service_type: { type: ['string', 'null'] },
+      service_grooming_detail: { type: ['string', 'null'] },
+      service_notes: { type: ['string', 'null'] },
+      service_date: { type: ['string', 'null'] },
+      service_time_preference: { type: ['string', 'null'] },
+      service_preferred_time: { type: ['string', 'null'] },
+      symptom: { type: ['string', 'null'] },
+      payment_method: { type: ['string', 'null'], enum: ['pix', 'dinheiro', 'cartao', null] },
+      fulfillment_type: { type: ['string', 'null'], enum: ['entrega', 'retirada', null] },
+      delivery_address: { type: ['string', 'null'] },
+      neighborhood: { type: ['string', 'null'] },
+      city: { type: ['string', 'null'] },
+      reference: { type: ['string', 'null'] },
+      wants_human: { type: 'boolean' },
+      wants_discount: { type: 'boolean' },
+      wants_image: { type: 'boolean' },
+      confirmation: { type: 'boolean' },
+      negation: { type: 'boolean' },
+      confidence: { type: 'number' },
+      raw_summary: { type: ['string', 'null'] },
+    },
+    required: [
+      'customer_name', 'intent', 'pet_name', 'species', 'breed', 'size', 'weight_kg', 'weight_label',
+      'weight_estimated', 'coat_type', 'age_category', 'product_kind', 'brand', 'package_preference',
+      'package_kg', 'quantity', 'service_type', 'service_grooming_detail', 'service_notes', 'service_date',
+      'service_time_preference', 'service_preferred_time', 'symptom', 'payment_method', 'fulfillment_type',
+      'delivery_address', 'neighborhood', 'city', 'reference', 'wants_human', 'wants_discount', 'wants_image',
+      'confirmation', 'negation', 'confidence', 'raw_summary',
+    ],
+  },
+}
+
 async function callChatJson({ apiKey, model, temperature, timeoutMs, messages, maxTokens = 350 }) {
   if (!apiKey) return null
   const controller = new AbortController()
@@ -224,7 +275,7 @@ async function callChatJson({ apiKey, model, temperature, timeoutMs, messages, m
         model,
         temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : DEFAULT_TEMPERATURE,
         max_tokens: maxTokens,
-        response_format: { type: 'json_object' },
+        response_format: { type: 'json_schema', json_schema: PETBOT_INTERPRETATION_SCHEMA },
         messages,
       }),
     })
@@ -239,42 +290,12 @@ async function callChatJson({ apiKey, model, temperature, timeoutMs, messages, m
   }
 }
 
-async function callChatText({ apiKey, model, temperature, timeoutMs, messages, maxTokens = 260 }) {
-  if (!apiKey) return ''
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), timeoutMs || DEFAULT_TIMEOUT_MS)
-
-  try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      signal: controller.signal,
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        model,
-        temperature: Number.isFinite(Number(temperature)) ? Number(temperature) : DEFAULT_TEMPERATURE,
-        max_tokens: maxTokens,
-        messages,
-      }),
-    })
-
-    const payload = await response.json().catch(() => ({}))
-    if (!response.ok) return ''
-    return clean(payload?.choices?.[0]?.message?.content || '')
-  } catch {
-    return ''
-  } finally {
-    clearTimeout(timer)
-  }
-}
 
 export async function interpretPetbotMessageWithLlm(options = {}) {
   const content = await callChatJson({
     apiKey: options.apiKey,
     model: options.model,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
+    temperature: 0,
     timeoutMs: options.timeoutMs,
     messages: buildInterpreterMessages(options),
   })
@@ -299,64 +320,4 @@ export function buildInterpretedPetbotSearchText(message = '', interpretation = 
     data.package_preference,
     data.package_kg ? `${data.package_kg}kg` : '',
   ].filter(Boolean).join(' ')
-}
-
-function buildRedraftMessages({ message, history = [], directive = {}, customInstructions = '' }) {
-  return [
-    {
-      role: 'system',
-      content: [
-        'Voce e o PetBot, atendente de petshop no WhatsApp.',
-        'Reescreva a resposta autorizada para soar humana, curta e natural.',
-        'Nao mude a acao, nao adicione preco, produto, horario, desconto, endereco ou confirmacao fora da resposta autorizada.',
-        'Se a resposta autorizada ja estiver boa, pode devolver quase igual.',
-        'Responda apenas a mensagem final para o cliente.',
-        clean(customInstructions) ? `Estilo e instrucoes publicadas do tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
-      ].join('\n'),
-    },
-    {
-      role: 'user',
-      content: JSON.stringify({
-        current_message: message,
-        recent_history: compactHistory(history),
-        action: directive.action,
-        allowed_data: directive.allowedData || {},
-        fallback_reply: directive.fallbackReply || '',
-        forbidden: directive.forbidden || [],
-      }),
-    },
-  ]
-}
-
-export async function redraftPetbotReplyWithLlm(options = {}) {
-  const directive = options.directive || {}
-  if (!directive.allowLlmRedraft) {
-    return {
-      reply: clean(directive.fallbackReply || options.fallbackReply || ''),
-      used: false,
-      validation: { ok: true, problems: [] },
-    }
-  }
-
-  const draft = await callChatText({
-    apiKey: options.apiKey,
-    model: options.model,
-    temperature: options.temperature ?? DEFAULT_TEMPERATURE,
-    timeoutMs: options.timeoutMs,
-    messages: buildRedraftMessages(options),
-  })
-
-  if (!draft) {
-    return {
-      reply: clean(directive.fallbackReply || options.fallbackReply || ''),
-      used: false,
-      validation: { ok: false, problems: ['llm_sem_resposta'] },
-    }
-  }
-
-  const rendered = renderGuardedPetbotReply(draft, directive)
-  return {
-    ...rendered,
-    used: rendered.validation.ok,
-  }
 }
