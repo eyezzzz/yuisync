@@ -952,10 +952,13 @@ function inferServiceType(message = '', intent = '') {
     return intent === 'veterinaria' ? 'Consulta veterinária' : ''
   }
   const wantsBath = /\bbanh/.test(lower)
-  const wantsGroom = /\btos|higien/.test(lower)
-  if (wantsBath && wantsGroom) return 'Banho e tosa'
-  if (wantsGroom && /higien/.test(lower)) return 'Tosa higiênica'
-  if (wantsGroom) return 'Tosa'
+  const wantsHygienic = /higien/.test(lower)
+  const wantsFullGroom = /\btos/.test(lower) && !wantsHygienic
+  // Tosa higiênica é inclusa no banho normal; ela não deve levar o cliente
+  // para a agenda/preço de tosa separada.
+  if (wantsHygienic) return 'Banho'
+  if (wantsBath && wantsFullGroom) return 'Banho e tosa'
+  if (wantsFullGroom) return 'Tosa'
   if (wantsBath) return 'Banho'
   return ''
 }
@@ -965,13 +968,13 @@ function applyBathGroomingChoice(state, message = '') {
   const lower = norm(message)
   if (!lower) return false
 
-  if (/(sem tosa|so banho|só banho|apenas banho|banho somente)/.test(lower)) {
+  if (/(sem tosa|so banho|só banho|apenas banho|banho somente|somente banho|banho normal)/.test(lower)) {
     state.serviceType = 'Banho'
     state.groomingChoiceConfirmed = true
     return true
   }
   if (/(higien|tosa higienica|tosa higiênica)/.test(lower)) {
-    state.serviceType = 'Banho e tosa higiênica'
+    state.serviceType = 'Banho'
     state.groomingChoiceConfirmed = true
     return true
   }
