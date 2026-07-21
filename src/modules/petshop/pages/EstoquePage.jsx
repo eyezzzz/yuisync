@@ -857,6 +857,9 @@ export default function EstoquePage() {
   const filtered = useMemo(() => (products || []).filter(p => {
     const isService = isServiceProduct(p)
     if (catalogTab === 'servicos' ? !isService : isService) return false
+    // Duplicates are safely deactivated by the migration. Keep their history
+    // in the database, but do not present them alongside the active service.
+    if (catalogTab === 'servicos' && p.active === false) return false
     // Filtro de Busca (Nome ou Categoria)
     const q = normalize(search)
     const metadata = p.bot_metadata && typeof p.bot_metadata === 'object' ? p.bot_metadata : {}
