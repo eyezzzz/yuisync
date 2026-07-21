@@ -4,7 +4,7 @@ import {
   Package, Plus, Search, Edit2, Trash2, X, AlertTriangle,
   TrendingUp, TrendingDown, RefreshCw, AlertCircle, Check,
   Filter, DollarSign, Ban, ShieldAlert, ArrowUpRight, Upload,
-  Image as ImageIcon, Sparkles, ExternalLink
+  Image as ImageIcon, Sparkles, ExternalLink, Briefcase
 } from 'lucide-react'
 import { useProducts } from '../../../shared/hooks/useProducts'
 import { fmtCurrency } from '../../../lib/supabase'
@@ -91,6 +91,17 @@ function formatStockQuantity(value, unit = 'UN') {
   return `${quantity.toLocaleString('pt-BR', { maximumFractionDigits: digits })} ${unit}`
 }
 
+// Services were historically imported into `products` so they can keep being
+// sold by the PDV. Treat them as a separate catalog in the UI: they have a
+// price, but never belong in inventory alerts or stock counts.
+function isServiceProduct(product = {}) {
+  const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
+  const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
+  return metadata.product_type === 'servico'
+    || normalize(product.category) === 'servico'
+    || /banho|tosa|desembolo|escovac|hidratacao|hidratacao|higienizacao|consulta|vacina|exame|cirurg/.test(text)
+}
+
 // ── Product Modal ─────────────────────────────────────────────────────────────
 function metadataToForm(product) {
   const metadata = product?.bot_metadata || {}
@@ -145,7 +156,7 @@ function buildBotMetadata(form, product) {
   }
 }
 
-function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate, onUpdate }) {
+function ProductModal({ product, products, moduleId, tenantId, serviceMode = false, onClose, onCreate, onUpdate }) {
   const isEdit = !!product?.id
   const [form, setForm] = useState(isEdit ? {
     name:           product.name,
@@ -161,7 +172,11 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
     upsell_link_id: product.upsell_product?.id || '',
     active:         product.active ?? true,
     ...metadataToForm(product),
-  } : { ...emptyForm, upsell_link_id: '' })
+  } : {
+    ...emptyForm,
+    ...(serviceMode ? { category: 'Serviço', stock_quantity: 999999, min_stock: 0, bot_product_type: 'servico' } : {}),
+    upsell_link_id: '',
+  })
   const [saving, setSaving] = useState(false)
   const [err, setErr]       = useState('')
   const [imageSearching, setImageSearching] = useState(false)
@@ -179,13 +194,15 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
       const payload = {
         name:           form.name,
         barcode:        form.barcode || null,
-        category:       form.category,
+        category:       serviceMode ? 'Serviço' : form.category,
         description:    form.description,
         image_url:      form.image_url || null,
         price:          Number(form.price),
         cost_price:     Number(form.cost_price) || null,
-        stock_quantity: Number(form.stock_quantity) || 0,
-        min_stock:      Number(form.min_stock) || 1,
+        // Legacy service rows stay in products to preserve their PDV sales
+        // history. A high internal balance avoids treating a service as stock.
+        stock_quantity: serviceMode ? Math.max(999999, Number(form.stock_quantity) || 0) : Number(form.stock_quantity) || 0,
+        min_stock:      serviceMode ? 0 : Number(form.min_stock) || 1,
         species_target: form.species_target,
         upsell_link_id: form.upsell_link_id || null,
         active:         form.active,
@@ -234,7 +251,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
       <div className="modal-box max-w-2xl">
         <div className="modal-header">
           <h2 className="font-display font-bold text-xl text-text">
-            {isEdit ? 'Editar Produto' : 'Novo Produto'}
+            {isEdit ? `Editar ${serviceMode ? 'Serviço' : 'Produto'}` : `Novo ${serviceMode ? 'Serviço' : 'Produto'}`}
           </h2>
           <button onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
@@ -242,16 +259,16 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
         <div className="modal-body">
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <label className="inp-label">Nome do Produto *</label>
-              <input className="inp" placeholder="Ex: Ração Premium Golden Adult"
+              <label className="inp-label">Nome d{serviceMode ? 'o Serviço' : 'o Produto'} *</label>
+              <input className="inp" placeholder={serviceMode ? 'Ex: Banho pet porte médio' : 'Ex: Ração Premium Golden Adult'}
                 value={form.name} onChange={e => set('name', e.target.value)}/>
             </div>
 
-            <div className="col-span-2">
+            {!serviceMode && <div className="col-span-2">
               <label className="inp-label">Código de Barras (EAN / GTIN)</label>
               <input className="inp" placeholder="Ex: 7891234567890"
                 value={form.barcode} onChange={e => set('barcode', e.target.value)}/>
-            </div>
+            </div>}
 
             <div className="col-span-2 rounded-2xl border border-[var(--border)] bg-white/[0.03] p-4">
               <div className="flex flex-col gap-3 md:flex-row md:items-start">
@@ -347,7 +364,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
               )}
             </div>
 
-            <div>
+            {!serviceMode && <div>
               <label className="inp-label">Categoria</label>
               <ProductCategorySelect
                 value={form.category}
@@ -363,7 +380,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
                    <option value={form.category}>{form.category}</option>
                 )}
               </select>
-            </div>
+            </div>}
 
             <div>
               <label className="inp-label">Espécie Alvo</label>
@@ -463,24 +480,24 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
               </div>
             )}
 
-            <div>
+            {!serviceMode && <div>
               <label className="inp-label">Unidade de estoque</label>
               <select className="inp" value={form.unit} onChange={e => set('unit', e.target.value)}>
                 {PRODUCT_UNITS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
               </select>
-            </div>
+            </div>}
 
-            <div>
+            {!serviceMode && <div>
               <label className="inp-label">Estoque Atual ({form.unit})</label>
               <input className="inp" type="number" min="0" step={form.unit === 'KG' ? '0.001' : '1'}
                 value={form.stock_quantity} onChange={e => set('stock_quantity', e.target.value)}/>
-            </div>
+            </div>}
 
-            <div>
+            {!serviceMode && <div>
               <label className="inp-label">Estoque Mínimo ({form.unit})</label>
               <input className="inp" type="number" min="0" step={form.unit === 'KG' ? '0.001' : '1'}
                 value={form.min_stock} onChange={e => set('min_stock', e.target.value)}/>
-            </div>
+            </div>}
 
             <div className="col-span-2">
               <label className="inp-label">Produto de Upsell</label>
@@ -505,7 +522,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
                   className={`switch-root ${form.active ? 'bg-emerald-500' : 'bg-white/10'}`}>
                   <div className={`switch-thumb ${form.active ? 'translate-x-6' : 'translate-x-1'}`}/>
                 </div>
-                <span className="text-sm font-semibold text-text/80 group-hover:text-text transition-colors">Produto ativo (visível no PDV)</span>
+                <span className="text-sm font-semibold text-text/80 group-hover:text-text transition-colors">{serviceMode ? 'Serviço' : 'Produto'} ativo (visível no PDV)</span>
               </label>
             </div>
           </div>
@@ -520,7 +537,7 @@ function ProductModal({ product, products, moduleId, tenantId, onClose, onCreate
             <button onClick={onClose} className="btn btn-secondary flex-1 justify-center border-white/5">Cancelar</button>
             <button onClick={handleSubmit} disabled={saving} className="btn btn-primary flex-1 justify-center gap-2">
               {saving ? <RefreshCw size={14} className="animate-spin"/> : (isEdit ? <Check size={14}/> : <Plus size={14}/>)}
-              {saving ? 'Salvando...' : (isEdit ? 'Atualizar' : 'Criar Produto')}
+              {saving ? 'Salvando...' : (isEdit ? 'Atualizar' : `Criar ${serviceMode ? 'Serviço' : 'Produto'}`)}
             </button>
           </div>
         </div>
@@ -798,6 +815,7 @@ export default function EstoquePage() {
   const { products, loading, load, create, update, adjustStock, remove, stockStatus } = useProducts()
 
   const [search, setSearch]     = useState('')
+  const [catalogTab, setCatalogTab] = useState('produtos')
   const [catFilter, setCatFilter] = useState('')
   const [statusFilter, setStatusFilter] = useState('')
   const [modal, setModal]       = useState(null)   // null | {} | product
@@ -814,13 +832,13 @@ export default function EstoquePage() {
 
   useEffect(() => {
     setPage(1)
-  }, [search, catFilter, statusFilter, pageSize])
+  }, [search, catFilter, statusFilter, pageSize, catalogTab])
 
   const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
 
   const dynamicCategories = useMemo(() => {
     const base = PRODUCT_CATEGORIES
-    const fromProducts = Array.from(new Set(products.map(p => p.category).filter(Boolean)))
+    const fromProducts = Array.from(new Set(products.filter((p) => !isServiceProduct(p)).map(p => p.category).filter(Boolean)))
     
     const results = [...base]
     fromProducts.forEach(cat => {
@@ -832,6 +850,8 @@ export default function EstoquePage() {
   }, [products])
 
   const filtered = useMemo(() => (products || []).filter(p => {
+    const isService = isServiceProduct(p)
+    if (catalogTab === 'servicos' ? !isService : isService) return false
     // Filtro de Busca (Nome ou Categoria)
     const q = normalize(search)
     const metadata = p.bot_metadata && typeof p.bot_metadata === 'object' ? p.bot_metadata : {}
@@ -858,7 +878,7 @@ export default function EstoquePage() {
     const matchS = !statusFilter || stockStatus(p) === statusFilter
     
     return matchQ && matchC && matchS
-  }), [products, search, catFilter, statusFilter])
+  }), [products, search, catFilter, statusFilter, catalogTab])
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize))
   const currentPage = Math.min(page, totalPages)
   const pageStart = filtered.length ? (currentPage - 1) * pageSize : 0
@@ -872,9 +892,12 @@ export default function EstoquePage() {
     setPage((current) => Math.min(current, totalPages))
   }, [totalPages])
 
-  const criticalCount = products.filter(p => stockStatus(p) === 'critico').length
-  const outCount      = products.filter(p => stockStatus(p) === 'esgotado').length
-  const totalValue    = products.reduce((s, p) => s + p.price * p.stock_quantity, 0)
+  const stockProducts = products.filter((p) => !isServiceProduct(p))
+  const serviceProducts = products.filter(isServiceProduct)
+  const criticalCount = stockProducts.filter(p => stockStatus(p) === 'critico').length
+  const outCount      = stockProducts.filter(p => stockStatus(p) === 'esgotado').length
+  const totalValue    = stockProducts.reduce((s, p) => s + p.price * p.stock_quantity, 0)
+  const isServicesTab = catalogTab === 'servicos'
 
   const stockBadge = (p) => {
     const s = stockStatus(p)
@@ -909,9 +932,9 @@ export default function EstoquePage() {
         <div>
           <h1 className="page-title !flex items-center gap-3">
             <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse shadow-[0_0_10px_rgba(0,224,255,0.8)]" />
-            Inventário <span className="opacity-40 font-normal">/ Estoque</span>
+            {isServicesTab ? 'Serviços' : 'Inventário'} <span className="opacity-40 font-normal">/ {isServicesTab ? 'Catálogo de serviços' : 'Estoque'}</span>
           </h1>
-          <p className="page-sub !mt-1">Controle de produtos e inventário global</p>
+          <p className="page-sub !mt-1">{isServicesTab ? 'Serviços vendidos no PDV, separados do controle de estoque' : 'Controle de produtos e inventário global'}</p>
         </div>
         <div className="flex gap-2">
            {isGlobalAdmin && (
@@ -924,26 +947,35 @@ export default function EstoquePage() {
                </button>
              </>
            )}
-           {isAdmin && (
+           {isAdmin && !isServicesTab && (
              <button onClick={() => setImportModal(true)} className="btn btn-secondary border border-white/10">
                 Importar CSV
              </button>
            )}
            {isAdmin && (
-             <button onClick={() => setModal({})} className="btn btn-primary">
-              <Plus size={16}/> Novo Produto
+             <button onClick={() => setModal(isServicesTab ? { __service: true } : {})} className="btn btn-primary">
+              <Plus size={16}/> Novo {isServicesTab ? 'Serviço' : 'Produto'}
             </button>
            )}
         </div>
       </div>
 
+      <div className="flex flex-wrap gap-2 border-b border-[var(--border)] pb-3">
+        <button onClick={() => setCatalogTab('produtos')} className={`btn btn-sm ${!isServicesTab ? 'btn-primary' : 'btn-secondary'}`}>
+          <Package size={14}/> Produtos e estoque ({stockProducts.length})
+        </button>
+        <button onClick={() => setCatalogTab('servicos')} className={`btn btn-sm ${isServicesTab ? 'btn-primary' : 'btn-secondary'}`}>
+          <Briefcase size={14}/> Serviços ({serviceProducts.length})
+        </button>
+      </div>
+
       {/* Summary cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         {[
-          { label:'Total de Produtos', value: products.length,       cls:'text-text',        icon: Package, color: 'text-primary', show: true },
-          { label:'Valor em Estoque',  value: fmtCurrency(totalValue), cls:'text-emerald-400', icon: DollarSign, color: 'text-emerald-400', show: isAdmin },
-          { label:'Estoque Crítico',   value: criticalCount,          cls:'text-amber-400',   icon: ShieldAlert, color: 'text-amber-400', show: true },
-          { label:'Esgotados',         value: outCount,               cls:'text-red-400',     icon: Ban, color: 'text-red-400', show: true },
+          { label:isServicesTab ? 'Serviços ativos' : 'Total de Produtos', value: isServicesTab ? serviceProducts.filter((p) => p.active).length : stockProducts.length, cls:'text-text', icon: isServicesTab ? Briefcase : Package, color: 'text-primary', show: true },
+          { label:'Valor em Estoque', value: fmtCurrency(totalValue), cls:'text-emerald-400', icon: DollarSign, color: 'text-emerald-400', show: isAdmin && !isServicesTab },
+          { label:'Estoque Crítico', value: criticalCount, cls:'text-amber-400', icon: ShieldAlert, color: 'text-amber-400', show: !isServicesTab },
+          { label:'Esgotados', value: outCount, cls:'text-red-400', icon: Ban, color: 'text-red-400', show: !isServicesTab },
         ].filter(c => c.show).map(c => (
           <div key={c.label} className="bg-card border border-[var(--border)] rounded-xl2 p-4 flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl bg-white/5 flex items-center justify-center ${c.color}`}>
@@ -961,7 +993,7 @@ export default function EstoquePage() {
       <div className="flex flex-wrap items-center gap-3">
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
-          <input aria-label="Buscar produto" className="inp pl-9 py-2" placeholder="Buscar produto..."
+          <input aria-label={isServicesTab ? 'Buscar serviço' : 'Buscar produto'} className="inp pl-9 py-2" placeholder={isServicesTab ? 'Buscar serviço...' : 'Buscar produto...'}
             value={search} onChange={e => setSearch(e.target.value)}/>
           {search && (
             <button type="button" aria-label="Limpar busca" title="Limpar busca" onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2 text-muted hover:text-text p-1">
@@ -971,20 +1003,20 @@ export default function EstoquePage() {
         </div>
         
         <div className="flex items-center gap-2">
-          <ProductCategorySelect
+          {!isServicesTab && <ProductCategorySelect
             className="w-[220px]"
             value={catFilter}
             onChange={setCatFilter}
             options={dynamicCategories}
             allowEmpty
             emptyLabel="Categorias"
-          />
-          <select aria-label="Filtrar estoque por status" className="inp py-2 w-auto" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+          />}
+          {!isServicesTab && <select aria-label="Filtrar estoque por status" className="inp py-2 w-auto" value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
             <option value="">Status</option>
             <option value="ok">Normal</option>
             <option value="critico">Crítico</option>
             <option value="esgotado">Esgotado</option>
-          </select>
+          </select>}
           <button type="button" aria-label="Atualizar estoque" onClick={() => load({ activeOnly: false })}
             className="btn btn-ghost btn-sm btn-icon" title="Atualizar">
             <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
@@ -995,7 +1027,7 @@ export default function EstoquePage() {
       {filtered.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-card px-4 py-3">
           <p className="text-xs font-semibold text-muted">
-            Mostrando {pageStart + 1}-{pageEnd} de {filtered.length} produto(s)
+            Mostrando {pageStart + 1}-{pageEnd} de {filtered.length} {isServicesTab ? 'serviço(s)' : 'produto(s)'}
           </p>
           <div className="flex flex-wrap items-center gap-2 text-xs">
             <label className="flex items-center gap-2 text-muted">
@@ -1034,7 +1066,7 @@ export default function EstoquePage() {
       )}
 
       {/* Critical alert */}
-      {(criticalCount > 0 || outCount > 0) && !statusFilter && !search && !catFilter && (
+      {!isServicesTab && (criticalCount > 0 || outCount > 0) && !statusFilter && !search && !catFilter && (
         <div className="flex items-center gap-3 px-4 py-3 bg-amber-500/8 border border-amber-500/20 rounded-xl">
           <AlertTriangle size={16} className="text-amber-400 flex-shrink-0"/>
           <p className="text-sm text-amber-400 font-semibold">
@@ -1057,30 +1089,30 @@ export default function EstoquePage() {
         ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">
             <Package size={36} className="text-muted/30"/>
-            <p className="text-sm text-muted">Nenhum produto encontrado</p>
+            <p className="text-sm text-muted">Nenhum {isServicesTab ? 'serviço' : 'produto'} encontrado</p>
             <button onClick={() => { setSearch(''); setCatFilter(''); setStatusFilter('') }}
               className="btn btn-secondary btn-sm">Limpar filtros</button>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="tbl table-fixed min-w-[1120px]">
+            <table className={`tbl table-fixed ${isServicesTab ? 'min-w-[760px]' : 'min-w-[1120px]'}`}>
               <colgroup>
                 <col className="w-[28%]" />
                 <col className="w-[15%]" />
                 <col className="w-[9%]" />
                 {isAdmin && <col className="w-[9%]" />}
                 {isAdmin && <col className="w-[8%]" />}
-                <col className="w-[7%]" />
-                <col className="w-[6%]" />
-                <col className="w-[9%]" />
+                {!isServicesTab && <col className="w-[7%]" />}
+                {!isServicesTab && <col className="w-[6%]" />}
+                {!isServicesTab && <col className="w-[9%]" />}
                 <col className="w-[9%]" />
               </colgroup>
               <thead><tr>
-                <th>Produto</th><th>Categoria</th><th>Preço</th>
+                <th>{isServicesTab ? 'Serviço' : 'Produto'}</th><th>Categoria</th><th>Preço</th>
                 {isAdmin && <th>Custo</th>}
                 {isAdmin && <th>Margem</th>}
-                <th>Estoque</th>
-                <th>Mín.</th><th>Status</th><th className="text-right">Ações</th>
+                {!isServicesTab && <th>Estoque</th>}
+                {!isServicesTab && <th>Mín.</th>}{!isServicesTab && <th>Status</th>}<th className="text-right">Ações</th>
               </tr></thead>
               <tbody>
                 {visibleProducts.map(p => {
@@ -1151,19 +1183,19 @@ export default function EstoquePage() {
                           ) : '—'}
                         </td>
                       )}
-                      <td>
+                      {!isServicesTab && <td>
                         <span className={`font-bold font-display text-lg ${sb.cellCls}`}>
                           {formatStockQuantity(p.stock_quantity, productUnit(p))}
                         </span>
-                      </td>
-                      <td className="text-muted">{p.min_stock}</td>
-                      <td><span className={`badge ${sb.cls}`}>{sb.label}</span></td>
+                      </td>}
+                      {!isServicesTab && <td className="text-muted">{p.min_stock}</td>}
+                      {!isServicesTab && <td><span className={`badge ${sb.cls}`}>{sb.label}</span></td>}
                       <td className="text-right">
                         <div className="flex justify-end gap-1">
-                          <button type="button" aria-label={`Ajustar estoque de ${p.name}`} onClick={() => setAdjusting(p)}
+                          {!isServicesTab && <button type="button" aria-label={`Ajustar estoque de ${p.name}`} onClick={() => setAdjusting(p)}
                             className="btn btn-ghost btn-sm btn-icon" title="Ajustar estoque">
                             <Package size={13}/>
-                          </button>
+                          </button>}
                           {isAdmin && (
                             <button type="button" aria-label={`Editar ${p.name}`} onClick={() => setModal(p)}
                               className="btn btn-ghost btn-sm btn-icon" title="Editar">
@@ -1220,6 +1252,7 @@ export default function EstoquePage() {
         <ProductModal
           product={modal?.id ? modal : null}
           products={products}
+          serviceMode={Boolean(modal?.__service) || isServiceProduct(modal || {})}
           moduleId={activeModuleId}
           tenantId={auth?.activeTenantId}
           onClose={() => setModal(null)}
