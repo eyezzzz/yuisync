@@ -17,12 +17,20 @@ const DEFAULT_PET_TRANSPORT_OPTIONS = [
 ]
 
 const DEFAULT_MESSAGE_TEMPLATES = {
-  appointment_summary: 'Ola [NOME], segue o resumo do seu agendamento\n\nPet: [PET]\nValor do agendamento: [VALOR]\nLocal: [LOJA]\nEndereco: [ENDERECO_LOJA]\nData: [DATA]\nHorario: [HORARIO]',
-  registration_checklist: 'Assim que possivel envie: data de nascimento do tutor, CPF, CEP, numero da casa, ponto de referencia, nome e raca do pet para completar o cadastro conosco.',
-  payment_proof_request: 'Por gentileza, envie o comprovante de pagamento para darmos baixa no sistema.',
-  motodog_options: 'MotoDog: buscar e levar R$20, somente buscar R$15, somente levar R$15. Opcoes para pets ate 10kg.',
-  monthly_plan: 'Nosso pacote mensal tem 4 banhos no mes, 1 por semana, pagamento antecipado e melhor horario reservado.',
-  small_bath_service: 'Banho pequeno porte inclui banho, corte de unha, limpeza de ouvido e tosa higienica.',
+  appointment_summary: 'Olá!\n\nSegue o resumo do seu agendamento:\n\n🐶 **Pet:** [PET]\n💰 **Valor:** [VALOR]\n📍 **Local:** [LOJA]\n📌 **Endereço:** [ENDERECO_LOJA]\n📅 **Data:** [DATA]\n🕐 **Horário:** [HORARIO]\n\nAguardamos vocês! 🐶💚',
+  appointment_confirmation: 'Olá, [NOME]!\n\nSeu atendimento está agendado para:\n\n📅 **[DATA]**\n🕐 **[HORARIO]**\n\nQualquer dúvida, estamos à disposição! 🐶💚',
+  registration_checklist: 'Para realizarmos o cadastro, por gentileza envie:\n\n• Nome completo do tutor\n• Data de nascimento do tutor\n• CPF do tutor\n• CEP\n• Número da residência\n• Ponto de referência\n• Nome do pet\n• Raça do pet\n\nAssim conseguimos concluir o cadastro em nosso sistema. 🐶💚',
+  payment_proof_request: 'Assim que realizar o pagamento, por gentileza envie o comprovante para darmos baixa no sistema. 🐶💚',
+  motodog_options: '🚗 **MotoDog**\n\n**Buscar e levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[BUSCAR_E_LEVAR]**\n\n**Somente buscar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_BUSCAR]**\n\n**Somente levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_LEVAR]**',
+  veterinary_consultation: '🩺 **Consulta Veterinária**\n\nO atendimento com a **Dra. Taina Campos** é completo e individualizado.\n\nDurante a consulta, é realizada uma avaliação clínica detalhada, incluindo histórico, comportamento e alimentação. Quando necessário, são solicitados exames complementares e indicado um tratamento específico.\n\nA consulta inclui **1 retorno**, caso seja necessário acompanhamento ou ajuste no tratamento.\n\n💰 **Valor da consulta: [VALOR]**\n\nQual é a sua disponibilidade para agendamento?',
+  monthly_plan: '🛁 **Pacote Mensal**\n\n✅ 4 banhos por mês\n✅ 1 banho por semana\n✅ Horário reservado para o seu pet\n✅ Pagamento antecipado\n\n💰 **Valor do pacote: [VALOR]**\n\nQualquer dúvida, estamos à disposição! 🐶💚',
+  small_bath_service: '🐶 **Banho - Porte Pequeno (até 10 kg)**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha e região do bumbum)\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **até 10 kg**.',
+  small_machine_grooming: '✂️ **Banho + Tosa na Máquina (Porte Pequeno)**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha e região do bumbum)\n• Tosa do corpinho na máquina\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **até 10 kg**.',
+  small_scissor_grooming: '✂️ **Banho + Tosa na Tesoura (Porte Pequeno)**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha, região do bumbum e debaixo das patinhas)\n• Tosa do corpinho na tesoura\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **até 10 kg**.',
+  medium_double_coat_bath: '🐕 **Banho - Porte Médio | Pelo Duplo**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha e região do bumbum)\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **10 kg até 22 kg**, com **pelo duplo**.',
+  medium_coat_bath: '🐕 **Banho - Porte Médio | Pelo Médio**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha e região do bumbum)\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **10 kg até 22 kg**, com **pelo médio**.',
+  medium_full_grooming: '✂️ **Banho + Tosa Total (Porte Médio)**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha e região do bumbum)\n• Tosa total (cabeça, corpinho e rabinho na mesma altura)\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **10 kg até 22 kg**.',
+  dental_brushing: '🦷 **Escovação Dental**\n\n🪥 Utilizando material do cliente (escova e creme dental):\n💰 **R$ 8,00**\n\n🪥 Utilizando material da empresa (escova e creme dental):\n💰 **R$ 10,00**',
 }
 
 const INITIAL_FORM = {

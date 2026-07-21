@@ -12,6 +12,12 @@ const DEFAULT_PET_TRANSPORT_OPTIONS = [
   { id: 'somente_buscar', label: 'Somente buscar', fee: 15, maxWeightKg: 10, active: true },
   { id: 'somente_levar', label: 'Somente levar', fee: 15, maxWeightKg: 10, active: true },
 ]
+const DEFAULT_STANDARD_TEMPLATES = {
+  appointment_summary: 'Olá!\n\nSegue o resumo do seu agendamento:\n\n🐶 **Pet:** [PET]\n💰 **Valor:** [VALOR]\n📍 **Local:** [LOJA]\n📌 **Endereço:** [ENDERECO_LOJA]\n📅 **Data:** [DATA]\n🕐 **Horário:** [HORARIO]\n\nAguardamos vocês! 🐶💚',
+  appointment_confirmation: 'Olá, [NOME]!\n\nSeu atendimento está agendado para:\n\n📅 **[DATA]**\n🕐 **[HORARIO]**\n\nQualquer dúvida, estamos à disposição! 🐶💚',
+  motodog_options: '🚗 **MotoDog**\n\n**Buscar e levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[BUSCAR_E_LEVAR]**\n\n**Somente buscar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_BUSCAR]**\n\n**Somente levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_LEVAR]**',
+  veterinary_consultation: '🩺 **Consulta Veterinária**\n\nO atendimento com a **Dra. Taina Campos** é completo e individualizado.\n\nA consulta inclui **1 retorno**, caso seja necessário acompanhamento ou ajuste no tratamento.\n\n💰 **Valor da consulta: [VALOR]**\n\nQual é a sua disponibilidade para agendamento?',
+}
 
 const PETBOT_VERSION = 1
 
@@ -179,6 +185,12 @@ function money(value = 0) {
   return `R$ ${Number(value || 0).toFixed(2).replace('.', ',')}`
 }
 
+function renderStandardTemplate(settings = {}, key, replacements = {}) {
+  const templates = settings.messageTemplates || settings.message_templates || {}
+  const template = String(templates[key] || DEFAULT_STANDARD_TEMPLATES[key] || '')
+  return template.replace(/\[([A-Z_]+)\]/g, (_, name) => replacements[name] ?? `[${name}]`).trim()
+}
+
 function normalizeTransportOptions(settings = {}) {
   let raw = settings.petTransportOptions || settings.pet_transport_options || null
   if (typeof raw === 'string') {
@@ -216,12 +228,13 @@ function transportOptionLine(option, index) {
 
 function buildTransportQuestion(settings = {}) {
   const options = normalizeTransportOptions(settings)
-  return [
-    'Voce quer que a gente busque e entregue o pet na sua residencia?',
-    'Opcoes MotoDog:',
-    ...options.map(transportOptionLine),
-    'Se nao quiser transporte, pode dizer "sem transporte".',
-  ].join('\n')
+  const byId = new Map(options.map((option) => [option.id, option]))
+  const message = renderStandardTemplate(settings, 'motodog_options', {
+    BUSCAR_E_LEVAR: money(byId.get('buscar_e_levar')?.fee ?? options[0]?.fee),
+    SOMENTE_BUSCAR: money(byId.get('somente_buscar')?.fee ?? options[1]?.fee),
+    SOMENTE_LEVAR: money(byId.get('somente_levar')?.fee ?? options[2]?.fee),
+  })
+  return `${message}\n\nVocê quer utilizar o MotoDog? Se não quiser transporte, pode dizer "sem transporte".`
 }
 
 function inferTransportOption(message = '', settings = {}) {
@@ -1971,7 +1984,26 @@ function buildPartialSummary(state) {
   return lines.join('\n')
 }
 
-function buildFinalSummary(state) {
+function buildFinalSummary(state, settings = {}) {
+  if (state.intent !== 'produto' && state.selectedSlot) {
+    const dateIso = slotDateIso(state.selectedSlot)
+    const date = dateIso ? new Date(`${dateIso}T12:00:00-03:00`) : new Date(state.selectedSlot.scheduled_at)
+    const dateText = date.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' })
+    const storeAddress = [settings.storeAddress || settings.store_address, settings.storeNeighborhood || settings.store_neighborhood]
+      .filter(Boolean)
+      .join(' – ')
+    const summary = renderStandardTemplate(settings, 'appointment_summary', {
+      NOME: state.customerName || 'cliente',
+      PET: summarizePet(state),
+      VALOR: money(state.totals.total),
+      LOJA: settings.storeName || settings.store_name || 'Quatro Patas – Muriaé/MG',
+      ENDERECO_LOJA: storeAddress || 'Avenida Constantino Pinto, 191 – Centro',
+      DATA: dateText,
+      HORARIO: slotTimeText(state.selectedSlot).replace(':', 'h'),
+    })
+    return `${summary}\n\nConfirma o agendamento?`
+  }
+
   const lines = [
     '**Resumo do pedido:**',
     `• Cliente: ${state.customerName}`,
@@ -2630,7 +2662,7 @@ function checkoutFlow(state, settings) {
     if (!state.finalSummaryShown) {
       state.finalSummaryShown = true
       state.status = 'resumo_final'
-      return guardResult(buildFinalSummary(state), state, { action: 'resumo_final' })
+      return guardResult(buildFinalSummary(state, settings), state, { action: 'resumo_final' })
     }
     return guardResult('Só preciso da sua confirmação para finalizar.', state, { action: 'aguardar_confirmacao' })
   }
@@ -2664,7 +2696,7 @@ function checkoutFlow(state, settings) {
   if (!state.finalSummaryShown) {
     state.finalSummaryShown = true
     state.status = 'resumo_final'
-    return guardResult(buildFinalSummary(state), state, { action: 'resumo_final' })
+    return guardResult(buildFinalSummary(state, settings), state, { action: 'resumo_final' })
   }
 
   return guardResult('Só preciso da sua confirmação para finalizar.', state, { action: 'aguardar_confirmacao' })
@@ -2928,6 +2960,15 @@ export function buildPetbotConfirmationReply(state = {}, settings = {}) {
   const renderTemplate = (template, replacements = {}) => String(template || '')
     .replace(/\[([A-Z_]+)\]/g, (_, key) => replacements[key] ?? `[${key}]`)
   const isPix = norm(state.payment?.method) === 'pix'
+  if (state.intent !== 'produto' && state.selectedSlot) {
+    const dateIso = slotDateIso(state.selectedSlot)
+    const date = dateIso ? new Date(`${dateIso}T12:00:00-03:00`) : new Date(state.selectedSlot.scheduled_at)
+    lines.push(renderStandardTemplate(settings, 'appointment_confirmation', {
+      NOME: state.customerName || 'cliente',
+      DATA: date.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric', timeZone: 'America/Sao_Paulo' }),
+      HORARIO: slotTimeText(state.selectedSlot).replace(':', 'h'),
+    }))
+  }
   if (isPix) {
     const pixKey = clean(settings.pixKey || settings.pix_key)
     const holder = clean(settings.pixHolderName || settings.pix_holder_name)
