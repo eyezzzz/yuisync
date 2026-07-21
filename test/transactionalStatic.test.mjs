@@ -208,3 +208,41 @@ test('modo noturno e persistido e tem alternancia no menu', async () => {
   assert.match(styles, /\.theme-petshop\.theme-dark/)
   assert.match(styles, /#38BDF8/)
 })
+
+test('catalogo comercial de servicos sincroniza com a agenda transacional', async () => {
+  const migration = await read('supabase/migrations/20260721003000_sync_service_products_catalog.sql')
+  assert.match(migration, /add column if not exists source_product_id/)
+  assert.match(migration, /create trigger trg_sync_product_service_catalog/)
+  assert.match(migration, /from public\.products product/)
+  assert.match(migration, /'catalog_' \|\| replace\(product\.id::text, '-', ''\)/)
+  assert.match(migration, /default_price = excluded\.default_price/)
+})
+
+test('falha do agente em servico nao retorna ao guardiao com precos genericos', async () => {
+  const source = await read('server/lib/chat.js')
+  const catchStart = source.indexOf("logger.warn('PetBot agent failed'")
+  const guardStart = source.indexOf('let guard = runPetbotGuard', catchStart)
+  const segment = source.slice(catchStart, guardStart)
+  assert.match(segment, /isPetbotServiceConversation/)
+  assert.match(segment, /respondWithPetbotSafeServiceFailure/)
+  assert.match(source, /mergePetshopServiceCatalogs/)
+  assert.match(source, /replyClaimsServiceOperationalData/)
+})
+
+test('classificacao PetBot preenche racas comuns por pelagem sem sobrescrever ajustes manuais', async () => {
+  const migration = await read('supabase/migrations/20260721004000_petbot_common_breed_classification.sql')
+  const catalog = await read('shared/petbotBreedCatalog.js')
+  const stockPage = await read('src/modules/petshop/pages/EstoquePage.jsx')
+  const agent = await read('server/lib/petbotAgent.js')
+
+  assert.match(migration, /yuisync_common_breed_presets_v1/)
+  assert.match(migration, /jsonb_array_length\(product\.bot_metadata->'breed'\) = 0/)
+  assert.match(migration, /'all_breeds', resolved\.resolved_coat_type = 'todas'/)
+  assert.match(catalog, /canonical: 'Spitz Alemão'.*coat_type: 'duplo'/)
+  assert.match(catalog, /canonical: 'Shih Tzu'.*coat_type: 'longo'/)
+  assert.match(catalog, /canonical: 'Dachshund'.*ambiguous|AMBIGUOUS_BREEDS/s)
+  assert.match(stockPage, /Preencher racas comuns/)
+  assert.match(stockPage, /Pelagem do servico/)
+  assert.match(agent, /inferredCoatTypeForBreed/)
+  assert.match(agent, /serviceMatchesBreedPreset/)
+})

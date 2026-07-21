@@ -14,6 +14,7 @@ import { ProductCategorySelect } from '../../../components/ProductCategorySelect
 import { BASE_PRODUCT_CATEGORIES, normalizeCategory, resolveCategoryMeta } from '../../../shared/lib/productCategories'
 import { importLegacyRows, resetStock, searchProductImages } from '../../../lib/api'
 import { parseLegacyProducts } from '../../../shared/lib/legacyImport'
+import { buildServiceBreedPreset, inferServiceCoatType } from '../../../../shared/petbotBreedCatalog.js'
 
 const BASE_CATEGORIES = [
   'Ração','Petisco','Higiene','Acessório','Medicamento','Brinquedo',
@@ -70,6 +71,7 @@ const emptyForm = {
   bot_size: '',
   bot_brand: '',
   bot_breed: '',
+  bot_coat_type: '',
   bot_package_kg: '',
   bot_is_bulk: false,
 }
@@ -117,6 +119,7 @@ function metadataToForm(product) {
     bot_size: metadata.size || '',
     bot_brand: metadata.brand || '',
     bot_breed: Array.isArray(metadata.breed) ? metadata.breed.join(', ') : metadata.breed || '',
+    bot_coat_type: metadata.coat_type || inferServiceCoatType(product?.name) || '',
     bot_package_kg: metadata.package_kg || '',
     bot_is_bulk: Boolean(metadata.is_bulk),
     unit: PRODUCT_UNITS.some((option) => option.value === metadata.unit) ? metadata.unit : 'UN',
@@ -141,22 +144,39 @@ function inferBotProductType(form) {
 
 function buildBotMetadata(form, product) {
   const current = product?.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
-  const breed = String(form.bot_breed || '')
+  const productType = form.bot_product_type || (current.product_type && current.product_type !== 'outro' ? current.product_type : inferBotProductType(form))
+  let breed = String(form.bot_breed || '')
     .split(',')
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean)
+  const coatType = form.bot_coat_type || current.coat_type || inferServiceCoatType(form.name)
+
+  let servicePreset = null
+  if (productType === 'servico') {
+    servicePreset = buildServiceBreedPreset(form.name, {
+      ...current,
+      species: form.bot_species || current.species || form.species_target || 'dog',
+      coat_type: coatType,
+    })
+    const hadExistingBreedClassification = Array.isArray(current.breed) && current.breed.length > 0
+    if (!breed.length && !product?.id && !hadExistingBreedClassification) breed = servicePreset.breed || []
+  }
 
   return {
     ...current,
-    product_type: form.bot_product_type || (current.product_type && current.product_type !== 'outro' ? current.product_type : inferBotProductType(form)),
-    species: form.bot_species || current.species || form.species_target || 'all',
+    ...(servicePreset || {}),
+    product_type: productType,
+    species: form.bot_species || servicePreset?.species || current.species || form.species_target || 'all',
     age: form.bot_age || null,
     size: form.bot_size || null,
     brand: form.bot_brand ? String(form.bot_brand).trim().toLowerCase() : current.brand || null,
+    coat_type: coatType || null,
     breed,
+    all_breeds: coatType === 'todas',
     package_kg: form.bot_package_kg ? Number(form.bot_package_kg) : null,
     unit: form.unit || 'UN',
     is_bulk: form.unit === 'KG' || Boolean(form.bot_is_bulk),
+    classification_source: 'dashboard_manual',
     source: 'dashboard_manual',
   }
 }
@@ -189,6 +209,21 @@ function ProductModal({ product, products, moduleId, tenantId, serviceMode = fal
   const [imageMessage, setImageMessage] = useState('')
 
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }))
+
+  function applyServiceBreedPreset() {
+    const preset = buildServiceBreedPreset(form.name, {
+      product_type: 'servico',
+      species: form.bot_species || form.species_target || 'dog',
+      coat_type: form.bot_coat_type || inferServiceCoatType(form.name),
+    })
+    setForm((current) => ({
+      ...current,
+      bot_product_type: 'servico',
+      bot_species: preset.species || 'dog',
+      bot_coat_type: preset.coat_type || '',
+      bot_breed: (preset.breed || []).join(', '),
+    }))
+  }
 
   async function handleSubmit() {
     if (!form.name.trim()) return setErr('Nome obrigatório')
@@ -441,10 +476,31 @@ function ProductModal({ product, products, moduleId, tenantId, serviceMode = fal
                   <input className="inp" type="number" min="0" step="0.1" placeholder="1, 2.5, 15..."
                     value={form.bot_package_kg} onChange={e => set('bot_package_kg', e.target.value)}/>
                 </div>
+                {serviceMode && (
+                  <div>
+                    <label className="inp-label">Pelagem do servico</label>
+                    <select className="inp" value={form.bot_coat_type} onChange={e => set('bot_coat_type', e.target.value)}>
+                      <option value="">Inferir pelo nome</option>
+                      <option value="curto">Pelo curto</option>
+                      <option value="medio">Pelo medio/cacheado</option>
+                      <option value="longo">Pelo longo</option>
+                      <option value="duplo">Pelo duplo</option>
+                      <option value="todas">Todas as pelagens</option>
+                    </select>
+                  </div>
+                )}
+                {serviceMode && (
+                  <div className="flex items-end">
+                    <button type="button" className="btn btn-secondary w-full justify-center" onClick={applyServiceBreedPreset}>
+                      <Sparkles size={14}/> Preencher racas comuns
+                    </button>
+                  </div>
+                )}
                 <div className="col-span-2">
                   <label className="inp-label">Racas relacionadas</label>
-                  <input className="inp" placeholder="shih tzu, spitz alemao, lhasa apso"
+                  <textarea className="inp min-h-24" placeholder="shih tzu, spitz alemao, lhasa apso"
                     value={form.bot_breed} onChange={e => set('bot_breed', e.target.value)}/>
+                  {serviceMode && <p className="mt-1 text-[11px] text-muted">O PetBot usa esta lista para descobrir a pelagem pela raca. O peso continua sendo perguntado quando o servico possui faixa em kg.</p>}
                 </div>
                 <label className="col-span-2 flex items-center gap-3 cursor-pointer group">
                   <input

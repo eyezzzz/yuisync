@@ -9,6 +9,7 @@ import {
   resolvePetTransportSelection,
   runPetbotAgent,
 } from '../server/lib/petbotAgent.js'
+import { buildServiceBreedPreset, classifyCommonPetBreed } from '../shared/petbotBreedCatalog.js'
 
 test('detecta confirmação explícita sem aceitar texto ambíguo', () => {
   assert.equal(isExplicitPetbotConfirmation('sim'), true)
@@ -410,4 +411,205 @@ test('exige data antes de oferecer horarios de um servico exato', () => {
 
   assert.equal(availability.ok, false)
   assert.deepEqual(availability.required_fields, ['data do agendamento'])
+})
+
+
+test('usa o catalogo de servicos da aba Estoque em vez do banho generico', () => {
+  const services = mergePetshopServiceCatalogs(
+    [{ id: 'generic', code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 60, default_duration_min: 60, active: true }],
+    [
+      { id: '11111111-1111-1111-1111-111111111111', name: 'Banho Pet Porte Pequeno 0 KG A 10 KG (Pelo Duplo)', category: 'Serviço', price: 92, stock_quantity: 999999, active: true, bot_metadata: { product_type: 'servico' } },
+      { id: '22222222-2222-2222-2222-222222222222', name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)', category: 'Serviço', price: 108, stock_quantity: 999999, active: true, bot_metadata: { product_type: 'servico' } },
+    ],
+  )
+
+  const unresolved = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    petName: 'Theo',
+    species: 'dog',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services,
+    appointments: [],
+    requirePetIdentity: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(unresolved.ok, false)
+  assert.deepEqual(unresolved.required_fields, ['peso do pet em kg'])
+  assert.ok(unresolved.available_services.every((service) => service.price !== 60))
+
+  const exact = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    petName: 'Theo',
+    species: 'dog',
+    weightKg: 8,
+    coatType: 'duplo',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services,
+    appointments: [],
+    requirePetIdentity: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(exact.ok, true)
+  assert.equal(exact.service.name, 'Banho Pet Porte Pequeno 0 KG A 10 KG (Pelo Duplo)')
+  assert.equal(exact.service.price, 92)
+  assert.match(exact.service.code, /^catalog_/)
+})
+
+test('nao libera preco ou agenda antes de identificar o pet', () => {
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    date: '2026-07-22',
+    preferredTime: '14:00',
+    period: 'specific',
+    services: [{ id: 's1', code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 60, default_duration_min: 60, active: true }],
+    appointments: [],
+    requirePetIdentity: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, false)
+  assert.deepEqual(availability.required_fields, ['nome do pet', 'espécie do pet'])
+  assert.equal(availability.service, undefined)
+  assert.equal(availability.available_slots, undefined)
+})
+
+test('sequencia de coleta usa classificacao da raca sem pular nome e peso', () => {
+  const services = mergePetshopServiceCatalogs([], [
+    { id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', name: 'Banho Pet Porte Pequeno 0 KG A 10 KG (Pelo Curto)', category: 'Serviço', price: 80, active: true, bot_metadata: { product_type: 'servico' } },
+    { id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', name: 'Banho Pet Porte Pequeno 0 KG A 10 KG (Pelo Duplo)', category: 'Serviço', price: 95, active: true, bot_metadata: { product_type: 'servico' } },
+  ])
+
+  const withoutName = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', species: 'dog', breed: 'Spitz',
+    date: '2026-07-22', preferredTime: '14:00', period: 'specific', services,
+    requirePetIdentity: true, now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(withoutName.required_fields[0], 'nome do pet')
+
+  const withoutWeight = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', petName: 'Theo', species: 'dog', breed: 'Spitz',
+    date: '2026-07-22', preferredTime: '14:00', period: 'specific', services,
+    requirePetIdentity: true, now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(withoutWeight.required_fields[0], 'peso do pet em kg')
+
+  const classifiedByBreed = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', petName: 'Theo', species: 'dog', breed: 'Spitz Alemão', weightKg: 7,
+    date: '2026-07-22', preferredTime: '14:00', period: 'specific', services,
+    requirePetIdentity: true, now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(classifiedByBreed.ok, true)
+  assert.match(classifiedByBreed.service.name, /Pelo Duplo/)
+
+  const unknownBreed = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', petName: 'Theo', species: 'dog', breed: 'Raca inventada', weightKg: 7,
+    date: '2026-07-22', preferredTime: '14:00', period: 'specific', services,
+    requirePetIdentity: true, now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(unknownBreed.ok, false)
+  assert.equal(unknownBreed.required_fields[0], 'tipo de pelo do pet')
+})
+
+
+test('catalogo comum padroniza pelagem e preserva racas ambiguas', () => {
+  assert.equal(classifyCommonPetBreed('Lulu da Pomerânia')?.coat_type, 'duplo')
+  assert.equal(classifyCommonPetBreed('Shih-tzu')?.coat_type, 'longo')
+  assert.equal(classifyCommonPetBreed('Poodle toy')?.coat_type, 'medio')
+  assert.equal(classifyCommonPetBreed('Bulldog Francês')?.coat_type, 'curto')
+  assert.equal(classifyCommonPetBreed('Dachshund')?.ambiguous, true)
+  assert.equal(classifyCommonPetBreed('SRD')?.coat_type, null)
+})
+
+test('preset de servico preenche somente racas da pelagem correspondente', () => {
+  const preset = buildServiceBreedPreset('Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
+  assert.equal(preset.coat_type, 'duplo')
+  assert.equal(preset.species, 'dog')
+  assert.ok(preset.breed.includes('spitz alemao'))
+  assert.ok(preset.breed.includes('golden retriever'))
+  assert.equal(preset.breed.includes('shih tzu'), false)
+
+  const all = buildServiceBreedPreset('Banho Pet Porte Pequeno 0 KG A 10 KG (Todas As Raças)')
+  assert.equal(all.coat_type, 'todas')
+  assert.equal(all.all_breeds, true)
+  assert.deepEqual(all.breed, [])
+})
+
+test('metadata editavel do servico tem prioridade na classificacao da raca', () => {
+  const services = mergePetshopServiceCatalogs([], [
+    {
+      id: '11111111-1111-1111-1111-111111111111',
+      name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Curto)',
+      category: 'Serviço', price: 80, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'curto', breed: ['raca personalizada'] },
+    },
+    {
+      id: '22222222-2222-2222-2222-222222222222',
+      name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)',
+      category: 'Serviço', price: 105, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'duplo', breed: ['spitz alemao'] },
+    },
+  ])
+
+  const availability = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', petName: 'Theo', species: 'dog',
+    breed: 'Spitz Alemão', weightKg: 12, date: '2026-07-22', preferredTime: '14:00',
+    period: 'specific', services, appointments: [], requirePetIdentity: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(availability.ok, true)
+  assert.match(availability.service.name, /Pelo Duplo/)
+  assert.equal(availability.service.price, 105)
+})
+
+test('peso decide entre servico pequeno geral e variacao de pelagem do porte seguinte', () => {
+  const services = mergePetshopServiceCatalogs([], [
+    {
+      id: 'aaaaaaaa-1111-1111-1111-111111111111',
+      name: 'Banho Pet Porte Pequeno 0 KG A 10 KG (Todas As Raças)',
+      category: 'Serviço', price: 72, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'todas', all_breeds: true, breed: [] },
+    },
+    {
+      id: 'bbbbbbbb-2222-2222-2222-222222222222',
+      name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Curto)',
+      category: 'Serviço', price: 88, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'curto', breed: ['bulldog frances'] },
+    },
+    {
+      id: 'cccccccc-3333-3333-3333-333333333333',
+      name: 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)',
+      category: 'Serviço', price: 104, active: true,
+      bot_metadata: { product_type: 'servico', coat_type: 'duplo', breed: ['spitz alemao'] },
+    },
+  ])
+
+  const small = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', petName: 'Theo', species: 'dog',
+    breed: 'Spitz Alemão', weightKg: 8, date: '2026-07-22', preferredTime: '14:00',
+    period: 'specific', services, appointments: [], requirePetIdentity: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(small.ok, true)
+  assert.match(small.service.name, /Porte Pequeno.*Todas As Raças/)
+  assert.equal(small.service.price, 72)
+
+  const medium = buildServiceAvailability({
+    serviceQuery: 'banho', orderType: 'banho_tosa', petName: 'Theo', species: 'dog',
+    breed: 'Spitz Alemão', weightKg: 12, date: '2026-07-22', preferredTime: '14:00',
+    period: 'specific', services, appointments: [], requirePetIdentity: true,
+    now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(medium.ok, true)
+  assert.match(medium.service.name, /Porte Medio.*Pelo Duplo/)
+  assert.equal(medium.service.price, 104)
 })

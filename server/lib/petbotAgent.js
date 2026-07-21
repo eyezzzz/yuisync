@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { classifyCommonPetBreed, normalizePetbotBreedText } from '../../shared/petbotBreedCatalog.js'
 
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
 const BUSY_STATUSES = new Set([
@@ -91,6 +92,93 @@ function serviceKind(value = '') {
   return normalizeCode(value) || null
 }
 
+function serviceGroupFromText(value = '') {
+  const text = normalize(value)
+  return /vet|consulta|vacina|clinica|medico|exame|cirurg|ultrassom/.test(text)
+    ? 'veterinaria'
+    : 'banho_tosa'
+}
+
+function catalogServiceCode(productId = '') {
+  const compact = clean(productId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
+  return compact ? `catalog_${compact}` : ''
+}
+
+export function isServiceCatalogProduct(product = {}) {
+  const metadata = product?.bot_metadata && typeof product.bot_metadata === 'object'
+    ? product.bot_metadata
+    : {}
+  const name = normalize(product.name)
+  const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
+
+  if (/banheira|banho a seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return false
+  if (/pacote.*banho|banho.*pacote/.test(name)) return false
+
+  return normalize(metadata.product_type) === 'servico'
+    || normalize(product.category) === 'servico'
+    || /banho|tosa|desembolo|escovac|hidrat|higieniz|consulta|vacina|exame|cirurg/.test(text)
+}
+
+export function serviceFromCatalogProduct(product = {}) {
+  if (!isServiceCatalogProduct(product) || product.active === false) return null
+  const code = catalogServiceCode(product.id)
+  const name = clean(product.name)
+  const metadata = product?.bot_metadata && typeof product.bot_metadata === 'object'
+    ? product.bot_metadata
+    : {}
+  if (!code || !name || Number(product.price || 0) <= 0) return null
+
+  return {
+    id: code,
+    code,
+    name,
+    group_type: serviceGroupFromText(`${name} ${product.category || ''}`),
+    default_price: Number(product.price || 0),
+    default_duration_min: Math.max(15, Number(metadata.duration_min || metadata.service_duration_min || 60) || 60),
+    active: true,
+    sort_order: Number(product.sort_order || 500),
+    source_product_id: clean(product.id),
+    catalog_source: 'products',
+    species: clean(metadata.species) || clean(product.species_target) || null,
+    breeds: Array.isArray(metadata.breed) ? metadata.breed : (clean(metadata.breed) ? [metadata.breed] : []),
+    all_breeds: metadata.all_breeds === true,
+    coat_type: normalizeCoatType(metadata.coat_type) || extractCoatType(name),
+    classification_version: Number(metadata.classification_version || 0) || null,
+  }
+}
+
+export function mergePetshopServiceCatalogs(dedicatedServices = [], products = []) {
+  const productServices = (products || []).map(serviceFromCatalogProduct).filter(Boolean)
+  const byCode = new Map()
+  const productById = new Map(productServices.map((service) => [clean(service.source_product_id), service]))
+  const authoritativeKinds = new Set(productServices.map((service) => serviceKind(`${service.code} ${service.name}`)).filter(Boolean))
+
+  for (const raw of dedicatedServices || []) {
+    if (!raw || raw.active === false) continue
+    const sourceProductId = clean(raw.source_product_id)
+    const rawKind = serviceKind(`${raw.code || ''} ${raw.name || ''}`)
+    if (!sourceProductId && rawKind && authoritativeKinds.has(rawKind)) continue
+    const productService = sourceProductId ? productById.get(sourceProductId) : null
+    const merged = productService
+      ? {
+        ...raw,
+        ...productService,
+        default_duration_min: Math.max(15, Number(raw.default_duration_min || productService.default_duration_min || 60) || 60),
+      }
+      : raw
+    const key = normalizeCode(merged.code || merged.name || merged.id)
+    if (key) byCode.set(key, merged)
+  }
+
+  for (const service of productServices) {
+    const key = normalizeCode(service.code)
+    const current = byCode.get(key)
+    byCode.set(key, current ? { ...current, ...service, default_duration_min: current.default_duration_min || service.default_duration_min } : service)
+  }
+
+  return [...byCode.values()]
+}
+
 function extractWeightRange(value = '') {
   const text = normalize(value).replace(/,/g, '.')
   const range = text.match(/(\d+(?:\.\d+)?)\s*(?:kg\s*)?(?:a|ate|-)\s*(\d+(?:\.\d+)?)\s*kg/)
@@ -133,8 +221,12 @@ function normalizeService(row = {}) {
     default_duration_min: Math.max(15, Number(row.default_duration_min ?? row.duration_min ?? 60) || 60),
     active: row.active !== false,
     service_kind: serviceKind(`${code} ${name}`),
-    weight_range: extractWeightRange(name),
-    coat_type: extractCoatType(name),
+    weight_range: row.weight_range || extractWeightRange(name),
+    coat_type: normalizeCoatType(row.coat_type) || extractCoatType(name),
+    breeds: Array.isArray(row.breeds)
+      ? row.breeds.map((value) => normalizePetbotBreedText(value)).filter(Boolean)
+      : [],
+    all_breeds: row.all_breeds === true,
   }
 }
 
@@ -151,12 +243,35 @@ function serviceMatchesCoat(service, coatType) {
   return service.coat_type === coatType
 }
 
-function serviceSelection({ serviceQuery = '', orderType = '', services = [], weightKg = null, coatType = null } = {}) {
+function serviceMatchesBreedPreset(service, breed = '') {
+  const normalizedBreed = normalizePetbotBreedText(breed)
+  if (!normalizedBreed || service.all_breeds || !service.breeds?.length) return false
+  return service.breeds.some((alias) => (
+    normalizedBreed === alias
+    || normalizedBreed.startsWith(`${alias} `)
+    || normalizedBreed.endsWith(` ${alias}`)
+  ))
+}
+
+function inferredCoatTypeForBreed(breed = '', candidates = []) {
+  const presetCoats = new Set(
+    candidates
+      .filter((service) => serviceMatchesBreedPreset(service, breed))
+      .map((service) => service.coat_type)
+      .filter((coat) => coat && coat !== 'todas'),
+  )
+  if (presetCoats.size === 1) return [...presetCoats][0]
+
+  const classification = classifyCommonPetBreed(breed)
+  return classification?.coat_type || null
+}
+
+function serviceSelection({ serviceQuery = '', orderType = '', services = [], weightKg = null, coatType = null, breed = null } = {}) {
   const query = normalize(serviceQuery)
   const code = normalizeCode(serviceQuery)
   const group = serviceGroupForOrder(orderType)
   const normalizedWeight = positiveNumber(weightKg, 0) || null
-  const normalizedCoat = normalizeCoatType(coatType)
+  let normalizedCoat = normalizeCoatType(coatType)
   const allCandidates = (services || [])
     .map(normalizeService)
     .filter((service) => service.active && (!group || service.group_type === group))
@@ -216,6 +331,10 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
       required_fields: [],
       error: `Nenhum serviço cadastrado atende o peso informado (${normalizedWeight} kg).`,
     }
+  }
+
+  if (!normalizedCoat && clean(breed)) {
+    normalizedCoat = inferredCoatTypeForBreed(breed, filtered)
   }
 
   const distinctCoats = new Set(filtered.map((service) => service.coat_type).filter((value) => value && value !== 'todas'))
@@ -498,7 +617,7 @@ export const PETBOT_AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'check_petshop_availability',
-      description: 'Seleciona o serviço exato do cadastro por peso/tipo de pelo e calcula horários livres contra a agenda atual. Use antes de informar preço, duração ou disponibilidade.',
+      description: 'Seleciona o serviço exato do cadastro por peso e pela classificação editável de raça/pelagem do PetBot, e calcula horários livres contra a agenda atual. Use antes de informar preço, duração ou disponibilidade.',
       strict: true,
       parameters: {
         type: 'object',
@@ -642,6 +761,9 @@ export function isExplicitPetbotConfirmation(message = '') {
 export function buildServiceAvailability({
   serviceQuery = '',
   orderType = 'banho_tosa',
+  petName = '',
+  species = '',
+  breed = '',
   weightKg = null,
   coatType = null,
   date = null,
@@ -650,8 +772,24 @@ export function buildServiceAvailability({
   services = [],
   appointments = [],
   now = new Date(),
+  requirePetIdentity = false,
 } = {}) {
-  const selection = serviceSelection({ serviceQuery, orderType, services, weightKg, coatType })
+  if (requirePetIdentity) {
+    const requiredIdentity = []
+    if (!clean(petName)) requiredIdentity.push('nome do pet')
+    if (!clean(species)) requiredIdentity.push('espécie do pet')
+    if (requiredIdentity.length) {
+      return {
+        ok: false,
+        error: 'Faltam dados básicos do pet antes da consulta operacional.',
+        required_fields: requiredIdentity,
+        available_services: [],
+        instruction: `Pergunte somente: ${requiredIdentity[0]}. Não informe preço, duração ou disponibilidade antes de identificar o pet e o serviço exato.`,
+      }
+    }
+  }
+
+  const selection = serviceSelection({ serviceQuery, orderType, services, weightKg, coatType, breed })
   const service = selection.service
   if (!service) {
     return {
@@ -890,8 +1028,14 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     services,
     weightKg: base.weight_kg,
     coatType: base.coat_type,
+    breed: base.breed,
   })
   const serviceDefinition = selection.service
+  if (serviceDefinition && !base.coat_type) {
+    base.coat_type = serviceDefinition.coat_type && serviceDefinition.coat_type !== 'todas'
+      ? serviceDefinition.coat_type
+      : classifyCommonPetBreed(base.breed)?.coat_type || null
+  }
   if (!serviceDefinition) {
     if (selection.required_fields.length) missing.push(...selection.required_fields)
     else missing.push('serviço ativo do cadastro')
@@ -906,6 +1050,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
       orderType,
       weightKg: base.weight_kg,
       coatType: base.coat_type,
+      breed: base.breed,
       date: requestedDate,
       preferredTime: requestedTime,
       period: 'specific',

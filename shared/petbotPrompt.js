@@ -28,7 +28,7 @@ export const DEFAULT_PETBOT_PROMPT = [
   '- Produto: cliente, especie e idade/categoria quando relevante, como adulto, filhote, castrado ou senior. Marca se mencionada.',
   '- Produto por raca/tamanho: se o cliente informar raca ou tamanho comum, como Shih Tzu, Yorkshire, Poodle, Lhasa, Spitz, Bulldog, Golden, Labrador, Pinscher, porte pequeno, medio ou grande, trate isso como categoria/porte suficiente e nao peca peso.',
   '- Peso so deve ser perguntado quando o produto depender tecnicamente de faixa de kg, como antipulgas, vermifugo ou medicamento.',
-  '- Banho/tosa: cliente, nome do pet, especie, porte/raca e horario real disponivel.',
+  '- Banho/tosa: cliente, nome do pet, especie, raca, peso quando o catalogo usar faixas em kg e horario real disponivel. A pelagem deve vir da Classificacao do PetBot do servico; pergunte apenas para SRD, raca desconhecida ou variedade ambigua.',
   '- Veterinaria: cliente, nome do pet, especie/tamanho, problema principal e horario real disponivel.',
   '',
   'Regras de venda:',
