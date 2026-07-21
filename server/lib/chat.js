@@ -17,6 +17,12 @@ import {
   redraftPetbotReplyWithLlm,
 } from './petbotAi.js'
 import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
+import {
+  PETBOT_AGENT_TOOLS,
+  isExplicitPetbotConfirmation,
+  preparePetshopOrderDraft,
+  runPetbotAgent,
+} from './petbotAgent.js'
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -141,76 +147,6 @@ const SIZE_CATEGORY_TERMS = new Set([
   'gigante',
   'gigantes',
 ])
-
-const PETBOT_TOOLS = [
-  {
-    type: 'function',
-    function: {
-      name: 'update_customer_profile',
-      description: 'Atualiza o cadastro do cliente/pet quando o cliente informou dados novos na conversa.',
-      parameters: {
-        type: 'object',
-        additionalProperties: false,
-        properties: {
-          customer_name: { type: 'string' },
-          pet_name: { type: 'string' },
-          species: { type: 'string', enum: ['dog', 'cat', 'other', ''] },
-          size: { type: 'string' },
-          breed: { type: 'string' },
-          symptom: { type: 'string' },
-          address: { type: 'string' },
-          neighborhood: { type: 'string' },
-          city: { type: 'string' },
-        },
-      },
-    },
-  },
-  {
-    type: 'function',
-    function: {
-      name: 'create_confirmed_petshop_order',
-      description: 'Registra venda, ordem operacional e/ou agendamento somente depois do cliente confirmar o resumo final.',
-      parameters: {
-        type: 'object',
-        required: ['customer_name', 'order_type', 'items', 'total'],
-        additionalProperties: false,
-        properties: {
-          customer_name: { type: 'string' },
-          pet_name: { type: 'string' },
-          species: { type: 'string' },
-          size: { type: 'string' },
-          order_type: { type: 'string', enum: ['produto', 'banho_tosa', 'veterinaria'] },
-          items: {
-            type: 'array',
-            items: {
-              type: 'object',
-              required: ['name', 'quantity', 'unit_price'],
-              additionalProperties: false,
-              properties: {
-                product_id: { type: 'string' },
-                name: { type: 'string' },
-                quantity: { type: 'number' },
-                unit_price: { type: 'number' },
-                upsell: { type: 'boolean' },
-              },
-            },
-          },
-          service_type: { type: 'string' },
-          scheduled_at: { type: 'string' },
-          total: { type: 'number' },
-          payment_method: { type: 'string', enum: ['pix', 'dinheiro', 'cartao'] },
-          change_for: { type: 'number' },
-          fulfillment_type: { type: 'string', enum: ['entrega', 'retirada', 'servico'] },
-          delivery_address: { type: 'string' },
-          delivery_neighborhood: { type: 'string' },
-          delivery_city: { type: 'string' },
-          delivery_reference: { type: 'string' },
-          notes: { type: 'string' },
-        },
-      },
-    },
-  },
-]
 
 const productCatalogCache = new Map()
 const storeSettingsCache = new Map()
@@ -350,7 +286,9 @@ function parseJsonObject(value) {
 
 function hasPetbotState(context) {
   const parsed = parseJsonObject(context)
-  return Boolean(parsed.petbot && typeof parsed.petbot === 'object' && parsed.petbot.updatedAt)
+  const legacyState = parsed.petbot && typeof parsed.petbot === 'object' && parsed.petbot.updatedAt
+  const agentState = parsed.petbot_agent && typeof parsed.petbot_agent === 'object' && parsed.petbot_agent.updatedAt
+  return Boolean(legacyState || agentState)
 }
 
 function isUuid(value = '') {
@@ -813,6 +751,8 @@ function buildSystemPrompt({
     'Para agendamentos, nao confirme disponibilidade sem haver horario confirmado no contexto de agenda.',
     'Nunca aplique desconto. Se pedirem desconto, responda gentilmente: "Infelizmente nao conseguimos aplicar desconto nesse pedido."',
     'Mantenha respostas curtas e naturais para conversa de WhatsApp.',
+    'Você decide a próxima pergunta e a redação da resposta. O código apenas fornece dados, executa ferramentas e bloqueia operações inválidas.',
+    'Nunca afirme que salvou cadastro, separou produto, enviou foto, transferiu ou confirmou pedido sem a ferramenta correspondente retornar ok.',
     'Seu foco e vender, mas sem pressionar: se o cliente recusar o upsell, continue o pedido normalmente.',
     'Sempre pesquise no contexto do banco abaixo. Se o dado nao estiver no contexto, diga que vai consultar um atendente; em caso veterinario, a veterinaria.',
     'Se o cliente ainda nao tem nome confirmado, peca o nome antes de qualquer triagem ou oferta, inclusive em saudacao simples.',
@@ -828,9 +768,9 @@ function buildSystemPrompt({
     'Upsell: ofereca 1 item ou servico relacionado; se o cliente recusar, continue o pedido normalmente.',
     'Se produto sem estoque, mostre alternativas similares do contexto. Se horario indisponivel, ofereca os proximos horarios disponiveis do contexto.',
     'Ao vender racao por marca/raca/tamanho, priorize produtos cujo nome contenha a marca, a raca/tamanho e adulto/filhote/castrado informado. So diga que nao tem estoque se nenhum item do contexto operacional corresponder.',
-    'Depois do cliente confirmar o resumo final, use a ferramenta create_confirmed_petshop_order antes de responder a avaliacao.',
-    'Ao chamar create_confirmed_petshop_order para produto, envie product_id quando houver ID no estoque, nome do item, quantidade, preco unitario, fulfillment_type, pagamento e delivery_address completo quando for entrega. Para servico, envie appointment_id/scheduled_at e nao exija pagamento.',
-    'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmacao final quando o resumo final ja foi exibido.',
+    'Quando todos os dados estiverem completos, use prepare_petshop_order para validar estoque/agenda, calcular o total e gerar o resumo final. Depois aguarde uma nova mensagem com confirmação explícita e só então use create_confirmed_petshop_order.',
+    'Ao chamar prepare_petshop_order, envie IDs reais do estoque ou agenda e todos os dados já confirmados. O código valida preços, estoque, horário e total; nunca calcule nem invente esses valores por conta própria. create_confirmed_petshop_order não recebe os itens novamente: ele confirma exatamente o pedido pendente validado anteriormente.',
+    'Trate "sim", "s", "sm", "confirmo", "pode finalizar" e equivalentes como confirmação final somente quando existe um pedido pendente preparado em mensagem anterior.',
     'Depois de responder "Pedido confirmado", se o cliente enviar uma nota de 0 a 10, nao registre pedido de novo; apenas agradeca a avaliacao.',
     'Faca uma pergunta operacional por vez. Produto: primeiro pagamento, depois entrega/retirada, depois endereco se for entrega. Servico: depois do horario, pergunte transporte do pet quando banho/tosa.',
     'Se o cliente responder pagamento e entrega juntos em produto, aceite os dois e siga para endereco.',
@@ -930,6 +870,10 @@ function canPetbotCreateOrders(settings = {}, session = {}) {
   return Boolean(phone) && allowlist
     .map((entry) => cleanText(entry).replace(/\D/g, ''))
     .includes(phone)
+}
+
+function canUsePetbotAgent(settings = {}, session = {}) {
+  return canPetbotCreateOrders(settings, session)
 }
 
 async function loadProducts(supabase, moduleId, tenantId, message) {
@@ -1611,37 +1555,6 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
   }
 }
 
-async function executePetbotTool(supabase, session, settings, toolCall) {
-  const name = toolCall?.function?.name
-  let args = {}
-  try {
-    args = JSON.parse(toolCall?.function?.arguments || '{}')
-  } catch {
-    args = {}
-  }
-
-  if (name === 'update_customer_profile') {
-    const customer = await ensureCustomerProfile(supabase, session, args)
-    return {
-      ok: true,
-      action: name,
-      client_id: customer.client.id,
-      name_confirmed: customer.isKnown,
-    }
-  }
-
-  if (name === 'create_confirmed_petshop_order') {
-    const result = await createConfirmedPetshopOrderViaRpc(supabase, session, settings, args)
-    return {
-      ok: true,
-      action: name,
-      ...result,
-    }
-  }
-
-  return { ok: false, error: `Ferramenta desconhecida: ${name}` }
-}
-
 async function saveSatisfactionRating(supabase, sessionId, rating) {
   const closedAt = new Date().toISOString()
   const { error } = await supabase
@@ -1850,6 +1763,348 @@ async function recordPetbotEvent(supabase, payload) {
   }
 }
 
+function parseAgentToolArguments(toolCall) {
+  try {
+    const parsed = JSON.parse(cleanText(toolCall?.function?.arguments) || '{}')
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function getPendingAgentOrder(context) {
+  const parsed = parseJsonObject(context)
+  const pending = parsed?.petbot_agent?.pending_order
+  if (!pending || typeof pending !== 'object' || !pending.id || !pending.order) return null
+  return pending
+}
+
+function latestSuccessfulTool(toolRuns, name) {
+  for (let index = (toolRuns || []).length - 1; index >= 0; index -= 1) {
+    const run = toolRuns[index]
+    if (run?.name === name && run?.result?.ok !== false) return run
+  }
+  return null
+}
+
+async function respondWithPetbotAgent({
+  supabase,
+  sessionId,
+  trimmedMessage,
+  options,
+  session,
+  sessionForGuard,
+  moduleId,
+  intent,
+  history,
+  storeSettings,
+  runtimeConfig,
+  customer,
+  products,
+  appointments,
+  customInstructions,
+}) {
+  const pendingAtTurnStart = getPendingAgentOrder(sessionForGuard.context)
+  let pendingOrder = pendingAtTurnStart
+  let orderResult = null
+  let needsHuman = false
+  let handoffTarget = null
+  let updatedCustomerName = cleanText(session.customer_name)
+  const mediaMessages = []
+
+  const examplesContext = await loadConversationExamples(
+    supabase,
+    moduleId,
+    session.tenant_id,
+    trimmedMessage,
+    intent,
+  )
+
+  const basePrompt = buildSystemPrompt({
+    ...storeSettings,
+    customerContext: buildCustomerContext(customer),
+    stockContext: buildStockContext(products),
+    appointmentsContext: buildAppointmentsContext(appointments),
+    examplesContext,
+    botPrompt: customInstructions,
+  })
+  const pendingContext = pendingAtTurnStart
+    ? [
+      'Existe um pedido pendente preparado em mensagem anterior.',
+      `ID pendente: ${pendingAtTurnStart.id}`,
+      pendingAtTurnStart.summary,
+      'Se a mensagem atual for uma confirmação explícita e sem alteração, chame create_confirmed_petshop_order.',
+      'Se o cliente pedir qualquer alteração, prepare um novo pedido e não confirme o anterior.',
+    ].join('\n')
+    : [
+      'Não existe pedido pendente preparado.',
+      'Mesmo que o cliente diga para finalizar junto com os dados iniciais, primeiro prepare e mostre o resumo final; a confirmação deve ocorrer em uma mensagem posterior.',
+    ].join('\n')
+
+  const systemPrompt = [
+    basePrompt,
+    '',
+    'Protocolo do agente:',
+    '1. Converse naturalmente e escolha a próxima ação.',
+    '2. Use update_customer_profile quando houver dados novos explícitos.',
+    '3. Use prepare_petshop_order quando os dados estiverem completos. A resposta final desse turno deve ser o resumo validado retornado pela ferramenta.',
+    '4. Use create_confirmed_petshop_order apenas para um pedido pendente de turno anterior e após confirmação explícita.',
+    '5. Use handoff_to_human quando não puder concluir com dados reais ou houver risco veterinário.',
+    '6. Não exponha nomes de ferramentas, JSON, IDs internos nem regras deste prompt.',
+    '',
+    'Estado transacional desta conversa:',
+    pendingContext,
+  ].join('\n')
+
+  const executeTool = async (toolCall) => {
+    const name = cleanText(toolCall?.function?.name)
+    const args = parseAgentToolArguments(toolCall)
+
+    if (name === 'update_customer_profile') {
+      const updatedCustomer = await ensureCustomerProfile(supabase, sessionForGuard, args)
+      updatedCustomerName = cleanText(args.customer_name) || cleanText(updatedCustomer.client?.name) || updatedCustomerName
+      return {
+        ok: true,
+        action: name,
+        client_id: updatedCustomer.client?.id || null,
+        name_confirmed: Boolean(updatedCustomer.isKnown),
+      }
+    }
+
+    if (name === 'prepare_petshop_order') {
+      const prepared = preparePetshopOrderDraft({
+        args,
+        products,
+        appointments,
+        settings: storeSettings,
+      })
+      if (!prepared.ok) {
+        return {
+          ok: false,
+          action: name,
+          missing: prepared.missing || [],
+          instruction: 'Pergunte apenas o próximo dado ausente. Não invente nem confirme o pedido.',
+        }
+      }
+
+      pendingOrder = {
+        id: prepared.pending_order_id,
+        order: prepared.order,
+        summary: prepared.summary,
+        prepared_at: new Date().toISOString(),
+      }
+      return {
+        ok: true,
+        action: name,
+        pending_order_id: pendingOrder.id,
+        summary: pendingOrder.summary,
+        instruction: 'Mostre exatamente este resumo e aguarde confirmação em uma nova mensagem.',
+      }
+    }
+
+    if (name === 'create_confirmed_petshop_order') {
+      if (args.confirmation !== true || !isExplicitPetbotConfirmation(trimmedMessage)) {
+        return {
+          ok: false,
+          action: name,
+          error: 'A mensagem atual não contém confirmação explícita do cliente.',
+        }
+      }
+      if (!pendingAtTurnStart) {
+        return {
+          ok: false,
+          action: name,
+          error: 'Não existe pedido preparado em mensagem anterior. Prepare e apresente o resumo primeiro.',
+        }
+      }
+      if (!canPetbotCreateOrders(storeSettings, sessionForGuard)) {
+        needsHuman = true
+        handoffTarget = 'atendente'
+        return {
+          ok: false,
+          action: name,
+          error: 'Este contato não está habilitado para criação autônoma de pedidos.',
+          handoff: true,
+        }
+      }
+
+      orderResult = await createConfirmedPetshopOrderViaRpc(
+        supabase,
+        sessionForGuard,
+        storeSettings,
+        pendingAtTurnStart.order,
+      )
+      pendingOrder = null
+      return {
+        ok: true,
+        action: name,
+        sale_id: orderResult.sale_id,
+        order_id: orderResult.order_id,
+        appointment_id: orderResult.appointment_id,
+        total: orderResult.total,
+        payment_status: orderResult.payment_status,
+        pix_key: pendingAtTurnStart.order.payment_method === 'pix' ? storeSettings.pixKey || null : null,
+        pix_holder_name: pendingAtTurnStart.order.payment_method === 'pix' ? storeSettings.pixHolderName || null : null,
+        instruction: 'Confirme ao cliente que foi registrado e peça uma avaliação de 0 a 10.',
+      }
+    }
+
+    if (name === 'send_product_image') {
+      const product = (products || []).find((item) => cleanText(item.id) === cleanText(args.product_id))
+      if (!product) return { ok: false, action: name, error: 'Produto não encontrado no contexto real.' }
+      if (!cleanText(product.image_url)) return { ok: false, action: name, error: 'Produto sem foto aprovada no cadastro.' }
+      const attachment = {
+        type: 'image',
+        productId: product.id,
+        productName: product.name,
+        imageUrl: product.image_url,
+      }
+      mediaMessages.push(attachment)
+      return {
+        ok: true,
+        action: name,
+        product_name: product.name,
+        image_attached: true,
+      }
+    }
+
+    if (name === 'handoff_to_human') {
+      needsHuman = true
+      handoffTarget = args.target === 'veterinaria' ? 'veterinaria' : 'atendente'
+      return {
+        ok: true,
+        action: name,
+        target: handoffTarget,
+        reason: cleanText(args.reason).slice(0, 240),
+      }
+    }
+
+    return { ok: false, error: `Ferramenta desconhecida: ${name}` }
+  }
+
+  const agentResult = await runPetbotAgent({
+    model: runtimeConfig.modelName,
+    temperature: runtimeConfig.temperature,
+    systemPrompt,
+    history,
+    message: trimmedMessage,
+    tools: PETBOT_AGENT_TOOLS,
+    callModel: (params) => callOpenAIWithTimeout(params, serverEnv.openAiTimeoutMs),
+    executeTool,
+  })
+
+  let reply = cleanText(agentResult.reply)
+  const preparedRun = latestSuccessfulTool(agentResult.toolRuns, 'prepare_petshop_order')
+  if (preparedRun?.result?.summary && !orderResult) {
+    reply = cleanText(preparedRun.result.summary)
+  }
+  if (!reply) throw new HttpError(502, 'The PetBot agent response came back empty.')
+
+  const botSentAt = new Date().toISOString()
+  const existingContext = parseJsonObject(sessionForGuard.context)
+  const nextContext = {
+    ...existingContext,
+    ...(orderResult ? {
+      last_sale_id: orderResult.sale_id,
+      last_order_id: orderResult.order_id || null,
+      last_appointment_id: orderResult.appointment_id || null,
+      last_payment_status: orderResult.payment_status || null,
+      last_total: Number(orderResult.total || 0),
+    } : {}),
+    petbot_agent: {
+      version: 1,
+      engine_version: 'petbot_agent_v1',
+      updatedAt: botSentAt,
+      pending_order: pendingOrder,
+      last_action: agentResult.toolRuns.at(-1)?.name || 'reply',
+      last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
+      needs_human: needsHuman,
+      handoff_target: handoffTarget,
+      order_saved: Boolean(orderResult),
+    },
+  }
+
+  const sessionPatch = {
+    intent,
+    context: nextContext,
+    ...(updatedCustomerName ? { customer_name: updatedCustomerName } : {}),
+    ...(needsHuman ? { status: 'human' } : {}),
+    last_message_at: botSentAt,
+  }
+
+  const { data: updatedSession, error: sessionUpdateError } = await supabase
+    .from('chat_sessions')
+    .update(sessionPatch)
+    .eq('id', sessionId)
+    .select('id, context')
+    .maybeSingle()
+
+  if (sessionUpdateError || !updatedSession || !hasPetbotState(updatedSession.context)) {
+    throw new HttpError(500, `Unable to persist PetBot agent state${sessionUpdateError?.message ? `: ${sessionUpdateError.message}` : '.'}`)
+  }
+
+  const primaryImage = mediaMessages.find((item) => item.type === 'image' && item.imageUrl)
+  const { data: savedReply, error: replyInsertError } = await supabase
+    .from('chat_messages')
+    .insert({
+      session_id: sessionId,
+      role: 'assistant',
+      content: reply,
+      metadata: {
+        source: options.source || 'dashboard_simulation',
+        ...(options.assistantMetadata || {}),
+        ...(primaryImage ? {
+          image_url: primaryImage.imageUrl,
+          media_attachments: mediaMessages,
+        } : {}),
+        petbot_agent: {
+          engine_version: 'petbot_agent_v1',
+          model: runtimeConfig.modelName,
+          tool_calls: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
+          pending_order_id: pendingOrder?.id || null,
+          order_saved: Boolean(orderResult),
+          needs_human: needsHuman,
+          handoff_target: handoffTarget,
+        },
+      },
+      tokens_used: agentResult.tokensUsed,
+      sent_at: botSentAt,
+    })
+    .select('id, role, content, metadata, tokens_used, sent_at')
+    .single()
+
+  if (replyInsertError) throw new HttpError(500, 'Unable to save assistant response.')
+
+  await recordPetbotEvent(supabase, {
+    tenant_id: session.tenant_id,
+    module_id: moduleId,
+    session_id: sessionId,
+    message_id: savedReply.id,
+    event_type: orderResult ? 'order_saved' : (needsHuman ? 'handoff' : 'turn'),
+    engine_version: 'petbot_agent_v1',
+    intent,
+    action: agentResult.toolRuns.at(-1)?.name || 'reply',
+    outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : 'ok'),
+    handoff_target: needsHuman ? handoffTarget : null,
+    metadata: {
+      tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok })),
+      pending_order_id: pendingOrder?.id || null,
+      source: options.source || 'dashboard_simulation',
+    },
+  })
+
+  logger.info('Chat response generated', {
+    sessionId,
+    moduleId,
+    intent,
+    tokens: agentResult.tokensUsed,
+    guarded: false,
+    engine: 'petbot_agent_v1',
+  })
+
+  return { reply, savedMessage: savedReply }
+}
+
 export async function respondToChatMessage(supabase, sessionId, message, options = {}) {
   const trimmedMessage = typeof message === 'string' ? message.trim() : ''
 
@@ -1982,6 +2237,34 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
   if (!options.skipUserPersistence) {
     await insertUserMessages(supabase, sessionId, userMessages)
+  }
+
+  if (canUsePetbotAgent(storeSettings, sessionForGuard)) {
+    try {
+      return await respondWithPetbotAgent({
+        supabase,
+        sessionId,
+        trimmedMessage,
+        options,
+        session,
+        sessionForGuard,
+        moduleId,
+        intent,
+        history,
+        storeSettings,
+        runtimeConfig,
+        customer,
+        products,
+        appointments,
+        customInstructions,
+      })
+    } catch (error) {
+      logger.warn('PetBot agent failed; falling back to guarded runtime', {
+        sessionId,
+        moduleId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+    }
   }
 
   let guard = runPetbotGuard({
