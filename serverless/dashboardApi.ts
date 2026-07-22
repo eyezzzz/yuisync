@@ -44,10 +44,13 @@ function sendEmpty(res: ServerResponse, status = 204) {
 function handleApiError(res: ServerResponse, error: unknown) {
   const status = error instanceof HttpError ? error.status : 500
   const message = error instanceof Error ? error.message : 'Erro ao processar a solicitacao.'
+  const code = typeof (error as { code?: unknown })?.code === 'string'
+    ? String((error as { code: string }).code)
+    : ''
   if (status >= 500) {
     console.error('[dashboard-api]', error)
   }
-  sendJson(res, status, { error: message })
+  sendJson(res, status, { error: message, code })
 }
 
 function getUrl(req: IncomingMessage) {

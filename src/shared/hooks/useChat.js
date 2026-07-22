@@ -285,6 +285,16 @@ export function useChat() {
         await loadMessages(sessionId)
       }
     } catch (error) {
+      const staleTurn = error?.status === 409 && (
+        error?.code === 'PETBOT_STALE_TURN'
+        || /newer customer message superseded/i.test(String(error?.message || ''))
+      )
+      if (staleTurn) {
+        // A newer customer message deliberately cancelled this response. The
+        // newer request owns the conversation; this is not a failed message.
+        if (activeSessionIdRef.current === sessionId) await loadMessages(sessionId)
+        return
+      }
       const failedIds = new Set(queuedMessages.map((message) => message.id))
       setMessages((prev) => prev.map((message) => (
         failedIds.has(message.id)

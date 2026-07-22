@@ -178,6 +178,30 @@ export function normalizePetbotInterpretation(input = {}) {
   }
 }
 
+export function reconcilePetbotIdentityInterpretation(message = '', interpretation = null) {
+  if (!interpretation || typeof interpretation !== 'object') return interpretation
+
+  const reconciled = { ...interpretation }
+  const normalizedMessage = norm(message).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  const explicitlyNamesCustomer = /\b(?:me chamo|meu nome (?:e|eh)|pode me chamar de|eu sou)\b/.test(normalizedMessage)
+  const explicitlyNamesPet = (
+    /\b(?:ele|ela|pet|cachorro|cachorra|cao|cadela|gato|gata|shih tzu)\b.{0,80}\b(?:se chama|chama se|nome (?:e|eh))\b/.test(normalizedMessage)
+    || /\b(?:se chama|chama se)\s+[a-z]/.test(normalizedMessage)
+  )
+  const customerName = norm(reconciled.customer_name)
+  const petName = norm(reconciled.pet_name)
+  const duplicatedIdentity = Boolean(customerName && petName && customerName === petName)
+
+  if (!explicitlyNamesCustomer && explicitlyNamesPet) {
+    if (!petName && customerName) reconciled.pet_name = reconciled.customer_name
+    reconciled.customer_name = ''
+  } else if (!explicitlyNamesCustomer && duplicatedIdentity) {
+    reconciled.customer_name = ''
+  }
+
+  return reconciled
+}
+
 function buildInterpreterMessages({ message, history = [], state = {}, customerContext = '', mediaContext = '', customInstructions = '' }) {
   return [
     {
@@ -193,6 +217,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Quando a pergunta anterior for sobre observacoes do servico, extraia qualquer cuidado informado em service_notes. Se o cliente responder apenas que nao ha observacoes, use service_notes="sem observacao".',
         'Para banho/tosa, quando o cliente disser que ele mesmo vai levar ou trazer o pet, extraia service_transport_mode="cliente_leva". Quando escolher o MotoDog, use service_transport_mode="motodog".',
         'Para banho/tosa, interprete a raca e o peso aproximado quando estiverem presentes na fala, no historico recente ou no estado atual. Nunca deduza peso pela raca.',
+        'Separe rigorosamente cliente e pet: "me chamo Ana" informa customer_name; "ele/ela se chama Afonso", "meu cachorro se chama Afonso" ou "o pet se chama Afonso" informa somente pet_name. Nunca copie o nome do pet para customer_name.',
         'Se o cliente disser um valor aproximado, mantenha weight_kg com o valor informado, weight_label com a forma natural e weight_estimated=true.',
         'Se disser uma faixa suficiente para o catalogo, como "ate 10 kg" ou "mais de 10 kg", use um valor operacional compativel em weight_kg, preserve a frase em weight_label e marque weight_estimated=true.',
         'Extraia coat_type somente quando o cliente disser a pelagem. A classificacao de pelagem por raca sera resolvida pelo catalogo do sistema, nao por esta camada.',
@@ -316,7 +341,9 @@ export async function interpretPetbotMessageWithLlm(options = {}) {
     messages: buildInterpreterMessages(options),
   })
   const parsed = safeJsonParse(content)
-  return parsed ? normalizePetbotInterpretation(parsed) : null
+  return parsed
+    ? reconcilePetbotIdentityInterpretation(options.message, normalizePetbotInterpretation(parsed))
+    : null
 }
 
 export function buildInterpretedPetbotSearchText(message = '', interpretation = null) {

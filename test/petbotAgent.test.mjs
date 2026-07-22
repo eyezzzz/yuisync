@@ -12,7 +12,31 @@ import {
   resolvePetTransportSelection,
   runPetbotAgent,
 } from '../server/lib/petbotAgent.js'
+import { reconcilePetbotIdentityInterpretation } from '../server/lib/petbotAi.js'
 import { buildServiceBreedPreset, classifyCommonPetBreed } from '../shared/petbotBreedCatalog.js'
+
+test('separa identidade do tutor e nome do pet pelo contexto da fala', () => {
+  const petOnly = reconcilePetbotIdentityInterpretation(
+    'meu shih tzu tem 8kg e se chama Afonso',
+    { customer_name: 'Afonso', pet_name: 'Afonso', breed: 'Shih Tzu', weight_kg: 8 },
+  )
+  assert.equal(petOnly.customer_name, '')
+  assert.equal(petOnly.pet_name, 'Afonso')
+
+  const shiftedToPet = reconcilePetbotIdentityInterpretation(
+    'ela se chama Nina',
+    { customer_name: 'Nina', pet_name: '' },
+  )
+  assert.equal(shiftedToPet.customer_name, '')
+  assert.equal(shiftedToPet.pet_name, 'Nina')
+
+  const customerAndPet = reconcilePetbotIdentityInterpretation(
+    'eu me chamo Ana e minha cachorra se chama Nina',
+    { customer_name: 'Ana', pet_name: 'Nina' },
+  )
+  assert.equal(customerAndPet.customer_name, 'Ana')
+  assert.equal(customerAndPet.pet_name, 'Nina')
+})
 
 test('detecta confirmação explícita sem aceitar texto ambíguo', () => {
   assert.equal(isExplicitPetbotConfirmation('sim'), true)

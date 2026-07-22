@@ -2836,8 +2836,33 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const intent = detectIntent(trimmedMessage)
   const history = await loadRecentMessages(supabase, sessionId)
-  const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, session, history)
-  const sessionForAgent = { ...session, context: recoveredContext }
+  const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
+  let concurrencyLastMessageAt = cleanText(session.last_message_at)
+  if (!options.skipUserPersistence) {
+    // Persist the customer's input before any LLM or catalog work. This is the
+    // serialization boundary: a newer request advances last_message_at while
+    // an older turn is still running, so its compare-and-swap cannot publish a
+    // stale reply or overwrite the newer context.
+    await insertUserMessages(supabase, sessionId, userMessages)
+
+    const { data: sessionAfterUserPersistence, error: sessionRefreshError } = await supabase
+      .from('chat_sessions')
+      .select('last_message_at')
+      .eq('id', sessionId)
+      .maybeSingle()
+
+    if (sessionRefreshError || !sessionAfterUserPersistence) {
+      throw new HttpError(500, 'Unable to refresh chat session after saving customer message.')
+    }
+    concurrencyLastMessageAt = cleanText(sessionAfterUserPersistence.last_message_at)
+  }
+
+  const sessionForTurn = {
+    ...session,
+    last_message_at: concurrencyLastMessageAt || session.last_message_at,
+  }
+  const recoveredContext = recoverPetbotContextFromHistory(session.context || {}, sessionForTurn, history)
+  const sessionForAgent = { ...sessionForTurn, context: recoveredContext }
   const [storeSettings, runtimeConfig, customer] = await Promise.all([
     loadStoreSettings(supabase, moduleId, session.tenant_id),
     loadBotRuntimeConfig(supabase, session.tenant_id, moduleId),
@@ -2868,35 +2893,6 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     loadAppointments(supabase, moduleId, session.tenant_id, storeSettings),
   ])
 
-  const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
-  let concurrencyLastMessageAt = cleanText(session.last_message_at)
-  if (!options.skipUserPersistence) {
-    await insertUserMessages(supabase, sessionId, userMessages)
-
-    // Saving a dashboard message may advance chat_sessions.last_message_at via
-    // database automation. Refresh the token after our own write so the agent
-    // does not reject its first reply as a stale concurrent turn.
-    const { data: sessionAfterUserPersistence, error: sessionRefreshError } = await supabase
-      .from('chat_sessions')
-      .select('last_message_at')
-      .eq('id', sessionId)
-      .maybeSingle()
-
-    if (sessionRefreshError || !sessionAfterUserPersistence) {
-      throw new HttpError(500, 'Unable to refresh chat session after saving customer message.')
-    }
-    concurrencyLastMessageAt = cleanText(sessionAfterUserPersistence.last_message_at)
-  }
-
-  const sessionForTurn = {
-    ...session,
-    last_message_at: concurrencyLastMessageAt || session.last_message_at,
-  }
-  const agentSessionForTurn = {
-    ...sessionForAgent,
-    last_message_at: concurrencyLastMessageAt || sessionForAgent.last_message_at,
-  }
-
   try {
     return await respondWithPetbotAgent({
       supabase,
@@ -2904,7 +2900,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       trimmedMessage,
       options,
       session: sessionForTurn,
-      sessionForAgent: agentSessionForTurn,
+      sessionForAgent,
       moduleId,
       intent,
       history,
@@ -2926,7 +2922,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     })
     return respondWithPetbotRecoverableFailure({
       supabase,
-      session: agentSessionForTurn,
+      session: sessionForAgent,
       sessionId,
       moduleId,
       intent,

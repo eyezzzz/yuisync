@@ -196,6 +196,12 @@ declare
   v_existing_result jsonb;
   v_result jsonb;
 begin
+  -- A PL/pgSQL record has no tuple descriptor until it is assigned. Initialize
+  -- it even when the customer brings the pet, because PostgreSQL may evaluate
+  -- record fields referenced by the delivery-order INSERT's CASE expressions.
+  select null::text as id, null::text as label, 0::numeric as fee
+  into v_transport_option;
+
   if v_session_id is null or v_tenant_id is null then
     raise exception 'Payload sem sessao ou tenant.';
   end if;

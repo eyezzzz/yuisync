@@ -99,8 +99,20 @@ test('confirmacao transacional atualiza o token antes da protecao contra concorr
 test('mensagem do painel atualiza o token do proprio turno antes de responder', () => {
   const chat = read('server/lib/chat.js')
   assert.match(chat, /insertUserMessages\(supabase, sessionId, userMessages\)[\s\S]*select\('last_message_at'\)/)
+  assert.ok(chat.indexOf('insertUserMessages(supabase, sessionId, userMessages)') < chat.indexOf('interpretPetbotMessageWithLlm({'))
   assert.match(chat, /session: sessionForTurn/)
-  assert.match(chat, /session: agentSessionForTurn/)
+  assert.match(chat, /sessionForAgent,/)
+})
+
+test('painel trata turno obsoleto como cancelamento esperado', () => {
+  const hook = read('src/shared/hooks/useChat.js')
+  const api = read('src/lib/api.js')
+  const dashboardApi = read('serverless/dashboardApi.ts')
+  assert.match(api, /error\.status = response\.status/)
+  assert.match(api, /error\.code = payload\.error\?\.code \|\| payload\.code/)
+  assert.match(dashboardApi, /sendJson\(res, status, \{ error: message, code \}\)/)
+  assert.match(hook, /error\?\.code === 'PETBOT_STALE_TURN'/)
+  assert.match(hook, /newer customer message superseded/)
 })
 
 test('webhook combina mensagens curtas consecutivas antes de chamar o runtime', () => {

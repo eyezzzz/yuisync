@@ -254,6 +254,18 @@ test('PetBot v3 confirma pedidos de forma idempotente e usa configuracao real da
   assert.match(migration, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
 })
 
+test('RPC do PetBot inicializa transporte quando o cliente leva o pet', async () => {
+  const canonical = await read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
+  const forward = await read('supabase/migrations/20260722002000_petbot_initialize_transport_record.sql')
+  const initialization = /select null::text as id, null::text as label, 0::numeric as fee\s+into v_transport_option/
+
+  assert.match(canonical, initialization)
+  assert.match(forward, /pg_get_functiondef\('public\.create_petbot_order_transaction\(jsonb\)'::regprocedure\)/)
+  assert.match(forward, /select null::text as id, null::text as label, 0::numeric as fee\\n  into v_transport_option/)
+  assert.match(forward, /position\(v_anchor in v_definition\) = 0/)
+  assert.match(forward, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
+})
+
 test('classificacao PetBot preenche racas comuns por pelagem sem sobrescrever ajustes manuais', async () => {
   const migration = await read('supabase/migrations/20260721004000_petbot_common_breed_classification.sql')
   const catalog = await read('shared/petbotBreedCatalog.js')

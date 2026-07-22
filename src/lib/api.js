@@ -26,7 +26,10 @@ async function apiRequest(path, options = {}) {
   const payload = await response.json().catch(() => ({}))
 
   if (!response.ok) {
-    throw new Error(payload.error?.message || payload.error || 'Erro ao processar a solicitação.')
+    const error = new Error(payload.error?.message || payload.error || 'Erro ao processar a solicitação.')
+    error.status = response.status
+    error.code = payload.error?.code || payload.code || ''
+    throw error
   }
 
   return payload
