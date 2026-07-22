@@ -45,7 +45,7 @@ async function runQuery(query, readOnly = true) {
 function withoutOuterTransaction(query) {
   return query
     .replace(/^\s*begin\s*;\s*/i, '')
-    .replace(/\s*commit\s*;\s*$/i, '')
+    .replace(/\s*(?:commit|rollback)\s*;\s*$/i, '')
 }
 
 if (command === 'read') {

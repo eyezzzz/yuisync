@@ -5,6 +5,8 @@
 -- catalogo, a agenda e uma sessao reais apenas como referencias. Todos os pets,
 -- vendas, ordens, commits e agendamentos criados durante o teste sao descartados.
 
+begin;
+
 create temporary table petbot_bath_test_results (
   test_no integer primary key,
   scenario text not null,
@@ -893,3 +895,5 @@ select jsonb_build_object(
   )
 ) as report
 from petbot_bath_test_results;
+
+rollback;
