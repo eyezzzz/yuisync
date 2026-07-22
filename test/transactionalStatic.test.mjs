@@ -55,6 +55,7 @@ test('smoke test do PetBot valida operacoes reais e sempre descarta os dados', a
   const smoke = await read('supabase/petbot_controlled_smoke_test.sql')
   assert.match(smoke, /^begin;/m)
   assert.match(smoke, /create_petbot_order_transaction/)
+  assert.match(smoke, /quantidades fracionadas ainda usam integer/)
   assert.match(smoke, /item\.quantity = 0\.5/)
   assert.match(smoke, /Estoque insuficiente/)
   assert.match(smoke, /confirmacao duplicada movimentou o estoque novamente/)
@@ -63,6 +64,16 @@ test('smoke test do PetBot valida operacoes reais e sempre descarta os dados', a
   assert.match(smoke, /last_petbot_idempotency_key/)
   assert.match(smoke, /rollback;\s*$/i)
   assert.doesNotMatch(smoke, /\bcommit\s*;/i)
+})
+
+test('estoque e itens vendidos preservam quantidades fracionadas no banco', async () => {
+  const migration = await read('supabase/migrations/20260722005000_fractional_inventory_quantities.sql')
+  assert.match(migration, /products alter column stock_quantity type numeric\(12,3\)/)
+  assert.match(migration, /products alter column min_stock type numeric\(12,3\)/)
+  assert.match(migration, /sale_items alter column quantity type numeric\(12,3\)/)
+  assert.match(migration, /pg_get_viewdef/)
+  assert.match(migration, /vw_critical_stock/)
+  assert.match(migration, /notify pgrst, 'reload schema'/)
 })
 
 test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () => {

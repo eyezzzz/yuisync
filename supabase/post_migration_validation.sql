@@ -48,6 +48,16 @@ select jsonb_build_object(
         and table_name = 'chat_sessions'
         and column_name = 'context'
         and udt_name = 'jsonb'
+    ),
+    'fractional_product_stock', exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'products'
+        and column_name = 'stock_quantity' and data_type = 'numeric'
+    ),
+    'fractional_sale_items', exists (
+      select 1 from information_schema.columns
+      where table_schema = 'public' and table_name = 'sale_items'
+        and column_name = 'quantity' and data_type = 'numeric'
     )
   ),
   'data', jsonb_build_object(

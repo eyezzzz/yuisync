@@ -57,6 +57,18 @@ begin
     raise exception 'FALHA: chat_sessions.context precisa ser JSONB.';
   end if;
 
+  if not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'products'
+      and column_name = 'stock_quantity' and data_type = 'numeric'
+  ) or not exists (
+    select 1 from information_schema.columns
+    where table_schema = 'public' and table_name = 'sale_items'
+      and column_name = 'quantity' and data_type = 'numeric'
+  ) then
+    raise exception 'FALHA: quantidades fracionadas ainda usam integer. Aplique primeiro 20260722005000_fractional_inventory_quantities.sql.';
+  end if;
+
   select
     settings.tenant_id,
     settings.module_id,
