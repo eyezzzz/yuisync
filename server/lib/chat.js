@@ -2338,13 +2338,47 @@ async function respondWithPetbotAgent({
     && resolvedServiceThisTurn
     && operationalContext?.availability?.requested_slot?.available === true
   )
-  const initialToolChoice = currentMessageIsConfirmation
-    ? { type: 'function', function: { name: 'create_confirmed_petshop_order' } }
-    : shouldForceServicePreparation
-      ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
-      : 'auto'
+  const initialToolChoice = shouldForceServicePreparation
+    ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
+    : 'auto'
 
-  const agentResult = await runPetbotAgent({
+  let agentResult
+  if (currentMessageIsConfirmation) {
+    const confirmationStartedAt = Date.now()
+    const confirmationToolCall = {
+      id: `confirm-${pendingAtTurnStart.id}`,
+      type: 'function',
+      function: {
+        name: 'create_confirmed_petshop_order',
+        arguments: JSON.stringify({ confirmation: true }),
+      },
+    }
+    const confirmationResult = await executeTool(confirmationToolCall)
+    const confirmationRun = {
+      name: 'create_confirmed_petshop_order',
+      ok: confirmationResult?.ok !== false,
+      status: cleanText(confirmationResult?.status) || null,
+      duration_ms: Date.now() - confirmationStartedAt,
+      result: confirmationResult,
+    }
+    if (!['committed', 'already_committed'].includes(confirmationRun.status)) {
+      throw new HttpError(409, cleanText(confirmationResult?.error) || 'Não foi possível confirmar o agendamento com os dados atuais.')
+    }
+    agentResult = {
+      reply: buildPetbotCommittedReply({
+        pendingOrder: pendingAtTurnStart,
+        result: confirmationResult,
+        timezone: storeSettings.petbotTimezone,
+      }),
+      toolRuns: [...preloadedToolRuns, confirmationRun],
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 1,
+      terminal: true,
+      durationMs: Date.now() - confirmationStartedAt,
+    }
+  } else agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
     temperature: runtimeConfig.temperature,
     systemPrompt,
