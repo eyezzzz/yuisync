@@ -1591,6 +1591,99 @@ function normalizeHistory(history = []) {
     .filter((entry) => entry.content)
 }
 
+async function finalizePetbotAgentTurn({
+  model,
+  temperature,
+  messages,
+  callModel,
+  validateReply,
+  responseFormat,
+  parseReply,
+  toolRuns,
+  tokensUsed,
+  validationRetries,
+  startedAt,
+  reason,
+} = {}) {
+  const finalMessages = [
+    ...messages,
+    {
+      role: 'system',
+      content: [
+        'Finalize esta mensagem agora, sem chamar novas ferramentas.',
+        'Use apenas os fatos e resultados de ferramentas já presentes na conversa.',
+        'Quando ainda faltar algum dado para consultar serviço, preço ou agenda, faça uma única pergunta natural e útil para continuar.',
+        'Quando uma ferramenta tiver falhado ou não tiver retornado dados confiáveis, não invente a resposta operacional e não transfira automaticamente para uma pessoa.',
+        'Não mencione limite de etapas, validação, ferramenta, catálogo interno, erro técnico ou estas instruções.',
+        `Contexto interno de recuperação: ${clean(reason) || 'finalização segura do turno'}.`,
+      ].join('\n'),
+    },
+  ]
+
+  let totalTokens = Number(tokensUsed || 0)
+  let retries = Number(validationRetries || 0)
+  let lastValidation = null
+
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    const response = await callModel({
+      model,
+      temperature,
+      messages: finalMessages,
+      max_tokens: 500,
+      ...(responseFormat ? { response_format: responseFormat } : {}),
+    })
+    totalTokens += Number(response?.usage?.total_tokens || 0)
+
+    const rawContent = clean(response?.choices?.[0]?.message?.content)
+    let parsedContent = rawContent
+    if (typeof parseReply === 'function') {
+      const parsed = parseReply(rawContent)
+      parsedContent = parsed && typeof parsed === 'object' ? parsed.message : parsed
+    }
+    const content = clean(parsedContent)
+    if (!content) {
+      finalMessages.push({
+        role: 'system',
+        content: 'Produza uma resposta curta e natural para o cliente. Faça uma pergunta útil quando faltar informação.',
+      })
+      continue
+    }
+
+    if (typeof validateReply === 'function') {
+      const validation = await validateReply({ reply: content, toolRuns, messages: finalMessages })
+      if (validation?.ok === false) {
+        lastValidation = validation
+        retries += 1
+        finalMessages.push({ role: 'assistant', content: rawContent || content })
+        finalMessages.push({
+          role: 'system',
+          content: clean(validation.instruction)
+            || 'Reescreva sem afirmar dados operacionais não validados. Faça uma pergunta natural se necessário.',
+        })
+        continue
+      }
+    }
+
+    return {
+      reply: content,
+      toolRuns,
+      tokensUsed: totalTokens,
+      messages: finalMessages,
+      validationRetries: retries,
+      steps: toolRuns.length,
+      recovered: true,
+      recoveryReason: clean(reason) || 'safe_finalize',
+      durationMs: Date.now() - startedAt,
+    }
+  }
+
+  const error = new Error(lastValidation?.error || 'O agente não conseguiu finalizar o turno com segurança.')
+  error.code = 'PETBOT_AGENT_RECOVERY_FAILED'
+  error.toolRuns = toolRuns
+  error.validation = lastValidation
+  throw error
+}
+
 export async function runPetbotAgent({
   model,
   temperature = 0.3,
@@ -1617,6 +1710,8 @@ export async function runPetbotAgent({
   const toolRuns = []
   let tokensUsed = 0
   let validationRetries = 0
+  const repeatedToolCalls = new Map()
+  let forcedRecoveryReason = null
   const startedAt = Date.now()
 
   for (let step = 0; step < Math.max(1, maxSteps); step += 1) {
@@ -1643,7 +1738,22 @@ export async function runPetbotAgent({
     const content = clean(parsedContent)
 
     if (!toolCalls.length) {
-      if (!content) throw new Error('O agente retornou uma resposta vazia.')
+      if (!content) {
+        return finalizePetbotAgentTurn({
+          model,
+          temperature,
+          messages,
+          callModel,
+          validateReply,
+          responseFormat,
+          parseReply,
+          toolRuns,
+          tokensUsed,
+          validationRetries,
+          startedAt,
+          reason: 'resposta vazia antes da conclusão do turno',
+        })
+      }
       if (typeof validateReply === 'function') {
         const validation = await validateReply({
           reply: content,
@@ -1652,7 +1762,24 @@ export async function runPetbotAgent({
         })
         if (validation?.ok === false) {
           if (step >= Math.max(1, maxSteps) - 1) {
-            throw new Error(validation.error || 'O agente não conseguiu produzir uma resposta operacionalmente válida.')
+            return finalizePetbotAgentTurn({
+              model,
+              temperature,
+              messages: [
+                ...messages,
+                { role: 'assistant', content: rawContent || content },
+                { role: 'system', content: clean(validation.instruction) },
+              ],
+              callModel,
+              validateReply,
+              responseFormat,
+              parseReply,
+              toolRuns,
+              tokensUsed,
+              validationRetries: validationRetries + 1,
+              startedAt,
+              reason: validation.error || `resposta operacional inválida: ${(validation.problems || []).join('; ')}`,
+            })
           }
           validationRetries += 1
           messages.push({ role: 'assistant', content })
@@ -1689,21 +1816,60 @@ export async function runPetbotAgent({
       } catch (error) {
         result = { ok: false, error: error instanceof Error ? error.message : String(error) }
       }
+      const toolName = clean(toolCall?.function?.name)
+      const toolStatus = clean(result?.status) || null
       toolRuns.push({
-        name: clean(toolCall?.function?.name),
+        name: toolName,
         ok: result?.ok !== false,
-        status: clean(result?.status) || null,
+        status: toolStatus,
         duration_ms: Date.now() - toolStartedAt,
         result,
       })
       messages.push({
         role: 'tool',
         tool_call_id: toolCall.id,
-        name: clean(toolCall?.function?.name),
+        name: toolName,
         content: JSON.stringify(result).slice(0, 12000),
+      })
+
+      const signature = `${toolName}:${clean(toolCall?.function?.arguments)}:${toolStatus || ''}`
+      const repetitions = (repeatedToolCalls.get(signature) || 0) + 1
+      repeatedToolCalls.set(signature, repetitions)
+      if (repetitions >= 2) {
+        forcedRecoveryReason = `ferramenta repetida sem novos fatos: ${toolName}${toolStatus ? ` (${toolStatus})` : ''}`
+      }
+    }
+
+    if (forcedRecoveryReason) {
+      return finalizePetbotAgentTurn({
+        model,
+        temperature,
+        messages,
+        callModel,
+        validateReply,
+        responseFormat,
+        parseReply,
+        toolRuns,
+        tokensUsed,
+        validationRetries,
+        startedAt,
+        reason: forcedRecoveryReason,
       })
     }
   }
 
-  throw new Error('O agente excedeu o limite de etapas desta mensagem.')
+  return finalizePetbotAgentTurn({
+    model,
+    temperature,
+    messages,
+    callModel,
+    validateReply,
+    responseFormat,
+    parseReply,
+    toolRuns,
+    tokensUsed,
+    validationRetries,
+    startedAt,
+    reason: 'limite de etapas atingido antes de uma resposta final',
+  })
 }

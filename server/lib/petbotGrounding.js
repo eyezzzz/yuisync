@@ -235,6 +235,8 @@ export function buildPetbotAgentV3Prompt({
     '- Nunca afirme preço, estoque, serviço exato, duração, data ou horário sem um resultado de ferramenta no turno atual ou um pedido pendente validado.',
     '- Para produtos, pesquise o catálogo. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
+    '- Campo ausente, serviço ambíguo ou tentativa de consultar a agenda cedo demais não são motivo para transferir o atendimento: use o retorno da ferramenta para fazer a próxima pergunta útil.',
+    '- Transfira para humano somente quando o cliente pedir, houver risco veterinário ou uma falha operacional persistente impedir qualquer continuação segura.',
     '- Use dados salvos do cliente e do pet quando forem relevantes e não houver sinal de mudança. Não repita perguntas já respondidas; confirme apenas quando houver ambiguidade real ou mais de um pet possível.',
     '- Se o cliente tiver benefício de plano disponível, trate-o como dado operacional: aplique somente quando a ferramenta indicar e explique naturalmente no resumo, sem prometer benefício por conta própria.',
     '- Não deduza peso, estoque, preço, política comercial nem disponibilidade. Raça e peso são fatos interpretados da conversa; classificação e faixa são resolvidas pelo catálogo.',

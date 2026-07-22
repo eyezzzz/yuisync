@@ -1623,9 +1623,17 @@ async function respondWithPetbotAgent({
         }
         : null
       resolvedServiceThisTurn = resolvedService
+      const nextAction = resolution.status === 'resolved'
+        ? 'check_availability_when_date_is_known'
+        : resolution.status === 'needs_input'
+          ? 'ask_missing_fields'
+          : resolution.status === 'ambiguous'
+            ? 'ask_one_differentiating_fact'
+            : 'explain_unavailable_or_handoff_if_persistent'
       return {
         action: name,
         ...resolution,
+        next_action: nextAction,
         ...(resolvedService ? { service: resolvedService, candidates: [resolvedService], available_services: [resolvedService] } : {}),
       }
     }
@@ -1642,6 +1650,7 @@ async function respondWithPetbotAgent({
           ok: false,
           action: name,
           status: 'needs_service_resolution',
+          next_action: 'resolve_service_or_ask_missing_fact',
           error: 'Resolva o serviço exato com os fatos do cliente antes de consultar a agenda.',
         }
       }
@@ -1672,9 +1681,15 @@ async function respondWithPetbotAgent({
         price: subscriptionBenefit ? 0 : Number(entry.price || 0),
         subscription_benefit: subscriptionBenefit,
       })
+      const nextAction = availability?.status === 'available'
+        ? 'answer_with_validated_availability'
+        : availability?.status === 'unavailable'
+          ? 'offer_validated_alternatives_or_ask_another_date'
+          : 'ask_missing_schedule_fact'
       return {
         action: name,
         ...availability,
+        next_action: nextAction,
         ...(availability?.service ? { service: decoratePrice(availability.service) } : {}),
         available_slots: (availability?.available_slots || []).map(decoratePrice),
       }
@@ -1982,7 +1997,7 @@ async function respondWithPetbotAgent({
       updatedAt: botSentAt,
       pending_order: pendingOrder,
       facts: serviceFacts,
-      last_action: agentResult.toolRuns.at(-1)?.name || 'reply',
+      last_action: agentResult.recovered ? 'agent_recovery' : (agentResult.toolRuns.at(-1)?.name || 'reply'),
       last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null })),
       needs_human: needsHuman,
       handoff_target: handoffTarget,
@@ -2029,6 +2044,8 @@ async function respondWithPetbotAgent({
           tool_calls: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null, duration_ms: run.duration_ms || 0 })),
           steps: agentResult.steps || 0,
           validation_retries: agentResult.validationRetries || 0,
+          recovered: Boolean(agentResult.recovered),
+          recovery_reason: cleanText(agentResult.recoveryReason).slice(0, 160) || null,
           duration_ms: agentResult.durationMs || 0,
           pending_order_id: pendingOrder?.id || null,
           order_saved: Boolean(orderResult),
@@ -2059,6 +2076,8 @@ async function respondWithPetbotAgent({
       tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null, duration_ms: run.duration_ms || 0 })),
       steps: agentResult.steps || 0,
       validation_retries: agentResult.validationRetries || 0,
+      recovered: Boolean(agentResult.recovered),
+      recovery_reason: cleanText(agentResult.recoveryReason).slice(0, 160) || null,
       duration_ms: agentResult.durationMs || 0,
       pending_order_id: pendingOrder?.id || null,
       source: options.source || 'dashboard_simulation',

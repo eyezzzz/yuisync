@@ -392,3 +392,100 @@ test('agente expoe cancelamento de pedido pendente sem resposta fixa', () => {
   assert.equal(cancelTool.function.strict, true)
   assert.match(cancelTool.function.description, /Cancela e descarta/)
 })
+
+test('agente interrompe ferramenta repetida e finaliza naturalmente sem handoff', async () => {
+  const calls = []
+  let sequence = 0
+  const result = await runPetbotAgent({
+    model: 'gpt-4o-mini-test',
+    systemPrompt: 'Atenda naturalmente.',
+    message: 'Tem horário hoje às 13h para o Thor?',
+    maxSteps: 7,
+    callModel: async (params) => {
+      calls.push(params)
+      sequence += 1
+      if (sequence <= 2) {
+        return {
+          usage: { total_tokens: 10 },
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{
+                id: `call-${sequence}`,
+                type: 'function',
+                function: {
+                  name: 'resolve_petshop_service',
+                  arguments: JSON.stringify({
+                    service_query: 'banho',
+                    order_type: 'banho_tosa',
+                    species: 'dog',
+                    breed: null,
+                    weight_kg: null,
+                    coat_type: null,
+                  }),
+                },
+              }],
+            },
+          }],
+        }
+      }
+      return {
+        usage: { total_tokens: 5 },
+        choices: [{ message: { content: JSON.stringify({ message: 'Claro! Qual é a raça e o peso aproximado do Thor?' }) } }],
+      }
+    },
+    executeTool: async () => ({
+      ok: false,
+      status: 'needs_input',
+      missing_fields: ['breed', 'weight_kg'],
+      required_fields: ['raça do pet', 'peso aproximado do pet'],
+    }),
+    responseFormat: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'reply',
+        strict: true,
+        schema: {
+          type: 'object',
+          additionalProperties: false,
+          properties: { message: { type: 'string' } },
+          required: ['message'],
+        },
+      },
+    },
+    parseReply: (content) => content ? JSON.parse(content) : { message: '' },
+    validateReply: () => ({ ok: true }),
+  })
+
+  assert.equal(result.recovered, true)
+  assert.match(result.reply, /raça/i)
+  assert.match(result.reply, /peso/i)
+  assert.equal(result.toolRuns.length, 2)
+  assert.equal(calls.length, 3)
+  assert.equal('tools' in calls[2], false)
+  assert.equal('tool_choice' in calls[2], false)
+})
+
+test('resposta vazia do modelo entra em finalizacao segura sem handoff automatico', async () => {
+  let sequence = 0
+  const result = await runPetbotAgent({
+    model: 'gpt-4o-mini-test',
+    systemPrompt: 'Atenda naturalmente.',
+    message: 'Quero agendar um banho.',
+    callModel: async () => {
+      sequence += 1
+      if (sequence === 1) return { usage: { total_tokens: 2 }, choices: [{ message: { content: '' } }] }
+      return {
+        usage: { total_tokens: 3 },
+        choices: [{ message: { content: JSON.stringify({ message: 'Claro! Para qual pet você quer agendar?' }) } }],
+      }
+    },
+    executeTool: async () => ({ ok: true }),
+    parseReply: (content) => content ? JSON.parse(content) : { message: '' },
+    validateReply: () => ({ ok: true }),
+  })
+
+  assert.equal(result.recovered, true)
+  assert.match(result.reply, /qual pet/i)
+  assert.equal(sequence, 2)
+})
