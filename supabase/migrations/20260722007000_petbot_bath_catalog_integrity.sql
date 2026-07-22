@@ -3,6 +3,12 @@
 -- made physical bath products look like bookable services.
 begin;
 
+-- Do not wait indefinitely behind dashboard/storage maintenance. The existing
+-- products trigger is replaced in-place through CREATE OR REPLACE FUNCTION,
+-- so this migration deliberately avoids DROP/CREATE TRIGGER table locks.
+set local lock_timeout = '10s';
+set local statement_timeout = '120s';
+
 create or replace function public.is_petbot_service_name_excluded(p_name text)
 returns boolean
 language sql
@@ -129,11 +135,19 @@ begin
 end;
 $$;
 
-drop trigger if exists trg_apply_petbot_service_species_metadata on public.products;
-create trigger trg_apply_petbot_service_species_metadata
-before insert or update of name, category, species_target, bot_metadata
-on public.products
-for each row execute function public.apply_petbot_service_species_metadata();
+do $precondition$
+begin
+  if not exists (
+    select 1
+    from pg_catalog.pg_trigger trigger
+    where trigger.tgrelid = 'public.products'::regclass
+      and trigger.tgname = 'trg_apply_petbot_service_species_metadata'
+      and not trigger.tgisinternal
+  ) then
+    raise exception 'Trigger de metadados do catalogo nao encontrado.';
+  end if;
+end
+$precondition$;
 
 create or replace function public.sync_product_service_to_petshop_services()
 returns trigger
