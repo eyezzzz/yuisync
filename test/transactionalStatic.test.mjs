@@ -76,6 +76,18 @@ test('estoque e itens vendidos preservam quantidades fracionadas no banco', asyn
   assert.match(migration, /notify pgrst, 'reload schema'/)
 })
 
+test('PetBot possui um unico escritor de movimento por item vendido', async () => {
+  const migration = await read('supabase/migrations/20260722006000_petbot_stock_movement_single_writer.sql')
+  const smoke = await read('supabase/petbot_controlled_smoke_test.sql')
+  assert.match(migration, /pg_get_functiondef\('public\.create_petbot_order_transaction\(jsonb\)'::regprocedure\)/)
+  assert.match(migration, /app\.yuisync_stock_writer/)
+  assert.match(migration, /create_pdv_checkout_transaction/)
+  assert.match(migration, /create trigger record_petbot_stock_movement/)
+  assert.match(smoke, /a RPC e o trigger ainda duplicam a auditoria de estoque/)
+  assert.match(smoke, /primeira venda gerou % movimentos de estoque/)
+  assert.match(smoke, /v_movement_count_before/)
+})
+
 test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () => {
   const apiFiles = await readdir(new URL('api/', root), { recursive: true })
   const serverlessFunctions = apiFiles.filter((path) => path.endsWith('.ts'))

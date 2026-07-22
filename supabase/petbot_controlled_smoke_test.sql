@@ -40,6 +40,7 @@ declare
   v_order_id uuid;
   v_appointment_id uuid;
   v_count_before integer;
+  v_movement_count_before integer;
   v_expected_failure boolean := false;
 begin
   if to_regprocedure('public.create_petbot_order_transaction(jsonb)') is null then
@@ -67,6 +68,13 @@ begin
       and column_name = 'quantity' and data_type = 'numeric'
   ) then
     raise exception 'FALHA: quantidades fracionadas ainda usam integer. Aplique primeiro 20260722005000_fractional_inventory_quantities.sql.';
+  end if;
+
+  if coalesce(position(
+    'app.yuisync_stock_writer'
+    in pg_get_functiondef('public.create_petbot_order_transaction(jsonb)'::regprocedure)
+  ), 0) = 0 then
+    raise exception 'FALHA: a RPC e o trigger ainda duplicam a auditoria de estoque. Aplique primeiro 20260722006000_petbot_stock_movement_single_writer.sql.';
   end if;
 
   select
@@ -212,6 +220,14 @@ begin
     raise exception 'FALHA: baixa de estoque da venda nao foi auditada.';
   end if;
 
+  select count(*) into v_movement_count_before
+  from public.stock_movements
+  where sale_id = v_sale_id;
+
+  if v_movement_count_before <> 1 then
+    raise exception 'FALHA: primeira venda gerou % movimentos de estoque; esperado: 1.', v_movement_count_before;
+  end if;
+
   if not exists (
     select 1 from public.products product
     where product.id = v_product_id
@@ -226,7 +242,7 @@ begin
     raise exception 'FALHA: repeticao da confirmacao criou resultado diferente: %', v_duplicate_result;
   end if;
 
-  if (select count(*) from public.stock_movements where sale_id = v_sale_id) <> 1 then
+  if (select count(*) from public.stock_movements where sale_id = v_sale_id) <> v_movement_count_before then
     raise exception 'FALHA: confirmacao duplicada movimentou o estoque novamente.';
   end if;
 

@@ -58,7 +58,15 @@ select jsonb_build_object(
       select 1 from information_schema.columns
       where table_schema = 'public' and table_name = 'sale_items'
         and column_name = 'quantity' and data_type = 'numeric'
-    )
+    ),
+    'petbot_single_stock_writer', position(
+      'app.yuisync_stock_writer'
+      in pg_get_functiondef('public.create_petbot_order_transaction(jsonb)'::regprocedure)
+    ) > 0,
+    'pdv_single_stock_writer', position(
+      'app.yuisync_stock_writer'
+      in pg_get_functiondef('public.create_pdv_checkout_transaction(jsonb)'::regprocedure)
+    ) > 0
   ),
   'data', jsonb_build_object(
     'pets_without_tenant', (select count(*) from public.pets where tenant_id is null),
@@ -79,7 +87,8 @@ select jsonb_build_object(
     'appointment_overlap_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.appointments'::regclass and tgname = 'prevent_appointment_overlap'),
     'motodog_fee_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.petshop_growth_booking_requests'::regclass and tgname = 'enforce_booking_motodog_fee'),
     'petbot_service_payment_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.sales'::regclass and tgname = 'normalize_petbot_service_booking_sale'),
-    'petbot_service_order_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.service_delivery_orders'::regclass and tgname = 'normalize_petbot_service_delivery_payment')
+    'petbot_service_order_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.service_delivery_orders'::regclass and tgname = 'normalize_petbot_service_delivery_payment'),
+    'petbot_stock_movement_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.sale_items'::regclass and tgname = 'record_petbot_stock_movement')
   ),
   'table_checks', (select jsonb_agg(to_jsonb(table_checks) order by table_name) from table_checks),
   'table_failures', (
