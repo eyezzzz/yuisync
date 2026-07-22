@@ -159,6 +159,7 @@ CREATE TABLE IF NOT EXISTS public.chat_sessions (
     intent TEXT,
     channel TEXT DEFAULT 'whatsapp',
     csat_score INTEGER,
+    context JSONB NOT NULL DEFAULT '{}'::JSONB,
     last_message_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     opened_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     closed_at TIMESTAMP WITH TIME ZONE,

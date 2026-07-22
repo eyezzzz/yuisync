@@ -280,6 +280,21 @@ test('RPC concilia a ordem criada pelo trigger legado sem duplicar sale_id', asy
   assert.match(forward, /regexp_replace\(v_definition, v_return_pattern, v_replacement, 'i'\)/)
 })
 
+test('contexto persistente do agente usa JSONB e converte dados legados com seguranca', async () => {
+  const schema = await read('database/DATABASE.sql')
+  const migration = await read('supabase/migrations/20260722004000_chat_session_context_jsonb.sql')
+
+  assert.match(schema, /context JSONB NOT NULL DEFAULT '\{\}'::JSONB/)
+  assert.match(migration, /create or replace function public\._yuisync_safe_chat_context\(p_value text\)/)
+  assert.match(migration, /if jsonb_typeof\(v_json\) = 'object'/)
+  assert.match(migration, /return jsonb_build_object\('legacy_value', v_json\)/)
+  assert.match(migration, /return jsonb_build_object\('legacy_text', p_value\)/)
+  assert.match(migration, /alter column context type jsonb\s+using public\._yuisync_safe_chat_context\(context::text\)/)
+  assert.match(migration, /alter column context set default '\{\}'::jsonb/)
+  assert.match(migration, /alter column context set not null/)
+  assert.match(migration, /drop function public\._yuisync_safe_chat_context\(text\)/)
+})
+
 test('classificacao PetBot preenche racas comuns por pelagem sem sobrescrever ajustes manuais', async () => {
   const migration = await read('supabase/migrations/20260721004000_petbot_common_breed_classification.sql')
   const catalog = await read('shared/petbotBreedCatalog.js')
