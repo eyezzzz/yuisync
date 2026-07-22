@@ -218,14 +218,15 @@ test('catalogo comercial de servicos sincroniza com a agenda transacional', asyn
   assert.match(migration, /default_price = excluded\.default_price/)
 })
 
-test('falha do agente faz handoff seguro sem retornar ao fluxo hardcoded', async () => {
+test('falha generica do agente permanece recuperavel sem retornar ao fluxo hardcoded', async () => {
   const source = await read('server/lib/chat.js')
   const webhook = await read('serverless/whatsappWebhook.ts')
   const grounding = await read('server/lib/petbotGrounding.js')
   const catchStart = source.indexOf("logger.warn('PetBot agent failed'")
   const segment = source.slice(catchStart)
-  assert.match(segment, /respondWithPetbotSafeFailure/)
-  assert.match(source, /safe_agent_handoff/)
+  assert.match(segment, /respondWithPetbotRecoverableFailure/)
+  assert.match(source, /recoverable_agent_error/)
+  assert.doesNotMatch(segment, /status:\s*'human'/)
   assert.doesNotMatch(source, /runPetbotGuard/)
   assert.doesNotMatch(webhook, /runPetbotGuard/)
   assert.match(source, /mergePetshopServiceCatalogs/)

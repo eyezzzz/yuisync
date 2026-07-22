@@ -11,6 +11,7 @@ import {
   preparePetshopOrderDraft,
   resolvePetshopService,
   runPetbotAgent,
+  serviceFromCatalogProduct,
 } from '../server/lib/petbotAgent.js'
 import {
   analyzeProductDifferentiation,
@@ -184,6 +185,55 @@ test('banho geral de cachorro ate 10 kg tem prioridade sobre variacao por pelage
   assert.equal(result.ok, true)
   assert.equal(result.service.id, 'general')
   assert.equal(result.service.price, 72)
+})
+
+test('catalogo escolhe uma unica opcao canonica quando existem banhos pequenos duplicados', () => {
+  const result = resolvePetshopService({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: 8,
+    coatType: 'longo',
+    services: [
+      {
+        id: 'legacy', code: 'banho_pequeno_legacy',
+        name: 'Banho até 10 kg todas as pelagens',
+        group_type: 'banho_tosa', default_price: 60, default_duration_min: 60,
+        active: true, catalog_source: 'petshop_services', species: 'dog',
+        weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+      },
+      {
+        id: 'catalog', code: 'banho_pet_pequeno',
+        name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+        group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+        active: true, catalog_source: 'products', source_product_id: 'catalog-product', species: 'dog',
+        weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+      },
+    ],
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'resolved')
+  assert.equal(result.service.id, 'catalog')
+  assert.equal(result.service.price, 72)
+})
+
+test('area explicita do servico no cadastro tem prioridade sobre inferencia pelo nome', () => {
+  const product = serviceFromCatalogProduct({
+    id: 'product-1',
+    name: 'Avaliação de pele e pelagem',
+    category: 'Serviço',
+    price: 150,
+    active: true,
+    bot_metadata: {
+      product_type: 'servico',
+      service_group: 'veterinaria',
+      duration_min: 40,
+    },
+  })
+
+  assert.equal(product.group_type, 'veterinaria')
 })
 
 test('banho de gato continua selecionando somente o catalogo felino', () => {
@@ -488,4 +538,54 @@ test('resposta vazia do modelo entra em finalizacao segura sem handoff automatic
   assert.equal(result.recovered, true)
   assert.match(result.reply, /qual pet/i)
   assert.equal(sequence, 2)
+})
+
+test('falha temporaria do modelo depois de uma ferramenta tenta finalizar o turno antes de propagar erro', async () => {
+  let sequence = 0
+  const result = await runPetbotAgent({
+    model: 'gpt-4o-mini-test',
+    systemPrompt: 'Atenda naturalmente.',
+    message: 'É um Shih Tzu de 8 kg.',
+    callModel: async (params) => {
+      sequence += 1
+      if (sequence === 1) {
+        return {
+          usage: { total_tokens: 3 },
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{
+                id: 'resolve-1',
+                type: 'function',
+                function: {
+                  name: 'resolve_petshop_service',
+                  arguments: JSON.stringify({
+                    service_query: 'banho', order_type: 'banho_tosa', species: 'dog',
+                    breed: 'Shih Tzu', weight_kg: 8, coat_type: 'longo',
+                  }),
+                },
+              }],
+            },
+          }],
+        }
+      }
+      if (sequence === 2) throw new Error('timeout temporario')
+      return {
+        usage: { total_tokens: 4 },
+        choices: [{ message: { content: JSON.stringify({ message: 'Perfeito! Qual horário você prefere hoje?' }) } }],
+      }
+    },
+    executeTool: async () => ({
+      ok: true,
+      status: 'resolved',
+      service: { id: 'small', name: 'Banho pequeno', price: 72 },
+    }),
+    parseReply: (content) => content ? JSON.parse(content) : { message: '' },
+    validateReply: () => ({ ok: true }),
+  })
+
+  assert.equal(result.recovered, true)
+  assert.match(result.reply, /horário/i)
+  assert.equal(result.toolRuns.length, 1)
+  assert.equal(sequence, 3)
 })

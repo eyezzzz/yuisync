@@ -307,12 +307,13 @@ test('schemas das ferramentas usam modo estrito compatível', () => {
   }
 })
 
-test('runtime usa somente o agente autonomo e handoff seguro', async () => {
+test('runtime usa somente o agente autonomo e recuperacao sem handoff automatico', async () => {
   const source = await import('node:fs/promises').then((fs) => fs.readFile(new URL('../server/lib/chat.js', import.meta.url), 'utf8'))
   const agentIndex = source.indexOf('return await respondWithPetbotAgent')
   assert.ok(agentIndex > 0)
   assert.doesNotMatch(source, /runPetbotGuard/)
-  assert.match(source, /respondWithPetbotSafeFailure/)
+  assert.match(source, /respondWithPetbotRecoverableFailure/)
+  assert.match(source, /recoverable_agent_error/)
   assert.match(source, /pendingAtTurnStart/)
   assert.match(source, /isExplicitPetbotConfirmation\(trimmedMessage\)/)
   assert.match(source, /loadPetshopServices/)

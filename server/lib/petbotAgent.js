@@ -265,6 +265,11 @@ function serviceGroupFromText(value = '') {
     : 'banho_tosa'
 }
 
+function normalizeServiceGroup(value = '') {
+  const group = normalizeCode(value)
+  return ['banho_tosa', 'veterinaria', 'outro'].includes(group) ? group : null
+}
+
 function catalogServiceCode(productId = '') {
   const compact = clean(productId).replace(/[^a-zA-Z0-9]/g, '').toLowerCase()
   return compact ? `catalog_${compact}` : ''
@@ -298,7 +303,8 @@ export function serviceFromCatalogProduct(product = {}) {
     id: code,
     code,
     name,
-    group_type: serviceGroupFromText(`${name} ${product.category || ''}`),
+    group_type: normalizeServiceGroup(metadata.service_group)
+      || serviceGroupFromText(`${name} ${product.category || ''}`),
     default_price: Number(product.price || 0),
     default_duration_min: Math.max(15, Number(metadata.duration_min || metadata.service_duration_min || 60) || 60),
     active: true,
@@ -327,6 +333,32 @@ export function serviceFromCatalogProduct(product = {}) {
       : [],
     classification_version: Number(metadata.classification_version || 0) || null,
   }
+}
+
+function rankUniversalSmallDogBath(service = {}) {
+  const range = service.weight_range || {}
+  let score = 0
+  if (service.catalog_source === 'products' || service.source_product_id) score += 100
+  if (service.species === 'dog') score += 40
+  if (Number(range.min ?? 0) === 0) score += 15
+  if (Number(range.max) === 10) score += 25
+  if (service.coat_type === 'todas') score += 10
+  if (service.all_breeds || !service.breeds?.length) score += 10
+  if (/porte\s+pequeno/.test(normalize(service.name))) score += 10
+  return score
+}
+
+function chooseCanonicalUniversalSmallDogBath(services = []) {
+  const candidates = [...services]
+    .sort((left, right) => (
+      rankUniversalSmallDogBath(right) - rankUniversalSmallDogBath(left)
+      || normalize(left.name).localeCompare(normalize(right.name))
+      || clean(left.id).localeCompare(clean(right.id))
+    ))
+  if (candidates.length > 1 && rankUniversalSmallDogBath(candidates[0]) === rankUniversalSmallDogBath(candidates[1])) {
+    return null
+  }
+  return candidates[0] || null
 }
 
 export function mergePetshopServiceCatalogs(dedicatedServices = [], products = []) {
@@ -611,7 +643,9 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
     const universalSmall = filtered.filter((service) => isUniversalSmallDogBathService(service, normalizedWeight))
     if (universalSmall.length) {
       const authoritative = universalSmall.filter((service) => service.catalog_source === 'products' || service.source_product_id)
-      filtered = authoritative.length ? authoritative : universalSmall
+      const preferredPool = authoritative.length ? authoritative : universalSmall
+      const canonical = chooseCanonicalUniversalSmallDogBath(preferredPool)
+      filtered = canonical ? [canonical] : preferredPool
     }
   }
 
@@ -1623,15 +1657,26 @@ async function finalizePetbotAgentTurn({
   let totalTokens = Number(tokensUsed || 0)
   let retries = Number(validationRetries || 0)
   let lastValidation = null
+  let lastModelError = null
 
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    const response = await callModel({
-      model,
-      temperature,
-      messages: finalMessages,
-      max_tokens: 500,
-      ...(responseFormat ? { response_format: responseFormat } : {}),
-    })
+    let response
+    try {
+      response = await callModel({
+        model,
+        temperature,
+        messages: finalMessages,
+        max_tokens: 500,
+        ...(responseFormat ? { response_format: responseFormat } : {}),
+      })
+    } catch (error) {
+      lastModelError = error
+      finalMessages.push({
+        role: 'system',
+        content: 'A tentativa anterior falhou por instabilidade temporária. Tente produzir a continuação natural usando o contexto já disponível.',
+      })
+      continue
+    }
     totalTokens += Number(response?.usage?.total_tokens || 0)
 
     const rawContent = clean(response?.choices?.[0]?.message?.content)
@@ -1677,7 +1722,11 @@ async function finalizePetbotAgentTurn({
     }
   }
 
-  const error = new Error(lastValidation?.error || 'O agente não conseguiu finalizar o turno com segurança.')
+  const error = new Error(
+    lastValidation?.error
+      || (lastModelError instanceof Error ? lastModelError.message : '')
+      || 'O agente não conseguiu finalizar o turno com segurança.',
+  )
   error.code = 'PETBOT_AGENT_RECOVERY_FAILED'
   error.toolRuns = toolRuns
   error.validation = lastValidation
@@ -1715,16 +1764,35 @@ export async function runPetbotAgent({
   const startedAt = Date.now()
 
   for (let step = 0; step < Math.max(1, maxSteps); step += 1) {
-    const response = await callModel({
-      model,
-      temperature,
-      messages,
-      tools,
-      tool_choice: step === 0 ? initialToolChoice : 'auto',
-      parallel_tool_calls: false,
-      max_tokens: 800,
-      ...(responseFormat ? { response_format: responseFormat } : {}),
-    })
+    let response
+    try {
+      response = await callModel({
+        model,
+        temperature,
+        messages,
+        tools,
+        tool_choice: step === 0 ? initialToolChoice : 'auto',
+        parallel_tool_calls: false,
+        max_tokens: 800,
+        ...(responseFormat ? { response_format: responseFormat } : {}),
+      })
+    } catch (error) {
+      if (!toolRuns.length) throw error
+      return finalizePetbotAgentTurn({
+        model,
+        temperature,
+        messages,
+        callModel,
+        validateReply,
+        responseFormat,
+        parseReply,
+        toolRuns,
+        tokensUsed,
+        validationRetries,
+        startedAt,
+        reason: `instabilidade do modelo após consulta operacional: ${error instanceof Error ? error.message : String(error)}`,
+      })
+    }
     tokensUsed += Number(response?.usage?.total_tokens || 0)
 
     const assistantMessage = response?.choices?.[0]?.message || {}

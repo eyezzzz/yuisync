@@ -734,14 +734,12 @@ function canPetbotCreateOrders(settings = {}, session = {}) {
     .includes(phone)
 }
 
-function isPetshopServicesSchemaError(error) {
+function isCatalogColumnCompatibilityError(error) {
   const message = String(error?.message || '').toLowerCase()
-  return message.includes('petshop_services') && (
-    message.includes('does not exist')
-    || message.includes('schema cache')
-    || message.includes('relation')
+  return message.includes('schema cache')
     || message.includes('column')
-  )
+    || message.includes('does not exist')
+    || message.includes('could not find')
 }
 
 async function loadPetshopServices(supabase, moduleId, tenantId) {
@@ -762,34 +760,60 @@ async function loadPetshopServices(supabase, moduleId, tenantId) {
   }
 
   let dedicatedResult = await runDedicatedQuery(true)
-  if (dedicatedResult.error && /source_product_id/i.test(String(dedicatedResult.error.message || ''))) {
+  if (dedicatedResult.error && isCatalogColumnCompatibilityError(dedicatedResult.error)) {
     dedicatedResult = await runDedicatedQuery(false)
   }
 
-  const { data: dedicatedServices, error: dedicatedError } = dedicatedResult
+  let { data: dedicatedServices, error: dedicatedError } = dedicatedResult
   if (dedicatedError) {
-    if (!isPetshopServicesSchemaError(dedicatedError)) {
-      if (tenantId && isMissingTenantColumnError(dedicatedError)) {
-        throw new HttpError(500, 'Tenant isolation is not enabled in petshop_services table.')
-      }
-      throw new HttpError(500, 'Unable to load petshop services.')
+    if (tenantId && isMissingTenantColumnError(dedicatedError)) {
+      throw new HttpError(500, 'Tenant isolation is not enabled in petshop_services table.')
     }
+    logger.warn('PetBot dedicated service catalog unavailable; continuing with products', {
+      moduleId,
+      tenantId,
+      message: dedicatedError.message,
+    })
+    dedicatedServices = []
   }
 
-  let productQuery = supabase
-    .from('products')
-    .select('id,name,category,description,species_target,price,active,bot_metadata,updated_at')
-    .eq('module_id', moduleId)
-    .eq('active', true)
-    .limit(MAX_CACHED_PRODUCTS)
-  if (tenantId) productQuery = productQuery.eq('tenant_id', tenantId)
+  const runProductQuery = async (columns) => {
+    let query = supabase
+      .from('products')
+      .select(columns)
+      .eq('module_id', moduleId)
+      .eq('active', true)
+      .limit(MAX_CACHED_PRODUCTS)
+    if (tenantId) query = query.eq('tenant_id', tenantId)
+    return query
+  }
 
-  const { data: productRows, error: productError } = await productQuery
+  const productColumnSets = [
+    'id,name,category,description,species_target,price,active,bot_metadata,updated_at',
+    'id,name,category,description,species_target,price,active,bot_metadata',
+    'id,name,category,description,price,active,bot_metadata',
+    'id,name,category,price,active,bot_metadata',
+  ]
+  let productResult = null
+  for (const columns of productColumnSets) {
+    productResult = await runProductQuery(columns)
+    if (!productResult.error) break
+    if (!isCatalogColumnCompatibilityError(productResult.error)) break
+  }
+
+  const { data: productRows, error: productError } = productResult || { data: [], error: null }
   if (productError) {
     if (tenantId && isMissingTenantColumnError(productError)) {
       throw new HttpError(500, 'Tenant isolation is not enabled in products table.')
     }
-    throw new HttpError(500, 'Unable to load the service catalog from products.')
+    if (!(dedicatedServices || []).length) {
+      throw new HttpError(500, `Unable to load the service catalog from products: ${productError.message || 'unknown error'}`)
+    }
+    logger.warn('PetBot product service catalog unavailable; using dedicated services', {
+      moduleId,
+      tenantId,
+      message: productError.message,
+    })
   }
 
   return mergePetshopServiceCatalogs(
@@ -1459,6 +1483,46 @@ async function respondWithPetbotAgent({
   let liveSubscriptionBenefits = []
   let resolvedServiceThisTurn = null
 
+  const refreshServiceCatalog = async ({ required = false } = {}) => {
+    try {
+      const freshServices = await loadPetshopServices(supabase, moduleId, session.tenant_id)
+      if (freshServices.length) liveServices = freshServices
+      if (liveServices.length) return liveServices
+      if (required) throw new Error('Nenhum serviço ativo foi carregado do catálogo.')
+      return []
+    } catch (error) {
+      logger.warn('PetBot service catalog refresh failed', {
+        sessionId,
+        moduleId,
+        error: error instanceof Error ? error.message : String(error),
+        fallback_count: liveServices.length,
+      })
+      if (liveServices.length) return liveServices
+      if (required) throw error
+      return []
+    }
+  }
+
+  const refreshAppointmentContext = async () => {
+    try {
+      const freshAppointments = await loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings)
+      liveAppointments = freshAppointments
+      return { ok: true, appointments: liveAppointments }
+    } catch (error) {
+      logger.warn('PetBot appointment refresh failed', {
+        sessionId,
+        moduleId,
+        error: error instanceof Error ? error.message : String(error),
+        fallback_count: liveAppointments.length,
+      })
+      return {
+        ok: false,
+        appointments: liveAppointments,
+        error: error instanceof Error ? error.message : String(error),
+      }
+    }
+  }
+
   const mergeServiceFactsFromToolArgs = (toolArgs = {}) => {
     serviceFacts = mergeInterpretedPetbotServiceFacts({
       interpretation: toolArgs,
@@ -1601,7 +1665,7 @@ async function respondWithPetbotAgent({
 
     if (name === 'resolve_petshop_service') {
       const groundedArgs = mergeServiceFactsFromToolArgs(args)
-      liveServices = await loadPetshopServices(supabase, moduleId, session.tenant_id)
+      await refreshServiceCatalog({ required: true })
       const resolution = resolvePetshopService({
         serviceQuery: args.service_query || llmInterpretation?.service_type || args.order_type,
         orderType: args.order_type || llmInterpretation?.intent,
@@ -1654,12 +1718,17 @@ async function respondWithPetbotAgent({
           error: 'Resolva o serviço exato com os fatos do cliente antes de consultar a agenda.',
         }
       }
-      const [freshServices, freshAppointments] = await Promise.all([
-        loadPetshopServices(supabase, moduleId, session.tenant_id),
-        loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings),
-      ])
-      liveServices = freshServices
-      liveAppointments = freshAppointments
+      await refreshServiceCatalog({ required: false })
+      const appointmentRefresh = await refreshAppointmentContext()
+      if (!appointmentRefresh.ok) {
+        return {
+          ok: false,
+          action: name,
+          status: 'temporarily_unavailable',
+          next_action: 'apologize_briefly_and_offer_to_retry_the_schedule_without_handoff',
+          error_code: 'agenda_refresh_failed',
+        }
+      }
       const availability = buildServiceAvailability({
         serviceQuery: args.service_id,
         orderType: args.order_type || llmInterpretation?.intent,
@@ -1717,12 +1786,17 @@ async function respondWithPetbotAgent({
         const freshProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
         liveProducts = mergeProductsById(liveProducts, freshProducts)
       } else {
-        const [freshServices, freshAppointments] = await Promise.all([
-          loadPetshopServices(supabase, moduleId, session.tenant_id),
-          loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings),
-        ])
-        liveServices = freshServices
-        liveAppointments = freshAppointments
+        await refreshServiceCatalog({ required: true })
+        const appointmentRefresh = await refreshAppointmentContext()
+        if (!appointmentRefresh.ok) {
+          return {
+            ok: false,
+            action: name,
+            status: 'temporarily_unavailable',
+            missing_fields: [],
+            error_code: 'agenda_refresh_failed',
+          }
+        }
       }
 
       const prepared = preparePetshopOrderDraft({
@@ -1794,12 +1868,17 @@ async function respondWithPetbotAgent({
         refreshedProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
         liveProducts = mergeProductsById(liveProducts, refreshedProducts)
       } else {
-        ;[refreshedServices, refreshedAppointments] = await Promise.all([
-          loadPetshopServices(supabase, moduleId, session.tenant_id),
-          loadAppointmentsFresh(supabase, moduleId, session.tenant_id, storeSettings),
-        ])
-        liveServices = refreshedServices
-        liveAppointments = refreshedAppointments
+        refreshedServices = await refreshServiceCatalog({ required: true })
+        const appointmentRefresh = await refreshAppointmentContext()
+        if (!appointmentRefresh.ok) {
+          return {
+            ok: false,
+            action: name,
+            status: 'temporarily_unavailable',
+            reason: 'agenda_refresh_failed',
+          }
+        }
+        refreshedAppointments = appointmentRefresh.appointments
         liveSubscriptionBenefits = await loadCustomerSubscriptionBenefits(
           supabase,
           sessionForAgent,
@@ -2106,7 +2185,7 @@ function isPetbotServiceConversation(intent = '', message = '', history = []) {
   return /\b(banho|tosa|agendar|agendamento|consulta|vacina|veterin)\b/.test(text)
 }
 
-async function respondWithPetbotSafeFailure({
+async function respondWithPetbotRecoverableFailure({
   supabase,
   session,
   sessionId,
@@ -2117,22 +2196,25 @@ async function respondWithPetbotSafeFailure({
 }) {
   const serviceConversation = isPetbotServiceConversation(intent)
   const reply = serviceConversation
-    ? 'Tive um problema ao consultar o catálogo de serviços e a agenda. Para não informar preço ou horário incorreto, encaminhei o atendimento para uma pessoa da equipe.'
-    : 'Tive um problema ao consultar o catálogo e concluir este atendimento com segurança. Encaminhei a conversa para uma pessoa da equipe continuar com você.'
+    ? 'Desculpe, tive uma instabilidade momentânea ao consultar os serviços e a agenda. Pode repetir a última informação para eu tentar novamente?'
+    : 'Desculpe, tive uma instabilidade momentânea ao consultar os dados. Pode repetir a última informação para eu tentar novamente?'
   const botSentAt = new Date().toISOString()
   const existingContext = parseJsonObject(session.context)
+  const previousAgentState = existingContext.petbot_agent && typeof existingContext.petbot_agent === 'object'
+    ? existingContext.petbot_agent
+    : {}
   const nextContext = {
     ...existingContext,
     petbot_agent: {
-      ...(existingContext.petbot_agent || {}),
+      ...previousAgentState,
       version: 3,
       engine_version: 'petbot_agent_v3',
       updatedAt: botSentAt,
-      pending_order: null,
-      last_action: 'safe_agent_handoff',
+      pending_order: previousAgentState.pending_order || null,
+      last_action: 'recoverable_agent_error',
       last_tools: [],
-      needs_human: true,
-      handoff_target: 'atendente',
+      needs_human: false,
+      handoff_target: null,
       order_saved: false,
       failure: cleanText(error instanceof Error ? error.message : error).slice(0, 300),
     },
@@ -2140,9 +2222,9 @@ async function respondWithPetbotSafeFailure({
 
   const { error: sessionError } = await supabase
     .from('chat_sessions')
-    .update({ status: 'human', context: nextContext, last_message_at: botSentAt })
+    .update({ context: nextContext, last_message_at: botSentAt })
     .eq('id', sessionId)
-  if (sessionError) throw new HttpError(500, 'Unable to persist safe PetBot handoff.')
+  if (sessionError) throw new HttpError(500, 'Unable to persist recoverable PetBot error.')
 
   const { data: savedReply, error: replyError } = await supabase
     .from('chat_messages')
@@ -2153,7 +2235,7 @@ async function respondWithPetbotSafeFailure({
       metadata: {
         source: options.source || 'dashboard_simulation',
         engine_version: 'petbot_agent_v3',
-        safe_agent_handoff: true,
+        recoverable_agent_error: true,
         ...(options.assistantMetadata || {}),
       },
       tokens_used: 0,
@@ -2161,20 +2243,23 @@ async function respondWithPetbotSafeFailure({
     })
     .select('id, role, content, metadata, tokens_used, sent_at')
     .single()
-  if (replyError) throw new HttpError(500, 'Unable to save safe PetBot handoff reply.')
+  if (replyError) throw new HttpError(500, 'Unable to save recoverable PetBot reply.')
 
   await recordPetbotEvent(supabase, {
     tenant_id: session.tenant_id,
     module_id: moduleId,
     session_id: sessionId,
     message_id: savedReply.id,
-    event_type: 'handoff',
+    event_type: 'agent_error',
     engine_version: 'petbot_agent_v3',
     intent,
-    action: 'safe_agent_handoff',
-    outcome: 'agent_error',
-    handoff_target: 'atendente',
-    metadata: { source: options.source || 'dashboard_simulation' },
+    action: 'recoverable_agent_error',
+    outcome: 'retry_requested',
+    handoff_target: null,
+    metadata: {
+      source: options.source || 'dashboard_simulation',
+      error: cleanText(error instanceof Error ? error.message : error).slice(0, 300),
+    },
   })
 
   return { reply, savedMessage: savedReply }
@@ -2341,7 +2426,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       moduleId,
       error: error instanceof Error ? error.message : String(error),
     })
-    return respondWithPetbotSafeFailure({
+    return respondWithPetbotRecoverableFailure({
       supabase,
       session: sessionForAgent,
       sessionId,
