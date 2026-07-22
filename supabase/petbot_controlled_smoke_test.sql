@@ -20,6 +20,7 @@ declare
   v_product_stock numeric;
   v_service_id uuid;
   v_service_price numeric;
+  v_service_species text;
   v_duration integer;
   v_timezone text;
   v_hours jsonb;
@@ -151,6 +152,12 @@ begin
   select
     service.id,
     service.price,
+    coalesce(public.infer_petbot_service_species(
+      service.bot_metadata->>'species',
+      service.species_target,
+      service.name,
+      service.category
+    ), 'dog'),
     greatest(15, case
       when coalesce(service.bot_metadata->>'duration_min', '') ~ '^\d+$'
         then (service.bot_metadata->>'duration_min')::integer
@@ -158,13 +165,30 @@ begin
         then (service.bot_metadata->>'service_duration_min')::integer
       else 60
     end)
-  into v_service_id, v_service_price, v_duration
+  into v_service_id, v_service_price, v_service_species, v_duration
   from public.products service
   where service.tenant_id = v_tenant_id
     and service.module_id = v_module_id
     and service.active = true
     and coalesce(service.price, 0) > 0
-    and lower(coalesce(service.species_target, service.bot_metadata->>'species', 'dog')) not in ('cat', 'gato', 'felino')
+    -- A RPC considera primeiro bot_metadata.species e depois species_target.
+    -- O smoke precisa usar exatamente a mesma precedencia para nao montar um
+    -- payload de cachorro com um servico efetivamente felino (ou vice-versa).
+    and (
+      nullif(trim(coalesce(service.bot_metadata->>'species', service.species_target)), '') is null
+      or public.normalize_petshop_catalog_text(
+        coalesce(service.bot_metadata->>'species', service.species_target)
+      ) in (
+        'dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino', 'canina',
+        'cat', 'gato', 'gata', 'felino', 'felina',
+        'other', 'outro', 'outra'
+      )
+    )
+    and (
+      lower(coalesce(service.bot_metadata->>'product_type', '')) = 'servico'
+      or lower(coalesce(service.category, '')) in ('servico', 'serviço', 'banho', 'tosa', 'veterinaria', 'veterinária')
+      or lower(coalesce(service.name, '')) ~ '(banho|tosa|consulta|vacina|exame|cirurg|hidrat|escovac|desembolo)'
+    )
     and (
       lower(coalesce(service.bot_metadata->>'service_group', service.bot_metadata->>'group_type', '')) in ('veterinaria', 'veterinary', 'vet')
       or lower(coalesce(service.category, '')) in ('veterinaria', 'veterinária')
@@ -339,7 +363,7 @@ begin
     'customer_name', coalesce(v_customer_name, 'Cliente teste'),
     'customer_phone', coalesce(v_customer_phone, 'sem telefone'),
     'pet_name', '__PETBOT_SMOKE_TEST__',
-    'species', 'dog',
+    'species', v_service_species,
     'breed', 'SRD',
     'service_product_id', v_service_id,
     'scheduled_at', v_scheduled_at,

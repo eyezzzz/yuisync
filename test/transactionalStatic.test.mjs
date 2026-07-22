@@ -88,6 +88,14 @@ test('PetBot possui um unico escritor de movimento por item vendido', async () =
   assert.match(smoke, /v_movement_count_before/)
 })
 
+test('smoke veterinario usa a mesma especie efetiva da RPC', async () => {
+  const smoke = await read('supabase/petbot_controlled_smoke_test.sql')
+  assert.match(smoke, /infer_petbot_service_species\([\s\S]*service\.bot_metadata->>'species',[\s\S]*service\.species_target/)
+  assert.match(smoke, /into v_service_id, v_service_price, v_service_species, v_duration/)
+  assert.match(smoke, /'species', v_service_species/)
+  assert.doesNotMatch(smoke, /lower\(coalesce\(service\.species_target, service\.bot_metadata->>'species'/)
+})
+
 test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () => {
   const apiFiles = await readdir(new URL('api/', root), { recursive: true })
   const serverlessFunctions = apiFiles.filter((path) => path.endsWith('.ts'))
