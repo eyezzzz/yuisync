@@ -288,7 +288,15 @@ export default function ChatPage() {
   const [resettingHistory, setResettingHistory] = useState(false)
   const [mobileView, setMobileView] = useState('list') // 'list' | 'chat' (mobile only)
   const bottomRef = useRef(null)
+  const restoredSessionRef = useRef(false)
   const isGlobalAdmin = auth?.profile?.role === 'admin'
+  const activeChatStorageKey = `@yuisync-active-chat:${auth?.activeTenantId || 'tenant'}:${activeModule.id}`
+
+  const handleOpenSession = async (session) => {
+    await openSession(session)
+    sessionStorage.setItem(activeChatStorageKey, session.id)
+    setMobileView('chat')
+  }
 
   useEffect(() => {
     loadSessions(statusFilter || undefined)
@@ -296,15 +304,18 @@ export default function ChatPage() {
     subscribeSessionsList()
   }, [statusFilter])
 
+  useEffect(() => {
+    if (restoredSessionRef.current || activeSession || sessions.length === 0) return
+    restoredSessionRef.current = true
+    const savedSessionId = sessionStorage.getItem(activeChatStorageKey)
+    const savedSession = sessions.find((session) => session.id === savedSessionId)
+    if (savedSession) void handleOpenSession(savedSession)
+  }, [activeChatStorageKey, activeSession, sessions])
+
   // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [messages, botTyping])
-
-  const handleOpenSession = async (session) => {
-    await openSession(session)
-    setMobileView('chat')
-  }
 
   const handleOpenHandoffAlert = async (alert) => {
     const session = sessions.find((item) => item.id === alert.sessionId) || {
@@ -312,9 +323,8 @@ export default function ChatPage() {
       customer_name: alert.customerName,
       status: 'human',
     }
-    await openSession(session)
+    await handleOpenSession(session)
     dismissHandoffAlert(alert.id)
-    setMobileView('chat')
   }
 
   const handleSend = async () => {
@@ -343,6 +353,7 @@ export default function ChatPage() {
         moduleId: activeModule.id,
         tenantId: auth?.activeTenantId,
       })
+      sessionStorage.removeItem(activeChatStorageKey)
       setActiveSession(null)
       await loadSessions(statusFilter || undefined)
     } finally {

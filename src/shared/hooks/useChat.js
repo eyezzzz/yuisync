@@ -5,14 +5,20 @@ import { useModuleCtx } from '../../context/ModuleContext'
 import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
-const DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS = 8000
+const DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS = 1000
 const DASHBOARD_REPLY_DEBOUNCE_MS = (() => {
   const parsed = Number(import.meta.env.VITE_CHAT_REPLY_DEBOUNCE_MS)
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS
 })()
 
+// The AppRouter intentionally remounts pages when navigating between areas.
+// Keep the debounce outbox at module scope so a route change cannot discard a
+// customer message or cancel the bot turn that still needs to be processed.
+const pendingDashboardMessages = new Map()
+const dashboardReplyTimers = new Map()
+
 function createPendingClientMessage(content) {
-  const id = `temp-user-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+  const id = crypto.randomUUID()
   return {
     id,
     role: 'user',
@@ -139,8 +145,6 @@ export function useChat() {
   const channelRef = useRef(null)
   const msgChannelRef = useRef(null)
   const activeSessionIdRef = useRef(null)
-  const pendingClientMessagesRef = useRef(new Map())
-  const replyTimerRef = useRef(new Map())
   const handoffAlertIdsRef = useRef(new Set())
   const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
@@ -262,12 +266,12 @@ export function useChat() {
   }, [activeModuleId, activeTenantId])
 
   const flushClientMessages = useCallback(async (sessionId) => {
-    const queuedMessages = pendingClientMessagesRef.current.get(sessionId) || []
-    pendingClientMessagesRef.current.delete(sessionId)
-    replyTimerRef.current.delete(sessionId)
+    const queuedMessages = pendingDashboardMessages.get(sessionId) || []
+    pendingDashboardMessages.delete(sessionId)
+    dashboardReplyTimers.delete(sessionId)
 
     if (!queuedMessages.length) {
-      if (pendingClientMessagesRef.current.size === 0 && replyTimerRef.current.size === 0) setBotTyping(false)
+      if (pendingDashboardMessages.size === 0 && dashboardReplyTimers.size === 0) setBotTyping(false)
       return
     }
 
@@ -298,12 +302,12 @@ export function useChat() {
       const failedIds = new Set(queuedMessages.map((message) => message.id))
       setMessages((prev) => prev.map((message) => (
         failedIds.has(message.id)
-          ? { ...message, metadata: { ...(message.metadata || {}), pending: false, failed: true } }
+          ? { ...message, metadata: { ...(message.metadata || {}), pending: false, response_failed: true } }
           : message
       )))
       console.error('Falha ao responder chat com debounce:', error)
     } finally {
-      if (pendingClientMessagesRef.current.size === 0 && replyTimerRef.current.size === 0) {
+      if (pendingDashboardMessages.size === 0 && dashboardReplyTimers.size === 0) {
         setBotTyping(false)
       }
     }
@@ -314,19 +318,55 @@ export function useChat() {
     if (!trimmed) return
 
     const optimisticMessage = createPendingClientMessage(trimmed)
-    const queuedMessages = pendingClientMessagesRef.current.get(sessionId) || []
-    pendingClientMessagesRef.current.set(sessionId, [...queuedMessages, optimisticMessage])
-
     setMessages((prev) => [...prev, optimisticMessage])
     setBotTyping(true)
 
-    const existingTimer = replyTimerRef.current.get(sessionId)
+    // Persist before starting the debounce. Even a full page remount now leaves
+    // the customer's message in the conversation, while the API's idempotent
+    // upsert prevents the later bot request from inserting it twice.
+    const persistedMetadata = {
+      source: 'dashboard_simulation',
+      client_message_id: optimisticMessage.id,
+    }
+    const { data: persistedMessage, error: persistenceError } = await supabase
+      .from('chat_messages')
+      .upsert({
+        id: optimisticMessage.id,
+        session_id: sessionId,
+        role: 'user',
+        content: optimisticMessage.content,
+        metadata: persistedMetadata,
+        sent_at: optimisticMessage.sent_at,
+      }, { onConflict: 'id', ignoreDuplicates: true })
+      .select('id, role, content, metadata, tokens_used, sent_at')
+      .maybeSingle()
+
+    if (persistenceError) {
+      setMessages((prev) => prev.map((message) => (
+        message.id === optimisticMessage.id
+          ? { ...message, metadata: { ...(message.metadata || {}), pending: false, failed: true } }
+          : message
+      )))
+      setBotTyping(false)
+      throw persistenceError
+    }
+
+    if (persistedMessage) {
+      setMessages((prev) => prev.map((message) => (
+        message.id === optimisticMessage.id ? normalizeIncomingMessage(persistedMessage) : message
+      )))
+    }
+
+    const queuedMessages = pendingDashboardMessages.get(sessionId) || []
+    pendingDashboardMessages.set(sessionId, [...queuedMessages, optimisticMessage])
+
+    const existingTimer = dashboardReplyTimers.get(sessionId)
     if (existingTimer) clearTimeout(existingTimer)
 
     const timer = setTimeout(() => {
       void flushClientMessages(sessionId)
     }, DASHBOARD_REPLY_DEBOUNCE_MS)
-    replyTimerRef.current.set(sessionId, timer)
+    dashboardReplyTimers.set(sessionId, timer)
   }, [flushClientMessages])
 
   const sendHumanMessage = useCallback(async (sessionId, text) => {
@@ -425,9 +465,7 @@ export function useChat() {
   useEffect(() => () => {
     channelRef.current?.unsubscribe()
     msgChannelRef.current?.unsubscribe()
-    replyTimerRef.current.forEach((timer) => clearTimeout(timer))
-    replyTimerRef.current.clear()
-    pendingClientMessagesRef.current.clear()
+    activeSessionIdRef.current = null
   }, [])
 
   const statusConfig = (status) => ({

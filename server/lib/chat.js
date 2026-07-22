@@ -1436,6 +1436,7 @@ function normalizeDashboardUserMessages(message, options = {}) {
       const clientMessageId = cleanText(entry?.client_message_id || entry?.id)
 
       return {
+        id: isUuid(clientMessageId) ? clientMessageId : null,
         content,
         sent_at: sentAt,
         metadata: {
@@ -1461,18 +1462,30 @@ function normalizeDashboardUserMessages(message, options = {}) {
 }
 
 async function insertUserMessages(supabase, sessionId, userMessages) {
-  const { error } = await supabase.from('chat_messages').insert(
-    userMessages.map((userMessage) => ({
-      session_id: sessionId,
-      role: 'user',
-      content: userMessage.content,
-      metadata: userMessage.metadata,
-      sent_at: userMessage.sent_at,
-    }))
-  )
+  const identifiedMessages = userMessages.filter((userMessage) => isUuid(userMessage.id))
+  const anonymousMessages = userMessages.filter((userMessage) => !isUuid(userMessage.id))
+  const toRow = (userMessage) => ({
+    ...(isUuid(userMessage.id) ? { id: userMessage.id } : {}),
+    session_id: sessionId,
+    role: 'user',
+    content: userMessage.content,
+    metadata: userMessage.metadata,
+    sent_at: userMessage.sent_at,
+  })
 
-  if (error) {
-    throw new HttpError(500, 'Unable to save user message.')
+  if (identifiedMessages.length) {
+    const { error } = await supabase.from('chat_messages').upsert(
+      identifiedMessages.map(toRow),
+      { onConflict: 'id', ignoreDuplicates: true },
+    )
+    if (error) throw new HttpError(500, 'Unable to save identified user message.')
+  }
+
+  if (anonymousMessages.length) {
+    const { error } = await supabase.from('chat_messages').insert(
+      anonymousMessages.map(toRow),
+    )
+    if (error) throw new HttpError(500, 'Unable to save user message.')
   }
 }
 
@@ -2835,8 +2848,11 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   }
 
   const intent = detectIntent(trimmedMessage)
-  const history = await loadRecentMessages(supabase, sessionId)
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
+  const currentMessageIds = new Set(userMessages.map((entry) => entry.id).filter(Boolean))
+  const history = (await loadRecentMessages(supabase, sessionId)).filter((entry) => (
+    !currentMessageIds.has(cleanText(entry?.metadata?.client_message_id || entry?.id))
+  ))
   let concurrencyLastMessageAt = cleanText(session.last_message_at)
   if (!options.skipUserPersistence) {
     // Persist the customer's input before any LLM or catalog work. This is the

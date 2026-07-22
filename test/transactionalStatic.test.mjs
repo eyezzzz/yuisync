@@ -267,6 +267,19 @@ test('RPC do PetBot inicializa transporte quando o cliente leva o pet', async ()
   assert.match(forward, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
 })
 
+test('RPC concilia a ordem criada pelo trigger legado sem duplicar sale_id', async () => {
+  const canonical = await read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
+  const forward = await read('supabase/migrations/20260722003000_petbot_service_order_upsert.sql')
+  const legacy = await read('database/petshop_advanced_features.sql')
+
+  assert.match(legacy, /trg_sync_service_order_for_whatsapp_sale[\s\S]*after insert on public\.sales/)
+  assert.match(canonical, /insert into public\.service_delivery_orders[\s\S]*on conflict \(sale_id\) where sale_id is not null do update/)
+  assert.match(canonical, /returning id into v_order_id/)
+  assert.match(forward, /pg_get_functiondef\('public\.create_petbot_order_transaction\(jsonb\)'::regprocedure\)/)
+  assert.match(forward, /v_definition ~\* v_conflict_pattern/)
+  assert.match(forward, /regexp_replace\(v_definition, v_return_pattern, v_replacement, 'i'\)/)
+})
+
 test('classificacao PetBot preenche racas comuns por pelagem sem sobrescrever ajustes manuais', async () => {
   const migration = await read('supabase/migrations/20260721004000_petbot_common_breed_classification.sql')
   const catalog = await read('shared/petbotBreedCatalog.js')

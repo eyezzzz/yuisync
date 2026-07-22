@@ -746,7 +746,26 @@ begin
     case when v_transport_fee > 0 then v_transport_option.label else null end,
     v_notes,
     now()
-  ) returning id into v_order_id;
+  )
+  on conflict (sale_id) where sale_id is not null do update
+  set tenant_id = excluded.tenant_id,
+      module_id = excluded.module_id,
+      client_id = excluded.client_id,
+      session_id = excluded.session_id,
+      source = excluded.source,
+      order_type = excluded.order_type,
+      status = excluded.status,
+      scheduled_for = excluded.scheduled_for,
+      delivery_address = excluded.delivery_address,
+      delivery_neighborhood = excluded.delivery_neighborhood,
+      delivery_city = excluded.delivery_city,
+      contact_phone = excluded.contact_phone,
+      payment_status = excluded.payment_status,
+      transport_mode = excluded.transport_mode,
+      transport_label = excluded.transport_label,
+      notes = excluded.notes,
+      updated_at = excluded.updated_at
+  returning id into v_order_id;
 
   update public.chat_sessions
   set intent = 'pedido_confirmado',

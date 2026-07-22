@@ -115,6 +115,23 @@ test('painel trata turno obsoleto como cancelamento esperado', () => {
   assert.match(hook, /newer customer message superseded/)
 })
 
+test('mensagem do painel sobrevive a troca de rota antes do debounce', () => {
+  const hook = read('src/shared/hooks/useChat.js')
+  const chatPage = read('src/modules/petshop/pages/ChatPage.jsx')
+  const serverChat = read('server/lib/chat.js')
+  const cleanup = hook.slice(hook.indexOf('useEffect(() => () => {'))
+
+  assert.match(hook, /DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS = 1000/)
+  assert.ok(hook.indexOf('const pendingDashboardMessages = new Map()') < hook.indexOf('export function useChat()'))
+  assert.ok(hook.indexOf(".from('chat_messages')", hook.indexOf('const sendClientMessage')) < hook.indexOf('dashboardReplyTimers.set(sessionId, timer)'))
+  assert.match(hook, /crypto\.randomUUID\(\)/)
+  assert.doesNotMatch(cleanup, /pendingDashboardMessages\.clear\(\)|dashboardReplyTimers\.clear\(\)/)
+  assert.match(serverChat, /onConflict: 'id', ignoreDuplicates: true/)
+  assert.match(serverChat, /currentMessageIds[\s\S]*loadRecentMessages[\s\S]*client_message_id/)
+  assert.match(chatPage, /sessionStorage\.setItem\(activeChatStorageKey, session\.id\)/)
+  assert.match(chatPage, /sessionStorage\.getItem\(activeChatStorageKey\)/)
+})
+
 test('webhook combina mensagens curtas consecutivas antes de chamar o runtime', () => {
   const webhook = read('serverless/whatsappWebhook.ts')
   assert.match(webhook, /loadRecentIncomingBurst/)
