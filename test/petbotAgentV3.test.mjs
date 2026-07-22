@@ -700,3 +700,60 @@ test('validador impede pergunta de pelagem e repeticao de peso ja informado', ()
   })
   assert.equal(finalSummary.ok, true)
 })
+
+test('mensagem de retorno de ferramenta segue o schema do Chat Completions sem campo name', async () => {
+  let sequence = 0
+  const result = await runPetbotAgent({
+    model: 'gpt-4o-mini-test',
+    systemPrompt: 'Atenda naturalmente.',
+    message: 'Ela tem 8 kg e é um Shih Tzu.',
+    callModel: async (params) => {
+      sequence += 1
+      if (sequence === 1) {
+        return {
+          usage: { total_tokens: 3 },
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [{
+                id: 'resolve-service-1',
+                type: 'function',
+                function: {
+                  name: 'resolve_petshop_service',
+                  arguments: JSON.stringify({
+                    service_query: 'banho',
+                    order_type: 'banho_tosa',
+                    species: 'dog',
+                    breed: 'Shih Tzu',
+                    weight_kg: 8,
+                  }),
+                },
+              }],
+            },
+          }],
+        }
+      }
+
+      const toolMessage = params.messages.find((entry) => entry.role === 'tool')
+      assert.ok(toolMessage)
+      assert.equal(toolMessage.tool_call_id, 'resolve-service-1')
+      assert.equal(Object.hasOwn(toolMessage, 'name'), false)
+      assert.equal(typeof toolMessage.content, 'string')
+
+      return {
+        usage: { total_tokens: 4 },
+        choices: [{ message: { content: JSON.stringify({ message: 'Perfeito! Vou verificar os horários disponíveis para hoje.' }) } }],
+      }
+    },
+    executeTool: async () => ({
+      ok: true,
+      status: 'resolved',
+      service: { id: 'small', name: 'Banho pequeno', price: 72 },
+    }),
+    parseReply: (content) => content ? JSON.parse(content) : { message: '' },
+    validateReply: () => ({ ok: true }),
+  })
+
+  assert.match(result.reply, /horários disponíveis/i)
+  assert.equal(sequence, 2)
+})

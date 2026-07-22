@@ -1921,7 +1921,6 @@ export async function runPetbotAgent({
       messages.push({
         role: 'tool',
         tool_call_id: toolCall.id,
-        name: toolName,
         content: JSON.stringify(result).slice(0, 12000),
       })
 
