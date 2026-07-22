@@ -139,6 +139,10 @@ export function mergeInterpretedPetbotServiceFacts({
     || inheritedPet.service_notes_resolved
     || inheritedPet.service_notes_explicit,
   )
+  const currentTransportMode = clean(current.service_transport_mode)
+  const serviceTransportMode = currentTransportMode
+    || clean(inheritedPet.service_transport_mode)
+    || null
 
   return {
     pet_name: petName,
@@ -169,6 +173,8 @@ export function mergeInterpretedPetbotServiceFacts({
     service_notes: serviceNotes,
     service_notes_resolved: serviceNotesResolved,
     service_notes_explicit: serviceNotesResolved,
+    service_transport_mode: serviceTransportMode,
+    service_transport_mode_explicit: Boolean(serviceTransportMode),
     pet_identity_changed: petIdentityChanged,
   }
 }
@@ -207,6 +213,9 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     notes: facts.service_notes_explicit
       ? clean(facts.service_notes) || null
       : clean(args.notes) || null,
+    service_transport_mode: facts.service_transport_mode_explicit && normalizeCode(facts.service_transport_mode) !== 'motodog'
+      ? clean(facts.service_transport_mode)
+      : clean(args.service_transport_mode) || null,
   }
 }
 

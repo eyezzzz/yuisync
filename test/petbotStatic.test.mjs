@@ -70,6 +70,15 @@ test('confirmacao transacional usa resposta terminal sem devolver o turno para a
   assert.match(chat, /\['committed', 'already_committed'\]/)
 })
 
+test('servico completo prepara resumo deterministico sem nova etapa comercial', () => {
+  const chat = read('server/lib/chat.js')
+  const grounding = read('server/lib/petbotGrounding.js')
+  assert.match(chat, /shouldForceServicePreparation/)
+  assert.match(chat, /name: 'prepare_petshop_service_booking'/)
+  assert.match(chat, /result\?\.status\) === 'prepared'/)
+  assert.match(grounding, /Durante agendamentos não ofereça produto, corte de unhas nem outro serviço adicional/)
+})
+
 test('turno antigo nao sobrescreve sessao atualizada por mensagem mais nova', () => {
   const chat = read('server/lib/chat.js')
   assert.match(chat, /sessionUpdate = sessionUpdate\.eq\('last_message_at', expectedLastMessageAt\)/)

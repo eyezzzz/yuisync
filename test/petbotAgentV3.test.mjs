@@ -109,6 +109,18 @@ test('observacao de servico entra no estado confiavel e nao e apagada por negati
   assert.equal(changedPet.service_notes_resolved, false)
 })
 
+test('decisao de chegada do pet entra no estado confiavel e fundamenta o preparo', () => {
+  const facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_transport_mode: 'cliente_leva' },
+    previousFacts: { service_type: 'banho', pet_name: 'Thor' },
+  })
+  assert.equal(facts.service_transport_mode, 'cliente_leva')
+  assert.equal(facts.service_transport_mode_explicit, true)
+
+  const grounded = groundPetbotServiceArgs({ service_transport_mode: null }, facts)
+  assert.equal(grounded.service_transport_mode, 'cliente_leva')
+})
+
 test('validador impede perguntar observacao novamente depois da etapa resolvida', () => {
   const validation = validatePetbotConversationReply({
     reply: 'Apenas para finalizar, você precisa de alguma observação especial para o banho?',
@@ -117,6 +129,46 @@ test('validador impede perguntar observacao novamente depois da etapa resolvida'
   })
   assert.equal(validation.ok, false)
   assert.ok(validation.problems.some((problem) => /observações do serviço já foram respondidas/.test(problem)))
+})
+
+test('validador impede upsell e repeticao da chegada durante o fechamento do servico', () => {
+  const facts = {
+    service_type: 'banho',
+    pet_name: 'Thor',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weight_kg: 7,
+    service_date: '2026-07-22',
+    service_preferred_time: '16:00',
+    service_transport_mode: 'cliente_leva',
+    service_notes: 'sem perfume',
+    service_notes_resolved: true,
+  }
+  const toolRuns = [{
+    name: 'check_petshop_availability',
+    ok: true,
+    result: { status: 'available', requested_slot: { available: true } },
+  }]
+  const validation = validatePetbotConversationReply({
+    reply: 'Você vai levar o Thor, certo? Gostaria de adicionar outro serviço ou produto?',
+    facts,
+    serviceContext: true,
+    toolRuns,
+  })
+  assert.equal(validation.ok, false)
+  assert.ok(validation.problems.some((problem) => /chegada do pet já foi respondida/.test(problem)))
+  assert.ok(validation.problems.some((problem) => /não ofereça produtos ou serviços adicionais/.test(problem)))
+  assert.ok(validation.problems.some((problem) => /todos os dados do serviço estão completos/.test(problem)))
+})
+
+test('validador exige nome do pet antes de chegada ou resumo', () => {
+  const validation = validatePetbotConversationReply({
+    reply: 'Você vai levar seu Shih Tzu ou prefere o MotoDog?',
+    facts: { service_type: 'banho', species: 'dog', breed: 'Shih Tzu', weight_kg: 7 },
+    serviceContext: true,
+  })
+  assert.equal(validation.ok, false)
+  assert.ok(validation.problems.some((problem) => /nome do pet ainda está ausente/.test(problem)))
 })
 
 test('grounding bloqueia preco, agenda, estoque e confirmacao inventados', () => {

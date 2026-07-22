@@ -204,7 +204,7 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   }
 }
 
-export function validatePetbotConversationReply({ reply = '', facts = {}, pendingOrder = null, currentMessageIsConfirmation = false, serviceContext = false } = {}) {
+export function validatePetbotConversationReply({ reply = '', facts = {}, pendingOrder = null, currentMessageIsConfirmation = false, serviceContext = false, toolRuns = [] } = {}) {
   const normalized = normalizeCatalogText(reply)
   const problems = []
 
@@ -237,8 +237,40 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   const asksProductFulfillment = /(?:entrega ou retirada|retirada na loja|servico de entrega|entregar ou retirar|vai retirar|prefere retirada)/.test(normalized)
   const asksServiceNotes = /(?:alguma|tem|possui|precisa de|gostaria de adicionar).{0,45}(?:observacao|observacoes|recado|cuidado especial)/.test(normalized)
     || /(?:observacao|observacoes).{0,45}(?:banho|tosa|servico|agendamento)/.test(normalized)
+  const asksPetName = /(?:qual|como).{0,30}(?:nome).{0,20}(?:pet|cachorro|cao|cadela|gato|gata|dele|dela)/.test(normalized)
+    || /(?:nome).{0,20}(?:do|da|desse|dessa).{0,15}(?:pet|cachorro|cao|cadela|gato|gata)/.test(normalized)
+  const asksPetTransport = /(?:como|quem|voce|cliente|tutor|prefere).{0,55}(?:chegar|levar|trazer|motodog)/.test(normalized)
+    || /(?:levar|trazer).{0,45}(?:loja|motodog)/.test(normalized)
+  const asksServiceAddon = /(?:adicionar|incluir|gostaria|quer|deseja).{0,60}(?:outro servico|outro produto|algum servico|algum produto|corte de unhas|algo mais)/.test(normalized)
+    || /(?:outro servico|outro produto|corte de unhas).{0,45}(?:adicionar|incluir|quer|deseja)/.test(normalized)
   const asksConfirmationAgain = /(?:confirma(?:r)?|voce confirma|pode confirmar).{0,50}(?:agendamento|pedido|horario)/.test(normalized)
     || /(?:para finalizar|so preciso confirmar).{0,80}/.test(normalized)
+  const transportMode = normalizeCatalogText(facts.service_transport_mode)
+  const transportResolved = Boolean(transportMode && transportMode !== 'motodog')
+  const hasPreparedOrder = Boolean(pendingOrder) || (toolRuns || []).some((run) => (
+    ['prepare_petshop_service_booking', 'prepare_petshop_order'].includes(clean(run?.name))
+    && run?.ok !== false
+    && run?.result?.status === 'prepared'
+  ))
+  const hasExactAvailableSlot = (toolRuns || []).some((run) => (
+    clean(run?.name) === 'check_petshop_availability'
+    && run?.ok !== false
+    && run?.result?.status === 'available'
+    && run?.result?.requested_slot?.available === true
+  ))
+  const isBathConversation = isServiceConversation && (
+    pendingType === 'banho_tosa'
+    || /(?:banho|tosa|escovacao|desembolo|hidratacao)/.test(normalizedServiceType)
+  )
+  const bookingFactsComplete = Boolean(
+    clean(facts.pet_name)
+    && clean(facts.species)
+    && clean(facts.breed)
+    && Number(facts.weight_kg || 0) > 0
+    && clean(facts.service_date)
+    && (clean(facts.service_preferred_time) || clean(facts.service_time_preference))
+    && hasExactAvailableSlot
+  )
 
   if (asksCoat) problems.push('pergunta de pelagem proibida; a classificação deve vir da raça cadastrada')
   if (asksGenericRepeat && hasKnownConversationFacts) problems.push('solicitação genérica para repetir dados que já estão no estado confiável')
@@ -253,6 +285,24 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   if (isServiceConversation && asksProductFulfillment) problems.push('entrega/retirada de produto não se aplica ao pet; use cliente leva ou MotoDog')
   if (isServiceConversation && facts.service_notes_resolved && asksServiceNotes) {
     problems.push('observações do serviço já foram respondidas; não pergunte novamente')
+  }
+  if (isServiceConversation && asksServiceAddon) {
+    problems.push('não ofereça produtos ou serviços adicionais durante a finalização do agendamento')
+  }
+  if (isServiceConversation && !clean(facts.pet_name) && !asksPetName) {
+    problems.push('nome do pet ainda está ausente; pergunte somente o nome do pet antes de continuar')
+  }
+  if (isBathConversation && transportResolved && asksPetTransport) {
+    problems.push('chegada do pet já foi respondida; não pergunte novamente se o cliente vai levar ou usar MotoDog')
+  }
+  if (isBathConversation && bookingFactsComplete && !hasPreparedOrder) {
+    if (!transportResolved && !asksPetTransport) {
+      problems.push('serviço e horário estão resolvidos; pergunte somente como o pet chegará à loja')
+    } else if (transportResolved && !facts.service_notes_resolved && !asksServiceNotes) {
+      problems.push('chegada do pet está resolvida; pergunte somente se há alguma observação para o serviço')
+    } else if (transportResolved && facts.service_notes_resolved) {
+      problems.push('todos os dados do serviço estão completos; prepare o agendamento e apresente uma única confirmação')
+    }
   }
   if (pendingOrder && currentMessageIsConfirmation && asksConfirmationAgain) {
     problems.push('cliente já confirmou o pedido pendente; não peça nova confirmação')
@@ -335,6 +385,7 @@ export function buildPetbotAgentV3Prompt({
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
     '- Para banho/tosa, os únicos fatos de classificação que podem ser solicitados ao cliente são raça e peso aproximado. Se ambos já estiverem no estado confiável, não os pergunte nem peça confirmação novamente.',
+    '- O nome do pet é obrigatório para concluir um serviço. Se ainda estiver ausente, pergunte o nome antes de chegada, observações ou resumo; nunca use a raça como nome do pet.',
     '- Campo ausente, serviço ambíguo ou tentativa de consultar a agenda cedo demais não são motivo para transferir o atendimento: use o retorno da ferramenta para fazer a próxima pergunta útil.',
     '- Transfira para humano somente quando o cliente pedir, houver risco veterinário ou uma falha operacional persistente impedir qualquer continuação segura.',
     '- Use dados salvos do cliente e do pet quando forem relevantes e não houver sinal de mudança. Não repita perguntas já respondidas; confirme apenas quando houver ambiguidade real ou mais de um pet possível.',
@@ -347,10 +398,12 @@ export function buildPetbotAgentV3Prompt({
     '- Para serviços, o pagamento acontece após a conclusão. Nunca pergunte Pix, dinheiro, cartão ou troco durante o agendamento e nunca trate o serviço como entrega ou retirada de produto.',
     '- Para banho/tosa, depois de definir serviço e horário, descubra apenas como o pet chegará: o cliente leva à loja ou usa o MotoDog. Se o cliente quiser MotoDog, consulte as opções reais e mostre somente as taxas retornadas pela ferramenta.',
     '- Não ofereça MotoDog durante a coleta de raça, peso, data ou horário. Não use as expressões entrega/retirada para o pet.',
+    '- Depois que a chegada do pet estiver definida, pergunte uma única vez se há observação para o serviço. Assim que a observação for respondida, prepare o agendamento imediatamente.',
+    '- Durante agendamentos não ofereça produto, corte de unhas nem outro serviço adicional. Não crie etapas extras entre observação, resumo e confirmação.',
     '- Prepare um pedido somente quando os dados necessários estiverem completos. Quando houver pedido pendente de turno anterior e o cliente confirmar inequivocamente, chame create_confirmed_petshop_order imediatamente, sem repetir resumo ou pedir nova confirmação.',
     '- Se o cliente desistir, cancelar ou pedir para recomeçar depois de um resumo, descarte o pedido pendente com a ferramenta apropriada antes de continuar.',
     '- Em caso de risco veterinário, falha operacional sem alternativa ou pedido explícito por pessoa, transfira para humano.',
-    '- Faça venda consultiva: ofereça no máximo uma sugestão complementar relevante e aceite a recusa sem insistência.',
+    '- Em compras de produtos, faça venda consultiva com no máximo uma sugestão complementar relevante e aceite a recusa sem insistência. Essa regra não se aplica a agendamentos.',
     '',
     'Estado confiável da conversa:',
     JSON.stringify({

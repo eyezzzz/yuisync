@@ -247,6 +247,27 @@ function isExplicitNoServiceNotesAnswer(message = '', history = []) {
   return /\b(?:observacao|observacoes|recado|alergia|perfume|cuidado especial)\b/.test(previousText)
 }
 
+function inferExplicitPetTransportMode(message = '', history = []) {
+  const answer = normalizeSearchText(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!answer) return ''
+  if (/\b(?:motodog|moto dog|buscar|busca e leva)\b/.test(answer)) return 'motodog'
+  if (/\b(?:vou levar|eu levo|eu vou levar|vou trazer|eu trago|levo ele|levo ela|por conta propria)\b/.test(answer)) {
+    return 'cliente_leva'
+  }
+
+  const previousAssistant = [...(history || [])]
+    .reverse()
+    .find((entry) => ['assistant', 'human_agent'].includes(entry?.role))
+  const previousText = normalizeSearchText(previousAssistant?.content)
+  if (/^(?:vou|eu|sim|isso)$/.test(answer) && /\b(?:levar|trazer)\b/.test(previousText)) {
+    return 'cliente_leva'
+  }
+  return ''
+}
+
 function appointmentDateIso(row = {}) {
   if (row.service_date) return String(row.service_date).slice(0, 10)
   if (!row.scheduled_at) return ''
@@ -1645,11 +1666,13 @@ async function respondWithPetbotAgent({
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
+  const inferredTransportMode = inferExplicitPetTransportMode(trimmedMessage, history)
   const interpretationForFacts = {
     ...(llmInterpretation || {}),
     ...(isExplicitNoServiceNotesAnswer(trimmedMessage, history)
       ? { service_notes: null, service_notes_resolved: true }
       : {}),
+    ...(inferredTransportMode ? { service_transport_mode: inferredTransportMode } : {}),
   }
   let serviceFacts = mergeInterpretedPetbotServiceFacts({
     interpretation: interpretationForFacts,
@@ -1851,6 +1874,9 @@ async function respondWithPetbotAgent({
         || llmInterpretation?.service_preferred_time
         || llmInterpretation?.service_time_preference,
       ) || null,
+      service_notes: serviceFacts.service_notes,
+      service_notes_resolved: Boolean(serviceFacts.service_notes_resolved),
+      service_transport_mode: serviceFacts.service_transport_mode,
       product_kind: cleanText(llmInterpretation?.product_kind) || null,
       age_category: cleanText(llmInterpretation?.age_category) || null,
       brand: cleanText(llmInterpretation?.brand) || null,
@@ -2296,9 +2322,27 @@ async function respondWithPetbotAgent({
   }
 
   const currentMessageIsConfirmation = Boolean(pendingAtTurnStart && isExplicitPetbotConfirmation(trimmedMessage))
+  const shouldForceServicePreparation = Boolean(
+    !pendingAtTurnStart
+    && serviceOrderType === 'banho_tosa'
+    && trustedCustomerName()
+    && cleanText(serviceFacts.pet_name)
+    && cleanText(serviceFacts.species)
+    && cleanText(serviceFacts.breed)
+    && Number(serviceFacts.weight_kg || 0) > 0
+    && cleanText(serviceFacts.service_date)
+    && (cleanText(serviceFacts.service_preferred_time) || cleanText(serviceFacts.service_time_preference))
+    && cleanText(serviceFacts.service_transport_mode)
+    && normalizeSearchText(serviceFacts.service_transport_mode) !== 'motodog'
+    && serviceFacts.service_notes_resolved
+    && resolvedServiceThisTurn
+    && operationalContext?.availability?.requested_slot?.available === true
+  )
   const initialToolChoice = currentMessageIsConfirmation
     ? { type: 'function', function: { name: 'create_confirmed_petshop_order' } }
-    : 'auto'
+    : shouldForceServicePreparation
+      ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
+      : 'auto'
 
   const agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
@@ -2323,6 +2367,9 @@ async function respondWithPetbotAgent({
       timezone: storeSettings.petbotTimezone,
     }),
     resolveTerminalReply: ({ toolName, result }) => {
+      if (toolName === 'prepare_petshop_service_booking' && cleanText(result?.status) === 'prepared') {
+        return cleanText(result?.summary)
+      }
       if (toolName !== 'create_confirmed_petshop_order') return ''
       if (!['committed', 'already_committed'].includes(cleanText(result?.status))) return ''
       return buildPetbotCommittedReply({
@@ -2344,6 +2391,7 @@ async function respondWithPetbotAgent({
         facts: serviceFacts,
         pendingOrder,
         currentMessageIsConfirmation,
+        toolRuns,
         serviceContext: Boolean(
           serviceOrderType
           || (pendingOrder?.order?.order_type && pendingOrder.order.order_type !== 'produto'),
@@ -2361,6 +2409,7 @@ async function respondWithPetbotAgent({
           'A resposta anterior contradiz os dados confiáveis ou repetiu uma pergunta já respondida.',
           `Problemas: ${problems.join('; ')}.`,
           'Reescreva naturalmente usando o estado confiável e os resultados das ferramentas. Pergunte somente um fato que realmente esteja ausente.',
+          'Se os dados do serviço estiverem completos, chame prepare_petshop_service_booking antes de responder e apresente apenas o resumo retornado com uma única pergunta de confirmação.',
           'Nunca pergunte tipo de pelo ou pelagem e não peça novamente raça, peso, data ou horário já conhecidos.',
           'Não mencione validações, ferramentas, regras internas ou este aviso.',
         ].join('\n'),
