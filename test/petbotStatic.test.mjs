@@ -72,9 +72,16 @@ test('confirmacao transacional usa resposta terminal sem devolver o turno para a
 
 test('turno antigo nao sobrescreve sessao atualizada por mensagem mais nova', () => {
   const chat = read('server/lib/chat.js')
-  assert.match(chat, /sessionUpdate = sessionUpdate\.eq\('last_message_at', session\.last_message_at\)/)
+  assert.match(chat, /sessionUpdate = sessionUpdate\.eq\('last_message_at', expectedLastMessageAt\)/)
   assert.match(chat, /staleError\.code = 'PETBOT_STALE_TURN'/)
   assert.match(chat, /if \(error\?\.code === 'PETBOT_STALE_TURN'\) throw error/)
+})
+
+test('confirmacao transacional atualiza o token antes da protecao contra concorrencia', () => {
+  const chat = read('server/lib/chat.js')
+  assert.match(chat, /if \(orderResult\) \{[\s\S]*select\('context, last_message_at'\)/)
+  assert.match(chat, /concurrencySession = sessionAfterTransaction/)
+  assert.match(chat, /expectedLastMessageAt = cleanText\(concurrencySession\.last_message_at\)/)
 })
 
 test('webhook combina mensagens curtas consecutivas antes de chamar o runtime', () => {

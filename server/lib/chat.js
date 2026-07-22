@@ -2396,8 +2396,32 @@ async function respondWithPetbotAgent({
     }
   }
 
+  // The transactional RPC updates chat_sessions.last_message_at itself. Keep
+  // the concurrency token in sync with that intentional write; otherwise the
+  // compare-and-swap below mistakes our own successful commit for a newer
+  // customer message and drops the terminal confirmation with HTTP 409.
+  let concurrencySession = {
+    context: sessionForAgent.context,
+    last_message_at: session.last_message_at,
+  }
+  if (orderResult) {
+    const { data: sessionAfterTransaction, error: sessionRefreshError } = await supabase
+      .from('chat_sessions')
+      .select('context, last_message_at')
+      .eq('id', sessionId)
+      .maybeSingle()
+
+    if (sessionRefreshError || !sessionAfterTransaction) {
+      throw new HttpError(500, 'Unable to refresh PetBot session after order transaction.')
+    }
+    concurrencySession = sessionAfterTransaction
+  }
+
   const botSentAt = new Date().toISOString()
-  const existingContext = parseJsonObject(sessionForAgent.context)
+  const existingContext = {
+    ...parseJsonObject(sessionForAgent.context),
+    ...parseJsonObject(concurrencySession.context),
+  }
   const nextContext = {
     ...existingContext,
     ...(orderResult ? {
@@ -2439,14 +2463,15 @@ async function respondWithPetbotAgent({
     .from('chat_sessions')
     .update(sessionPatch)
     .eq('id', sessionId)
-  if (cleanText(session.last_message_at)) {
-    sessionUpdate = sessionUpdate.eq('last_message_at', session.last_message_at)
+  const expectedLastMessageAt = cleanText(concurrencySession.last_message_at)
+  if (expectedLastMessageAt) {
+    sessionUpdate = sessionUpdate.eq('last_message_at', expectedLastMessageAt)
   }
   const { data: updatedSession, error: sessionUpdateError } = await sessionUpdate
     .select('id, context')
     .maybeSingle()
 
-  if (!sessionUpdateError && !updatedSession && cleanText(session.last_message_at)) {
+  if (!sessionUpdateError && !updatedSession && expectedLastMessageAt) {
     const staleError = new HttpError(409, 'A newer customer message superseded this PetBot turn.')
     staleError.code = 'PETBOT_STALE_TURN'
     throw staleError
