@@ -31,6 +31,7 @@ import {
   analyzeProductDifferentiation,
   buildPetbotAgentV3Prompt,
   normalizeProductQueryFacts,
+  validatePetbotConversationReply,
   validatePetbotOperationalReply,
 } from './petbotGrounding.js'
 
@@ -236,6 +237,15 @@ function normalizePhone(value = '') {
 
 function cleanText(value = '') {
   return String(value || '').trim()
+}
+
+function petbotServiceFactsSignature(facts = {}) {
+  return JSON.stringify({
+    pet_name: normalizeSearchText(facts.pet_name),
+    species: normalizeSearchText(facts.species),
+    breed: normalizeSearchText(facts.breed),
+    weight_kg: Number(facts.weight_kg || 0) || null,
+  })
 }
 
 function appointmentDateIso(row = {}) {
@@ -1481,7 +1491,13 @@ async function respondWithPetbotAgent({
   let liveServices = Array.isArray(services) ? services : []
   let liveAppointments = Array.isArray(appointments) ? appointments : []
   let liveSubscriptionBenefits = []
-  let resolvedServiceThisTurn = null
+  const previousResolvedServiceState = previousAgentContext.resolved_service && typeof previousAgentContext.resolved_service === 'object'
+    ? previousAgentContext.resolved_service
+    : null
+  const currentFactsSignature = petbotServiceFactsSignature(serviceFacts)
+  let resolvedServiceThisTurn = previousResolvedServiceState?.fact_signature === currentFactsSignature
+    ? (previousResolvedServiceState.service || previousResolvedServiceState)
+    : null
 
   const refreshServiceCatalog = async ({ required = false } = {}) => {
     try {
@@ -1524,10 +1540,12 @@ async function respondWithPetbotAgent({
   }
 
   const mergeServiceFactsFromToolArgs = (toolArgs = {}) => {
+    const previousSignature = petbotServiceFactsSignature(serviceFacts)
     serviceFacts = mergeInterpretedPetbotServiceFacts({
       interpretation: toolArgs,
       previousFacts: serviceFacts,
     })
+    if (petbotServiceFactsSignature(serviceFacts) !== previousSignature) resolvedServiceThisTurn = null
     return groundPetbotServiceArgs(toolArgs, serviceFacts)
   }
 
@@ -1598,10 +1616,23 @@ async function respondWithPetbotAgent({
       weight_label: serviceFacts.weight_label,
       weight_estimated: serviceFacts.weight_estimated,
       coat_type: serviceFacts.coat_type,
+      resolved_service: resolvedServiceThisTurn
+        ? {
+          id: resolvedServiceThisTurn.id,
+          product_id: resolvedServiceThisTurn.product_id || null,
+          code: resolvedServiceThisTurn.code,
+          name: resolvedServiceThisTurn.name,
+        }
+        : null,
       intent: cleanText(llmInterpretation?.intent) || null,
-      service_type: cleanText(llmInterpretation?.service_type) || null,
-      service_date: cleanText(llmInterpretation?.service_date) || null,
-      service_time: cleanText(llmInterpretation?.service_preferred_time || llmInterpretation?.service_time_preference) || null,
+      service_type: cleanText(serviceFacts.service_type || llmInterpretation?.service_type) || null,
+      service_date: cleanText(serviceFacts.service_date || llmInterpretation?.service_date) || null,
+      service_time: cleanText(
+        serviceFacts.service_preferred_time
+        || serviceFacts.service_time_preference
+        || llmInterpretation?.service_preferred_time
+        || llmInterpretation?.service_time_preference,
+      ) || null,
       product_kind: cleanText(llmInterpretation?.product_kind) || null,
       age_category: cleanText(llmInterpretation?.age_category) || null,
       brand: cleanText(llmInterpretation?.brand) || null,
@@ -1666,7 +1697,7 @@ async function respondWithPetbotAgent({
     if (name === 'resolve_petshop_service') {
       const groundedArgs = mergeServiceFactsFromToolArgs(args)
       await refreshServiceCatalog({ required: true })
-      const resolution = resolvePetshopService({
+      let resolution = resolvePetshopService({
         serviceQuery: args.service_query || llmInterpretation?.service_type || args.order_type,
         orderType: args.order_type || llmInterpretation?.intent,
         services: liveServices,
@@ -1675,6 +1706,30 @@ async function respondWithPetbotAgent({
         weightKg: groundedArgs.weight_kg,
         coatType: groundedArgs.coat_type,
       })
+      if (resolution.status === 'needs_input') {
+        const satisfied = new Set([
+          ...(cleanText(serviceFacts.breed) ? ['breed'] : []),
+          ...(Number(serviceFacts.weight_kg || 0) > 0 ? ['weight_kg'] : []),
+          ...(cleanText(serviceFacts.species) ? ['species'] : []),
+        ])
+        const missingFields = (resolution.missing_fields || []).filter((field) => !satisfied.has(field))
+        const requiredFields = (resolution.required_fields || []).filter((field) => {
+          const normalized = normalizeSearchText(field)
+          if (satisfied.has('breed') && normalized.includes('raca')) return false
+          if (satisfied.has('weight_kg') && normalized.includes('peso')) return false
+          if (normalized.includes('pelo') || normalized.includes('pelagem')) return false
+          return true
+        })
+        resolution = {
+          ...resolution,
+          missing_fields: missingFields,
+          required_fields: requiredFields,
+          ...(missingFields.length || requiredFields.length ? {} : {
+            status: 'ambiguous',
+            error: resolution.error || 'O catálogo não conseguiu diferenciar o serviço usando os fatos já informados. Não repita perguntas ao cliente.',
+          }),
+        }
+      }
       const subscriptionBenefit = resolution.ok && resolution.status === 'resolved'
         ? findPetshopSubscriptionBenefit(resolution.service, liveSubscriptionBenefits)
         : null
@@ -1703,6 +1758,11 @@ async function respondWithPetbotAgent({
     }
 
     if (name === 'check_petshop_availability') {
+      mergeServiceFactsFromToolArgs({
+        service_date: args.date,
+        service_preferred_time: args.preferred_time,
+        service_time_preference: args.period,
+      })
       const requestedServiceId = cleanText(args.service_id)
       const allowedServiceIds = new Set([
         cleanText(resolvedServiceThisTurn?.id),
@@ -1732,9 +1792,9 @@ async function respondWithPetbotAgent({
       const availability = buildServiceAvailability({
         serviceQuery: args.service_id,
         orderType: args.order_type || llmInterpretation?.intent,
-        date: args.date,
-        preferredTime: args.preferred_time,
-        period: args.period,
+        date: args.date || serviceFacts.service_date,
+        preferredTime: args.preferred_time || serviceFacts.service_preferred_time,
+        period: args.period || serviceFacts.service_time_preference,
         services: liveServices,
         appointments: liveAppointments,
         settings: storeSettings,
@@ -2010,21 +2070,30 @@ async function respondWithPetbotAgent({
     responseFormat: PETBOT_AGENT_REPLY_FORMAT,
     parseReply: parsePetbotAgentReply,
     validateReply: ({ reply: draftReply, toolRuns }) => {
-      const validation = validatePetbotOperationalReply({
+      const operationalValidation = validatePetbotOperationalReply({
         reply: draftReply,
         toolRuns,
         pendingOrder,
         orderResult,
         timezone: storeSettings.petbotTimezone,
       })
-      if (validation.ok) return { ok: true }
+      const conversationValidation = validatePetbotConversationReply({
+        reply: draftReply,
+        facts: serviceFacts,
+      })
+      const problems = [
+        ...(operationalValidation.problems || []),
+        ...(conversationValidation.problems || []),
+      ]
+      if (!problems.length) return { ok: true }
 
       return {
         ok: false,
         instruction: [
-          'A resposta anterior contém dados operacionais que não constam nos resultados confiáveis desta conversa.',
-          `Afirmações inválidas: ${validation.problems.join('; ')}.`,
-          'Reescreva naturalmente. Use somente os dados retornados pelas ferramentas ou faça uma pergunta útil para obter o próximo fato necessário.',
+          'A resposta anterior contradiz os dados confiáveis ou repetiu uma pergunta já respondida.',
+          `Problemas: ${problems.join('; ')}.`,
+          'Reescreva naturalmente usando o estado confiável e os resultados das ferramentas. Pergunte somente um fato que realmente esteja ausente.',
+          'Nunca pergunte tipo de pelo ou pelagem e não peça novamente raça, peso, data ou horário já conhecidos.',
           'Não mencione validações, ferramentas, regras internas ou este aviso.',
         ].join('\n'),
       }
@@ -2076,6 +2145,12 @@ async function respondWithPetbotAgent({
       updatedAt: botSentAt,
       pending_order: pendingOrder,
       facts: serviceFacts,
+      resolved_service: resolvedServiceThisTurn
+        ? {
+          fact_signature: petbotServiceFactsSignature(serviceFacts),
+          service: resolvedServiceThisTurn,
+        }
+        : null,
       last_action: agentResult.recovered ? 'agent_recovery' : (agentResult.toolRuns.at(-1)?.name || 'reply'),
       last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null })),
       needs_human: needsHuman,

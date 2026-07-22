@@ -16,6 +16,7 @@ import {
 import {
   analyzeProductDifferentiation,
   buildPetbotAgentV3Prompt,
+  validatePetbotConversationReply,
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
 import { buildPetbotSearchText, recoverPetbotContextFromHistory } from '../server/lib/petbotContext.js'
@@ -588,4 +589,114 @@ test('falha temporaria do modelo depois de uma ferramenta tenta finalizar o turn
   assert.match(result.reply, /horário/i)
   assert.equal(result.toolRuns.length, 1)
   assert.equal(sequence, 3)
+})
+
+test('pelagem nunca vira pergunta e fica fora das ferramentas conversacionais', () => {
+  const prompt = buildPetbotAgentV3Prompt({
+    storeName: 'Pet Feliz',
+    facts: { breed: 'Shih Tzu', weight_kg: 8, coat_type: 'longo' },
+  })
+  assert.match(prompt, /Nunca pergunte tipo de pelo ou pelagem/i)
+
+  const resolveTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'resolve_petshop_service')
+  const prepareTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'prepare_petshop_order')
+  assert.ok(resolveTool)
+  assert.ok(prepareTool)
+  assert.equal(Object.hasOwn(resolveTool.function.parameters.properties, 'coat_type'), false)
+  assert.equal(Object.hasOwn(prepareTool.function.parameters.properties, 'coat_type'), false)
+
+  const unresolved = resolvePetshopService({
+    serviceQuery: 'banho',
+    orderType: 'banho_tosa',
+    species: 'dog',
+    breed: null,
+    weightKg: 12,
+    services: [
+      {
+        id: 'short', code: 'banho_medio_curto', name: 'Banho 10,1 a 22 kg - Pelo Curto',
+        group_type: 'banho_tosa', default_price: 90, default_duration_min: 60,
+        active: true, species: 'dog', weight_range: { min: 10.1, max: 22 }, coat_type: 'curto',
+      },
+      {
+        id: 'long', code: 'banho_medio_longo', name: 'Banho 10,1 a 22 kg - Pelo Longo',
+        group_type: 'banho_tosa', default_price: 110, default_duration_min: 60,
+        active: true, species: 'dog', weight_range: { min: 10.1, max: 22 }, coat_type: 'longo',
+      },
+    ],
+  })
+
+  assert.equal(unresolved.status, 'needs_input')
+  assert.deepEqual(unresolved.missing_fields, ['breed'])
+  assert.equal(unresolved.required_fields.some((field) => /pelo|pelagem/i.test(field)), false)
+})
+
+test('estado confiavel preserva raca peso data e horario sem pedir confirmacao novamente', () => {
+  const facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_preferred_time: '13:00' },
+    previousFacts: {
+      pet_name: 'Nina',
+      species: 'dog',
+      breed: 'Shih Tzu',
+      weight_kg: 8,
+      weight_label: '8 kg',
+      weight_explicit: true,
+      coat_type: 'longo',
+      coat_type_source: 'breed_catalog',
+      service_type: 'banho',
+      service_date: '2026-07-22',
+    },
+  })
+
+  assert.equal(facts.pet_name, 'Nina')
+  assert.equal(facts.breed, 'Shih Tzu')
+  assert.equal(facts.weight_kg, 8)
+  assert.equal(facts.coat_type, 'longo')
+  assert.equal(facts.service_type, 'banho')
+  assert.equal(facts.service_date, '2026-07-22')
+  assert.equal(facts.service_preferred_time, '13:00')
+
+  const grounded = groundPetbotServiceArgs({
+    breed: null,
+    weight_kg: null,
+  }, facts)
+  assert.equal(grounded.breed, 'Shih Tzu')
+  assert.equal(grounded.weight_kg, 8)
+  assert.equal(grounded.coat_type, 'longo')
+})
+
+
+test('validador impede pergunta de pelagem e repeticao de peso ja informado', () => {
+  const facts = {
+    pet_name: 'Nina',
+    breed: 'Shih Tzu',
+    weight_kg: 8,
+    service_date: '2026-07-22',
+    service_preferred_time: '13:00',
+  }
+
+  const repeatedWeight = validatePetbotConversationReply({
+    reply: 'Você poderia confirmar novamente o peso da Nina?',
+    facts,
+  })
+  assert.equal(repeatedWeight.ok, false)
+  assert.match(repeatedWeight.problems.join(' '), /peso já informado/i)
+
+  const asksCoat = validatePetbotConversationReply({
+    reply: 'Qual é o tipo de pelo dela?',
+    facts,
+  })
+  assert.equal(asksCoat.ok, false)
+  assert.match(asksCoat.problems.join(' '), /pelagem proibida/i)
+
+  const valid = validatePetbotConversationReply({
+    reply: 'Perfeito! Vou verificar a disponibilidade de hoje às 13h.',
+    facts,
+  })
+  assert.equal(valid.ok, true)
+
+  const finalSummary = validatePetbotConversationReply({
+    reply: 'Nina, Shih Tzu, 8 kg, hoje às 13h. Confirma o agendamento?',
+    facts,
+  })
+  assert.equal(finalSummary.ok, true)
 })

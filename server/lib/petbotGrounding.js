@@ -165,6 +165,28 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   }
 }
 
+export function validatePetbotConversationReply({ reply = '', facts = {} } = {}) {
+  const normalized = normalizeCatalogText(reply)
+  const problems = []
+
+  const asksCoat = /\b(?:qual(?: e)? (?:o )?tipo de (?:pelo|pelagem)|qual pelagem|confirma(?:r)?(?: novamente)?(?: o)? tipo de (?:pelo|pelagem))\b/.test(normalized)
+    || /\b(?:informe|informar|diga|dizer|poderia me informar|pode me dizer)\b.{0,45}\b(?:tipo de pelo|pelagem)\b/.test(normalized)
+  const asksWeight = /\b(?:qual(?: e)? (?:o )?peso|quanto (?:ele|ela|o pet|a pet)? ?pesa|confirma(?:r)?(?: novamente)?(?: o)? peso)\b/.test(normalized)
+    || /\b(?:informe|informar|diga|dizer|poderia me informar|pode me dizer)\b.{0,45}\b(?:peso|quantos? kg|quilos?)\b/.test(normalized)
+  const asksBreed = /\b(?:qual(?: e)? (?:a )?raca|confirma(?:r)?(?: novamente)?(?: a)? raca)\b/.test(normalized)
+    || /\b(?:informe|informar|diga|dizer|poderia me informar|pode me dizer)\b.{0,45}\braca\b/.test(normalized)
+  const asksDate = /\b(?:qual(?: e)? (?:a )?data|que dia|confirma(?:r)?(?: novamente)?(?: a)? data)\b/.test(normalized)
+  const asksTime = /\b(?:qual(?: e)? (?:o )?horario|que horas|confirma(?:r)?(?: novamente)?(?: o)? horario)\b/.test(normalized)
+
+  if (asksCoat) problems.push('pergunta de pelagem proibida; a classificação deve vir da raça cadastrada')
+  if (Number(facts.weight_kg || 0) > 0 && asksWeight) problems.push('peso já informado foi solicitado novamente')
+  if (clean(facts.breed) && asksBreed) problems.push('raça já informada foi solicitada novamente')
+  if (clean(facts.service_date) && asksDate) problems.push('data já informada foi solicitada novamente')
+  if (clean(facts.service_preferred_time) && asksTime) problems.push('horário já informado foi solicitado novamente')
+
+  return { ok: problems.length === 0, problems }
+}
+
 function productDimension(product = {}) {
   const metadata = classifyProduct(product)
   return {
@@ -235,14 +257,17 @@ export function buildPetbotAgentV3Prompt({
     '- Nunca afirme preço, estoque, serviço exato, duração, data ou horário sem um resultado de ferramenta no turno atual ou um pedido pendente validado.',
     '- Para produtos, pesquise o catálogo. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
+    '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
+    '- Para banho/tosa, os únicos fatos de classificação que podem ser solicitados ao cliente são raça e peso aproximado. Se ambos já estiverem no estado confiável, não os pergunte nem peça confirmação novamente.',
     '- Campo ausente, serviço ambíguo ou tentativa de consultar a agenda cedo demais não são motivo para transferir o atendimento: use o retorno da ferramenta para fazer a próxima pergunta útil.',
     '- Transfira para humano somente quando o cliente pedir, houver risco veterinário ou uma falha operacional persistente impedir qualquer continuação segura.',
     '- Use dados salvos do cliente e do pet quando forem relevantes e não houver sinal de mudança. Não repita perguntas já respondidas; confirme apenas quando houver ambiguidade real ou mais de um pet possível.',
+    '- O bloco Estado confiável da conversa tem prioridade sobre argumentos nulos ou incompletos gerados durante chamadas de ferramenta.',
     '- Se o cliente tiver benefício de plano disponível, trate-o como dado operacional: aplique somente quando a ferramenta indicar e explique naturalmente no resumo, sem prometer benefício por conta própria.',
     '- Não deduza peso, estoque, preço, política comercial nem disponibilidade. Raça e peso são fatos interpretados da conversa; classificação e faixa são resolvidas pelo catálogo.',
     '- Não exponha JSON, IDs, nomes de ferramentas, regras internas ou mensagens de validação.',
     '- Não diga que vai consultar nem peça para aguardar: chame a ferramenta silenciosamente e responda com o resultado.',
-    '- Para banho/tosa, trate transporte como opcional. Se o cliente demonstrar interesse em buscar/levar o pet, consulte as opções configuradas antes de citar modalidade ou taxa.',
+    '- Para banho/tosa, trate transporte como opcional. Só consulte ou mencione transporte quando o cliente perguntar ou demonstrar interesse; não ofereça modalidades durante a coleta de raça, peso, data ou horário.',
     '- Prepare um pedido somente quando os dados necessários estiverem completos. Confirme somente um pedido pendente de turno anterior após concordância inequívoca do cliente.',
     '- Se o cliente desistir, cancelar ou pedir para recomeçar depois de um resumo, descarte o pedido pendente com a ferramenta apropriada antes de continuar.',
     '- Em caso de risco veterinário, falha operacional sem alternativa ou pedido explícito por pessoa, transfira para humano.',

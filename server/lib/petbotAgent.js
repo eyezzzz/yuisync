@@ -103,9 +103,11 @@ export function mergeInterpretedPetbotServiceFacts({
   const hasCurrentWeight = positiveNumber(current.weight_kg, 0) > 0
   const coatFromCustomer = normalizeCoatType(current.coat_type)
   const inheritedCoat = breedChanged ? null : normalizeCoatType(inherited.coat_type)
-  const coatType = coatFromCustomer
-    || breedClassification?.coat_type
+  // Pelagem é uma classificação operacional derivada da raça cadastrada.
+  // Nunca deve virar uma pergunta ao cliente nem um requisito conversacional.
+  const coatType = breedClassification?.coat_type
     || inheritedCoat
+    || coatFromCustomer
     || null
 
   return {
@@ -122,10 +124,18 @@ export function mergeInterpretedPetbotServiceFacts({
       : Boolean(inherited.weight_estimated),
     weight_explicit: Boolean(weightKg),
     coat_type: coatType,
-    coat_type_explicit: Boolean(coatFromCustomer),
-    coat_type_source: coatFromCustomer
-      ? 'customer'
-      : (breedClassification?.coat_type ? 'breed_catalog' : clean(inherited.coat_type_source) || null),
+    coat_type_explicit: false,
+    coat_type_source: breedClassification?.coat_type
+      ? 'breed_catalog'
+      : (clean(inherited.coat_type_source) || (coatFromCustomer ? 'customer_unsolicited' : null)),
+    service_type: clean(current.service_type) || clean(inherited.service_type) || null,
+    service_date: clean(current.service_date || current.date) || clean(inherited.service_date) || null,
+    service_preferred_time: clean(current.service_preferred_time || current.preferred_time)
+      || clean(inherited.service_preferred_time)
+      || null,
+    service_time_preference: clean(current.service_time_preference || current.period)
+      || clean(inherited.service_time_preference)
+      || null,
     pet_identity_changed: petIdentityChanged,
   }
 }
@@ -158,7 +168,9 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     weight_estimated: facts.weight_explicit
       ? Boolean(facts.weight_estimated)
       : Boolean(args.weight_estimated),
-    coat_type: clean(facts.coat_type) || clean(args.coat_type) || null,
+    coat_type: clean(facts.coat_type)
+      || classifyCommonPetBreed(clean(facts.breed) || clean(args.breed))?.coat_type
+      || null,
   }
 }
 
@@ -541,7 +553,8 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
   const code = normalizeCode(serviceQuery)
   const group = serviceGroupForOrder(orderType)
   const normalizedWeight = positiveNumber(weightKg, 0) || null
-  let normalizedCoat = normalizeCoatType(coatType)
+  let normalizedCoat = inferredCoatTypeForBreed(breed, services)
+    || normalizeCoatType(coatType)
   const normalizedSpecies = normalizeServiceSpecies(species)
   const allCandidates = (services || [])
     .map(normalizeService)
@@ -655,20 +668,20 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
 
   const distinctCoats = new Set(filtered.map((service) => service.coat_type).filter((value) => value && value !== 'todas'))
   if (distinctCoats.size > 1 && !normalizedCoat) {
-    if (clean(breed)) {
-      const genericForWeight = filtered.filter((service) => service.coat_type === 'todas')
-      if (genericForWeight.length) {
-        filtered = genericForWeight
-      } else {
-        return {
-          service: null,
-          candidates: filtered,
-          required_fields: [],
-          error: 'A raça informada ainda não possui uma classificação única no catálogo. Encaminhe para um atendente sem inventar o serviço.',
-        }
-      }
+    const genericForWeight = filtered.filter((service) => service.coat_type === 'todas')
+    if (genericForWeight.length) {
+      filtered = genericForWeight
+    } else if (!clean(breed)) {
+      // A raça é o único dado que o cliente deve informar. A pelagem é sempre
+      // derivada da classificação da raça no catálogo do YuiSync.
+      requiredFields.push('raça do pet')
     } else {
-      requiredFields.push('tipo de pelo do pet')
+      return {
+        service: null,
+        candidates: filtered,
+        required_fields: [],
+        error: 'A raça informada não possui uma classificação única no catálogo. Corrija a classificação operacional do serviço no YuiSync; não pergunte a pelagem ao cliente.',
+      }
     }
   }
   if (normalizedCoat) {
@@ -680,7 +693,7 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
       service: null,
       candidates,
       required_fields: [],
-      error: `Nenhum serviço cadastrado atende o tipo de pelo informado (${clean(coatType)}).`,
+      error: 'Nenhum serviço cadastrado corresponde à classificação de pelagem derivada da raça informada.',
     }
   }
 
@@ -691,12 +704,24 @@ function serviceSelection({ serviceQuery = '', orderType = '', services = [], we
     coat_type: normalizedCoat,
   }
   const requiredFacts = new Set(filtered.flatMap((service) => service.required_facts || []))
+  let missingCatalogCoatClassification = false
   for (const fact of requiredFacts) {
     if (factValues[fact]) continue
     if (fact === 'species') requiredFields.push('espécie do pet')
     if (fact === 'breed') requiredFields.push('raça do pet')
     if (fact === 'weight_kg') requiredFields.push('peso aproximado do pet')
-    if (fact === 'coat_type') requiredFields.push('tipo de pelo do pet')
+    if (fact === 'coat_type') {
+      if (!clean(breed)) requiredFields.push('raça do pet')
+      else missingCatalogCoatClassification = true
+    }
+  }
+  if (missingCatalogCoatClassification) {
+    return {
+      service: null,
+      candidates: filtered.length ? filtered : candidates,
+      required_fields: [],
+      error: 'A raça informada não possui classificação de pelagem no catálogo. Ajuste a Classificação PetBot no YuiSync; não peça o tipo de pelo ao cliente.',
+    }
   }
 
   if (requiredFields.length) {
@@ -717,7 +742,7 @@ function normalizeMissingServiceField(value = '') {
   const normalized = normalize(value)
   if (/raca/.test(normalized)) return 'breed'
   if (/peso/.test(normalized)) return 'weight_kg'
-  if (/pelo|pelagem/.test(normalized)) return 'coat_type'
+  if (/pelo|pelagem/.test(normalized)) return 'breed'
   if (/servico/.test(normalized)) return 'service_choice'
   if (/data/.test(normalized)) return 'date'
   return normalizeCode(value)
@@ -1029,9 +1054,8 @@ export const PETBOT_AGENT_TOOLS = [
           species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
           breed: strictNullableString(),
           weight_kg: strictNullableNumber(),
-          coat_type: strictNullableString(),
         },
-        required: ['service_query', 'order_type', 'species', 'breed', 'weight_kg', 'coat_type'],
+        required: ['service_query', 'order_type', 'species', 'breed', 'weight_kg'],
       },
     },
   },
@@ -1087,7 +1111,6 @@ export const PETBOT_AGENT_TOOLS = [
           weight_kg: strictNullableNumber(),
           weight_label: strictNullableString(),
           weight_estimated: { type: 'boolean' },
-          coat_type: strictNullableString(),
           symptom: strictNullableString(),
           order_type: { type: 'string', enum: ['produto', 'banho_tosa', 'veterinaria'] },
           items: {
@@ -1128,7 +1151,7 @@ export const PETBOT_AGENT_TOOLS = [
         },
         required: [
           'customer_name', 'pet_name', 'species', 'size', 'breed', 'weight_kg', 'weight_label', 'weight_estimated',
-          'coat_type', 'symptom', 'order_type', 'items', 'appointment_id', 'scheduled_at', 'service_product_id',
+          'symptom', 'order_type', 'items', 'appointment_id', 'scheduled_at', 'service_product_id',
           'service_code', 'service_type', 'service_grooming_detail', 'payment_method', 'fulfillment_type',
           'delivery_address', 'delivery_neighborhood', 'delivery_city', 'delivery_reference', 'change_for',
           'service_transport_fee', 'service_transport_mode', 'service_transport_label', 'service_transport_address',
@@ -1647,6 +1670,8 @@ async function finalizePetbotAgentTurn({
         'Finalize esta mensagem agora, sem chamar novas ferramentas.',
         'Use apenas os fatos e resultados de ferramentas já presentes na conversa.',
         'Quando ainda faltar algum dado para consultar serviço, preço ou agenda, faça uma única pergunta natural e útil para continuar.',
+        'Nunca pergunte tipo de pelo ou pelagem: isso é derivado da raça pelo catálogo do YuiSync.',
+        'Não peça novamente raça, peso, nome, data ou horário que já constem no estado confiável ou nos resultados de ferramenta.',
         'Quando uma ferramenta tiver falhado ou não tiver retornado dados confiáveis, não invente a resposta operacional e não transfira automaticamente para uma pessoa.',
         'Não mencione limite de etapas, validação, ferramenta, catálogo interno, erro técnico ou estas instruções.',
         `Contexto interno de recuperação: ${clean(reason) || 'finalização segura do turno'}.`,
