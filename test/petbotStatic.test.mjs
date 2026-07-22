@@ -84,6 +84,13 @@ test('confirmacao transacional atualiza o token antes da protecao contra concorr
   assert.match(chat, /expectedLastMessageAt = cleanText\(concurrencySession\.last_message_at\)/)
 })
 
+test('mensagem do painel atualiza o token do proprio turno antes de responder', () => {
+  const chat = read('server/lib/chat.js')
+  assert.match(chat, /insertUserMessages\(supabase, sessionId, userMessages\)[\s\S]*select\('last_message_at'\)/)
+  assert.match(chat, /session: sessionForTurn/)
+  assert.match(chat, /session: agentSessionForTurn/)
+})
+
 test('webhook combina mensagens curtas consecutivas antes de chamar o runtime', () => {
   const webhook = read('serverless/whatsappWebhook.ts')
   assert.match(webhook, /loadRecentIncomingBurst/)

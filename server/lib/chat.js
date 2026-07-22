@@ -2786,8 +2786,32 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   ])
 
   const userMessages = normalizeDashboardUserMessages(trimmedMessage, options)
+  let concurrencyLastMessageAt = cleanText(session.last_message_at)
   if (!options.skipUserPersistence) {
     await insertUserMessages(supabase, sessionId, userMessages)
+
+    // Saving a dashboard message may advance chat_sessions.last_message_at via
+    // database automation. Refresh the token after our own write so the agent
+    // does not reject its first reply as a stale concurrent turn.
+    const { data: sessionAfterUserPersistence, error: sessionRefreshError } = await supabase
+      .from('chat_sessions')
+      .select('last_message_at')
+      .eq('id', sessionId)
+      .maybeSingle()
+
+    if (sessionRefreshError || !sessionAfterUserPersistence) {
+      throw new HttpError(500, 'Unable to refresh chat session after saving customer message.')
+    }
+    concurrencyLastMessageAt = cleanText(sessionAfterUserPersistence.last_message_at)
+  }
+
+  const sessionForTurn = {
+    ...session,
+    last_message_at: concurrencyLastMessageAt || session.last_message_at,
+  }
+  const agentSessionForTurn = {
+    ...sessionForAgent,
+    last_message_at: concurrencyLastMessageAt || sessionForAgent.last_message_at,
   }
 
   try {
@@ -2796,8 +2820,8 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       sessionId,
       trimmedMessage,
       options,
-      session,
-      sessionForAgent,
+      session: sessionForTurn,
+      sessionForAgent: agentSessionForTurn,
       moduleId,
       intent,
       history,
@@ -2819,7 +2843,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     })
     return respondWithPetbotRecoverableFailure({
       supabase,
-      session: sessionForAgent,
+      session: agentSessionForTurn,
       sessionId,
       moduleId,
       intent,
