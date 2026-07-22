@@ -33,6 +33,17 @@ function clean(value = '') {
   return String(value ?? '').trim()
 }
 
+function objectValue(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
 function normalize(value = '') {
   return clean(value)
     .normalize('NFD')
@@ -85,24 +96,27 @@ export function mergeInterpretedPetbotServiceFacts({
     currentBreed && previousBreed
     && normalizePetbotBreedText(currentBreed) !== normalizePetbotBreedText(previousBreed),
   )
-  const inherited = petIdentityChanged ? {} : previous
+  // Changing the pet invalidates only pet-specific facts. Scheduling facts
+  // such as date, time and requested service still belong to the active
+  // conversation and must not disappear when the customer corrects the name.
+  const inheritedPet = petIdentityChanged ? {} : previous
 
-  const petName = currentPetName || clean(inherited.pet_name) || null
-  const breed = currentBreed || clean(inherited.breed) || null
+  const petName = currentPetName || clean(inheritedPet.pet_name) || null
+  const breed = currentBreed || clean(inheritedPet.breed) || null
   const breedClassification = classifyCommonPetBreed(breed)
   const species = currentSpecies
     || breedClassification?.species
-    || clean(inherited.species)
+    || clean(inheritedPet.species)
     || null
   const weightKg = positiveNumber(current.weight_kg, 0)
-    || positiveNumber(inherited.weight_kg, 0)
+    || positiveNumber(inheritedPet.weight_kg, 0)
     || null
   const weightLabel = clean(current.weight_label)
-    || clean(inherited.weight_label)
+    || clean(inheritedPet.weight_label)
     || (weightKg ? `${formatWeightValue(weightKg)} kg` : null)
   const hasCurrentWeight = positiveNumber(current.weight_kg, 0) > 0
   const coatFromCustomer = normalizeCoatType(current.coat_type)
-  const inheritedCoat = breedChanged ? null : normalizeCoatType(inherited.coat_type)
+  const inheritedCoat = breedChanged ? null : normalizeCoatType(inheritedPet.coat_type)
   // Pelagem é uma classificação operacional derivada da raça cadastrada.
   // Nunca deve virar uma pergunta ao cliente nem um requisito conversacional.
   const coatType = breedClassification?.coat_type
@@ -121,20 +135,20 @@ export function mergeInterpretedPetbotServiceFacts({
     weight_label: weightLabel,
     weight_estimated: hasCurrentWeight
       ? Boolean(current.weight_estimated)
-      : Boolean(inherited.weight_estimated),
+      : Boolean(inheritedPet.weight_estimated),
     weight_explicit: Boolean(weightKg),
     coat_type: coatType,
     coat_type_explicit: false,
     coat_type_source: breedClassification?.coat_type
       ? 'breed_catalog'
-      : (clean(inherited.coat_type_source) || (coatFromCustomer ? 'customer_unsolicited' : null)),
-    service_type: clean(current.service_type) || clean(inherited.service_type) || null,
-    service_date: clean(current.service_date || current.date) || clean(inherited.service_date) || null,
+      : (clean(inheritedPet.coat_type_source) || (coatFromCustomer ? 'customer_unsolicited' : null)),
+    service_type: clean(current.service_type) || clean(previous.service_type) || null,
+    service_date: clean(current.service_date || current.date) || clean(previous.service_date) || null,
     service_preferred_time: clean(current.service_preferred_time || current.preferred_time)
-      || clean(inherited.service_preferred_time)
+      || clean(previous.service_preferred_time)
       || null,
     service_time_preference: clean(current.service_time_preference || current.period)
-      || clean(inherited.service_time_preference)
+      || clean(previous.service_time_preference)
       || null,
     pet_identity_changed: petIdentityChanged,
   }
@@ -220,6 +234,80 @@ export function normalizePetbotSchedulingSettings(settings = {}) {
   return { timezone, slotIntervalMin, leadTimeMin, capacity, businessHours }
 }
 
+const WEEKDAY_BY_NAME = new Map([
+  ['segunda', 1], ['segunda feira', 1],
+  ['terca', 2], ['terca feira', 2],
+  ['quarta', 3], ['quarta feira', 3],
+  ['quinta', 4], ['quinta feira', 4],
+  ['sexta', 5], ['sexta feira', 5],
+  ['sabado', 6],
+  ['domingo', 7],
+])
+
+/**
+ * Converts natural scheduling dates into the ISO date expected by the agenda.
+ * The LLM may extract the customer's original wording ("hoje", "amanhã",
+ * "sexta"), but operational code must never depend on the model converting it.
+ */
+export function normalizePetbotRequestedDate(value = '', {
+  timezone = DEFAULT_TIMEZONE,
+  now = new Date(),
+} = {}) {
+  const raw = clean(value)
+  if (!raw) return null
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const parsed = DateTime.fromISO(raw, { zone: timezone })
+    return parsed.isValid ? parsed.toISODate() : null
+  }
+
+  const normalized = normalize(raw)
+    .replace(/[.,]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  const current = DateTime.fromJSDate(now).setZone(timezone).startOf('day')
+
+  if (normalized === 'hoje') return current.toISODate()
+  if (normalized === 'amanha') return current.plus({ days: 1 }).toISODate()
+  if (normalized === 'depois de amanha') return current.plus({ days: 2 }).toISODate()
+
+  const numeric = normalized.match(/^(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?$/)
+  if (numeric) {
+    let year = numeric[3] ? Number(numeric[3]) : current.year
+    if (year < 100) year += 2000
+    let candidate = DateTime.fromObject({
+      year,
+      month: Number(numeric[2]),
+      day: Number(numeric[1]),
+    }, { zone: timezone })
+    if (!numeric[3] && candidate.isValid && candidate < current) {
+      candidate = candidate.plus({ years: 1 })
+    }
+    return candidate.isValid ? candidate.toISODate() : null
+  }
+
+  const requestedWeekday = WEEKDAY_BY_NAME.get(normalized.replace(/^proxima\s+/, ''))
+  if (requestedWeekday) {
+    const forceNextWeek = /^proxima\s+/.test(normalized)
+    let daysAhead = (requestedWeekday - current.weekday + 7) % 7
+    if (forceNextWeek || daysAhead === 0) daysAhead += 7
+    return current.plus({ days: daysAhead }).toISODate()
+  }
+
+  const parsed = DateTime.fromISO(raw, { setZone: true })
+  return parsed.isValid ? parsed.setZone(timezone).toISODate() : null
+}
+
+export function normalizePetbotRequestedTime(value = '') {
+  const raw = normalize(value).replace(/\s+/g, '')
+  if (!raw) return null
+  const match = raw.match(/^(?:as)?(\d{1,2})(?:[:h](\d{2}))?h?$/)
+  if (!match) return null
+  const hour = Number(match[1])
+  const minute = Number(match[2] || 0)
+  if (hour < 0 || hour > 23 || minute < 0 || minute > 59) return null
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
+}
+
 function serviceGroupForOrder(orderType = '') {
   return clean(orderType) === 'veterinaria' ? 'veterinaria' : 'banho_tosa'
 }
@@ -288,9 +376,7 @@ function catalogServiceCode(productId = '') {
 }
 
 export function isServiceCatalogProduct(product = {}) {
-  const metadata = product?.bot_metadata && typeof product.bot_metadata === 'object'
-    ? product.bot_metadata
-    : {}
+  const metadata = objectValue(product?.bot_metadata)
   const name = normalize(product.name)
   const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
 
@@ -306,9 +392,7 @@ export function serviceFromCatalogProduct(product = {}) {
   if (!isServiceCatalogProduct(product) || product.active === false) return null
   const code = catalogServiceCode(product.id)
   const name = clean(product.name)
-  const metadata = product?.bot_metadata && typeof product.bot_metadata === 'object'
-    ? product.bot_metadata
-    : {}
+  const metadata = objectValue(product?.bot_metadata)
   if (!code || !name || Number(product.price || 0) <= 0) return null
 
   return {
@@ -1268,7 +1352,35 @@ export function buildServiceAvailability({
     }
   }
 
-  const resolved = resolvePetshopService({ serviceQuery, orderType, services, weightKg, coatType, breed, species })
+  // Availability receives an exact service identifier after catalog resolution.
+  // Requiring breed/weight a second time here made the agenda forget facts that
+  // were already validated and caused infinite confirmation loops. When
+  // classification is not required, trust only an active exact identifier from
+  // the requested operational group; otherwise perform the full resolver.
+  const requestedGroup = serviceGroupForOrder(orderType)
+  const exactService = !requireServiceClassification
+    ? (services || [])
+      .map(normalizeService)
+      .find((candidate) => (
+        candidate.active
+        && candidate.group_type === requestedGroup
+        && (
+          clean(candidate.id) === clean(serviceQuery)
+          || clean(candidate.source_product_id) === clean(serviceQuery)
+        )
+      ))
+    : null
+  const resolved = exactService
+    ? {
+      ok: true,
+      status: 'resolved',
+      service: publicService(exactService),
+      missing_fields: [],
+      required_fields: [],
+      candidates: [publicService(exactService)],
+      available_services: [publicService(exactService)],
+    }
+    : resolvePetshopService({ serviceQuery, orderType, services, weightKg, coatType, breed, species })
   if (!resolved.ok) return resolved
   const resolvedId = clean(resolved.service.id)
   const resolvedCode = normalizeCode(resolved.service.code)
@@ -1283,7 +1395,11 @@ export function buildServiceAvailability({
     return { ok: false, status: 'invalid_catalog', error: 'service_without_price', service: publicService(service) }
   }
 
-  const requestedDate = clean(date)
+  const schedule = normalizePetbotSchedulingSettings(settings)
+  const requestedDate = normalizePetbotRequestedDate(date, {
+    timezone: schedule.timezone,
+    now,
+  }) || clean(date)
   if (!requestedDate) {
     return { ok: false, status: 'needs_input', missing_fields: ['date'], required_fields: ['data do agendamento'], candidates: [publicService(service)], available_services: [publicService(service)], service: publicService(service) }
   }
@@ -1291,12 +1407,12 @@ export function buildServiceAvailability({
     return { ok: false, status: 'invalid_input', error: 'invalid_date', service: publicService(service) }
   }
 
-  const schedule = normalizePetbotSchedulingSettings(settings)
   const day = DateTime.fromISO(requestedDate, { zone: schedule.timezone })
   if (!day.isValid) return { ok: false, status: 'invalid_input', error: 'invalid_date', service: publicService(service) }
 
-  const requestedMinutes = preferredTime ? parseTimeMinutes(preferredTime) : null
-  if (preferredTime && requestedMinutes === null) {
+  const requestedTime = normalizePetbotRequestedTime(preferredTime) || clean(preferredTime)
+  const requestedMinutes = requestedTime ? parseTimeMinutes(requestedTime) : null
+  if (requestedTime && requestedMinutes === null) {
     return { ok: false, status: 'invalid_input', error: 'invalid_time', service: publicService(service) }
   }
 
@@ -1413,6 +1529,169 @@ export function buildServiceAvailability({
       duration_min: slot.duration_min,
       capacity_remaining: slot.capacity_remaining,
     })),
+  }
+}
+
+/**
+ * Preloads the read-only operational facts for service conversations.
+ *
+ * The model remains responsible for interpreting and wording the dialogue,
+ * while catalog and schedule resolution happen deterministically before the
+ * model can lose a fact or enter an unnecessary tool loop.
+ */
+export function buildPetbotOperationalPreflight({
+  facts = {},
+  orderType = '',
+  services = [],
+  appointments = [],
+  subscriptionBenefits = [],
+  settings = {},
+  now = new Date(),
+  agendaAvailable = true,
+} = {}) {
+  const normalizedOrderType = clean(orderType) === 'veterinaria' ? 'veterinaria' : 'banho_tosa'
+  const schedule = normalizePetbotSchedulingSettings(settings)
+  const groundedFacts = mergeInterpretedPetbotServiceFacts({
+    interpretation: facts,
+    previousFacts: facts,
+  })
+  const normalizedFacts = {
+    ...facts,
+    ...groundedFacts,
+    service_date: normalizePetbotRequestedDate(facts.service_date, {
+      timezone: schedule.timezone,
+      now,
+    }) || clean(facts.service_date) || null,
+    service_preferred_time: normalizePetbotRequestedTime(facts.service_preferred_time)
+      || clean(facts.service_preferred_time)
+      || null,
+  }
+  const serviceQuery = clean(normalizedFacts.service_type)
+    || (normalizedOrderType === 'veterinaria' ? 'consulta veterinaria' : 'banho')
+  const resolution = resolvePetshopService({
+    serviceQuery,
+    orderType: normalizedOrderType,
+    services,
+    species: normalizedFacts.species,
+    breed: normalizedFacts.breed,
+    weightKg: normalizedFacts.weight_kg,
+    coatType: normalizedFacts.coat_type,
+  })
+  const subscriptionBenefit = resolution.ok && resolution.status === 'resolved'
+    ? findPetshopSubscriptionBenefit(resolution.service, subscriptionBenefits)
+    : null
+  const resolvedService = resolution.ok && resolution.status === 'resolved'
+    ? {
+      ...resolution.service,
+      regular_price: Number(resolution.service.price || 0),
+      price: subscriptionBenefit ? 0 : Number(resolution.service.price || 0),
+      subscription_benefit: subscriptionBenefit,
+    }
+    : null
+  const resolutionResult = {
+    action: 'resolve_petshop_service',
+    ...resolution,
+    source: 'server_preflight',
+    next_action: resolution.status === 'resolved'
+      ? 'check_availability_when_date_is_known'
+      : resolution.status === 'needs_input'
+        ? 'ask_missing_fields'
+        : 'explain_catalog_issue_without_inventing',
+    ...(resolvedService ? {
+      service: resolvedService,
+      candidates: [resolvedService],
+      available_services: [resolvedService],
+    } : {}),
+  }
+  const toolRuns = [{
+    name: 'resolve_petshop_service',
+    ok: resolution.ok !== false,
+    status: resolution.status || null,
+    duration_ms: 0,
+    preloaded: true,
+    result: resolutionResult,
+  }]
+
+  let availability = null
+  if (resolvedService && /^\d{4}-\d{2}-\d{2}$/.test(clean(normalizedFacts.service_date)) && !agendaAvailable) {
+    availability = {
+      ok: false,
+      status: 'temporarily_unavailable',
+      source: 'server_preflight',
+      error_code: 'agenda_refresh_failed',
+      service: resolvedService,
+      available_slots: [],
+      next_action: 'offer_to_retry_schedule_without_repeating_customer_facts',
+    }
+    toolRuns.push({
+      name: 'check_petshop_availability',
+      ok: false,
+      status: availability.status,
+      duration_ms: 0,
+      preloaded: true,
+      result: availability,
+    })
+  } else if (resolvedService && /^\d{4}-\d{2}-\d{2}$/.test(clean(normalizedFacts.service_date))) {
+    const rawAvailability = buildServiceAvailability({
+      serviceQuery: resolvedService.id || resolvedService.code,
+      orderType: normalizedOrderType,
+      species: normalizedFacts.species,
+      breed: normalizedFacts.breed,
+      weightKg: normalizedFacts.weight_kg,
+      coatType: normalizedFacts.coat_type,
+      date: normalizedFacts.service_date,
+      preferredTime: normalizePetbotRequestedTime(normalizedFacts.service_preferred_time),
+      period: normalizedFacts.service_time_preference,
+      services,
+      appointments,
+      settings,
+      now,
+      requirePetIdentity: false,
+      requireServiceClassification: false,
+    })
+    availability = {
+      ...rawAvailability,
+      source: 'server_preflight',
+      next_action: rawAvailability?.status === 'available'
+        ? 'answer_with_validated_availability'
+        : rawAvailability?.status === 'unavailable'
+          ? 'offer_validated_alternatives_or_ask_another_date'
+          : 'ask_missing_schedule_fact',
+      ...(rawAvailability?.service ? {
+        service: {
+          ...rawAvailability.service,
+          regular_price: Number(rawAvailability.service.price || resolvedService.regular_price || 0),
+          price: subscriptionBenefit ? 0 : Number(rawAvailability.service.price || 0),
+          subscription_benefit: subscriptionBenefit,
+        },
+      } : {}),
+      available_slots: (rawAvailability?.available_slots || []).map((slot) => ({
+        ...slot,
+        regular_price: Number(slot.price || resolvedService.regular_price || 0),
+        price: subscriptionBenefit ? 0 : Number(slot.price || 0),
+        subscription_benefit: subscriptionBenefit,
+      })),
+    }
+    toolRuns.push({
+      name: 'check_petshop_availability',
+      ok: availability.ok !== false,
+      status: availability.status || null,
+      duration_ms: 0,
+      preloaded: true,
+      result: availability,
+    })
+  }
+
+  return {
+    facts: normalizedFacts,
+    resolvedService,
+    resolution: resolutionResult,
+    availability,
+    toolRuns,
+    context: {
+      service_resolution: resolutionResult,
+      availability,
+    },
   }
 }
 
@@ -1772,6 +2051,8 @@ export async function runPetbotAgent({
   validateReply = null,
   responseFormat = null,
   parseReply = null,
+  initialToolRuns = [],
+  fallbackReply = null,
 } = {}) {
   if (typeof callModel !== 'function') throw new TypeError('callModel is required')
   if (typeof executeTool !== 'function') throw new TypeError('executeTool is required')
@@ -1781,12 +2062,57 @@ export async function runPetbotAgent({
     ...normalizeHistory(history),
     { role: 'user', content: clean(message) },
   ]
-  const toolRuns = []
+  const toolRuns = (Array.isArray(initialToolRuns) ? initialToolRuns : []).map((run) => ({ ...run }))
   let tokensUsed = 0
   let validationRetries = 0
   const repeatedToolCalls = new Map()
   let forcedRecoveryReason = null
   const startedAt = Date.now()
+
+  const useFallbackReply = async (reason, error = null) => {
+    if (typeof fallbackReply !== 'function') return null
+    const reply = clean(await fallbackReply({
+      reason: clean(reason),
+      error,
+      toolRuns,
+      messages,
+    }))
+    if (!reply) return null
+    return {
+      reply,
+      toolRuns,
+      tokensUsed,
+      messages,
+      validationRetries,
+      steps: toolRuns.length,
+      recovered: true,
+      recoveryReason: clean(reason) || 'local_fallback',
+      durationMs: Date.now() - startedAt,
+    }
+  }
+
+  const finalizeOrFallback = async (reason) => {
+    try {
+      return await finalizePetbotAgentTurn({
+        model,
+        temperature,
+        messages,
+        callModel,
+        validateReply,
+        responseFormat,
+        parseReply,
+        toolRuns,
+        tokensUsed,
+        validationRetries,
+        startedAt,
+        reason,
+      })
+    } catch (error) {
+      const fallback = await useFallbackReply(reason, error)
+      if (fallback) return fallback
+      throw error
+    }
+  }
 
   for (let step = 0; step < Math.max(1, maxSteps); step += 1) {
     let response
@@ -1802,21 +2128,13 @@ export async function runPetbotAgent({
         ...(responseFormat ? { response_format: responseFormat } : {}),
       })
     } catch (error) {
-      if (!toolRuns.length) throw error
-      return finalizePetbotAgentTurn({
-        model,
-        temperature,
-        messages,
-        callModel,
-        validateReply,
-        responseFormat,
-        parseReply,
-        toolRuns,
-        tokensUsed,
-        validationRetries,
-        startedAt,
-        reason: `instabilidade do modelo após consulta operacional: ${error instanceof Error ? error.message : String(error)}`,
-      })
+      const reason = `instabilidade do modelo${toolRuns.length ? ' após consulta operacional' : ''}: ${error instanceof Error ? error.message : String(error)}`
+      if (!toolRuns.length) {
+        const fallback = await useFallbackReply(reason, error)
+        if (fallback) return fallback
+        throw error
+      }
+      return finalizeOrFallback(reason)
     }
     tokensUsed += Number(response?.usage?.total_tokens || 0)
 
@@ -1832,20 +2150,7 @@ export async function runPetbotAgent({
 
     if (!toolCalls.length) {
       if (!content) {
-        return finalizePetbotAgentTurn({
-          model,
-          temperature,
-          messages,
-          callModel,
-          validateReply,
-          responseFormat,
-          parseReply,
-          toolRuns,
-          tokensUsed,
-          validationRetries,
-          startedAt,
-          reason: 'resposta vazia antes da conclusão do turno',
-        })
+        return finalizeOrFallback('resposta vazia antes da conclusão do turno')
       }
       if (typeof validateReply === 'function') {
         const validation = await validateReply({
@@ -1855,24 +2160,10 @@ export async function runPetbotAgent({
         })
         if (validation?.ok === false) {
           if (step >= Math.max(1, maxSteps) - 1) {
-            return finalizePetbotAgentTurn({
-              model,
-              temperature,
-              messages: [
-                ...messages,
-                { role: 'assistant', content: rawContent || content },
-                { role: 'system', content: clean(validation.instruction) },
-              ],
-              callModel,
-              validateReply,
-              responseFormat,
-              parseReply,
-              toolRuns,
-              tokensUsed,
-              validationRetries: validationRetries + 1,
-              startedAt,
-              reason: validation.error || `resposta operacional inválida: ${(validation.problems || []).join('; ')}`,
-            })
+            messages.push({ role: 'assistant', content: rawContent || content })
+            messages.push({ role: 'system', content: clean(validation.instruction) })
+            validationRetries += 1
+            return finalizeOrFallback(validation.error || `resposta operacional inválida: ${(validation.problems || []).join('; ')}`)
           }
           validationRetries += 1
           messages.push({ role: 'assistant', content })
@@ -1933,35 +2224,9 @@ export async function runPetbotAgent({
     }
 
     if (forcedRecoveryReason) {
-      return finalizePetbotAgentTurn({
-        model,
-        temperature,
-        messages,
-        callModel,
-        validateReply,
-        responseFormat,
-        parseReply,
-        toolRuns,
-        tokensUsed,
-        validationRetries,
-        startedAt,
-        reason: forcedRecoveryReason,
-      })
+      return finalizeOrFallback(forcedRecoveryReason)
     }
   }
 
-  return finalizePetbotAgentTurn({
-    model,
-    temperature,
-    messages,
-    callModel,
-    validateReply,
-    responseFormat,
-    parseReply,
-    toolRuns,
-    tokensUsed,
-    validationRetries,
-    startedAt,
-    reason: 'limite de etapas atingido antes de uma resposta final',
-  })
+  return finalizeOrFallback('limite de etapas atingido antes de uma resposta final')
 }

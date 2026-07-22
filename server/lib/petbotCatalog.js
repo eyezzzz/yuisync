@@ -119,6 +119,17 @@ function hasAny(text, terms) {
   return terms.some((term) => normalized.includes(normalizeCatalogText(term)))
 }
 
+function objectValue(value) {
+  if (value && typeof value === 'object' && !Array.isArray(value)) return value
+  if (typeof value !== 'string' || !value.trim()) return {}
+  try {
+    const parsed = JSON.parse(value)
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
 function catalogTokens(text = '') {
   return normalizeCatalogText(text)
     .split(/[^a-z0-9]+/g)
@@ -190,9 +201,7 @@ export function classifyProduct(product = {}) {
   const text = productText(product)
   const category = normalizeCatalogText(product.category)
   const name = normalizeCatalogText(product.name)
-  const metadata = product.bot_metadata && typeof product.bot_metadata === 'object'
-    ? product.bot_metadata
-    : {}
+  const metadata = objectValue(product.bot_metadata)
   const isBulk = metadata.is_bulk === true || /\bgranel\b/.test(text) || /\ba granel\b/.test(text)
   const brand = normalizeCatalogText(metadata.brand) || detectBrand(text)
   const breed = metadata.breed

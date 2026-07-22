@@ -3,11 +3,14 @@ import test from 'node:test'
 
 import {
   PETBOT_AGENT_TOOLS,
+  buildPetbotOperationalPreflight,
   buildServiceAvailability,
   findPetshopSubscriptionBenefit,
   groundPetbotServiceArgs,
   listPetTransportOptions,
   mergeInterpretedPetbotServiceFacts,
+  normalizePetbotRequestedDate,
+  normalizePetbotRequestedTime,
   preparePetshopOrderDraft,
   resolvePetshopService,
   runPetbotAgent,
@@ -756,4 +759,261 @@ test('mensagem de retorno de ferramenta segue o schema do Chat Completions sem c
 
   assert.match(result.reply, /horários disponíveis/i)
   assert.equal(sequence, 2)
+})
+
+
+test('normaliza datas e horarios naturais no backend sem depender da LLM', () => {
+  const now = new Date('2026-07-22T13:00:00.000Z')
+  assert.equal(normalizePetbotRequestedDate('hoje', { now, timezone: 'America/Sao_Paulo' }), '2026-07-22')
+  assert.equal(normalizePetbotRequestedDate('amanhã', { now, timezone: 'America/Sao_Paulo' }), '2026-07-23')
+  assert.equal(normalizePetbotRequestedDate('depois de amanhã', { now, timezone: 'America/Sao_Paulo' }), '2026-07-24')
+  assert.equal(normalizePetbotRequestedDate('sexta', { now, timezone: 'America/Sao_Paulo' }), '2026-07-24')
+  assert.equal(normalizePetbotRequestedDate('23/07', { now, timezone: 'America/Sao_Paulo' }), '2026-07-23')
+  assert.equal(normalizePetbotRequestedTime('às 13h'), '13:00')
+  assert.equal(normalizePetbotRequestedTime('13:30'), '13:30')
+})
+
+test('preflight resolve Shih Tzu de 8 kg no banho geral e consulta agenda sem pelagem do cliente', () => {
+  const now = new Date('2026-07-22T12:00:00.000Z')
+  const services = [
+    {
+      id: 'cat-bath', code: 'banho_gato', name: 'BANHO GATO (TODAS AS PELAGENS)',
+      group_type: 'banho_tosa', default_price: 120, default_duration_min: 60,
+      active: true, catalog_source: 'products', source_product_id: 'cat-product', species: 'cat',
+      weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+    },
+    {
+      id: 'small-dog-bath', code: 'banho_pet_pequeno',
+      name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+      group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+      active: true, catalog_source: 'products', source_product_id: 'small-dog-product', species: 'dog',
+      weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+    },
+  ]
+  const result = buildPetbotOperationalPreflight({
+    facts: {
+      pet_name: 'Nina', breed: 'Shih Tzu', weight_kg: 8,
+      service_type: 'banho', service_date: 'hoje',
+    },
+    orderType: 'banho_tosa',
+    services,
+    appointments: [],
+    settings: {
+      timezone: 'America/Sao_Paulo',
+      businessHours: { 3: [{ open: '08:00', close: '18:00' }] },
+      slotIntervalMin: 30,
+      bookingLeadMinutes: 0,
+      bookingCapacity: 1,
+    },
+    now,
+  })
+
+  assert.equal(result.facts.service_date, '2026-07-22')
+  assert.equal(result.resolution.status, 'resolved')
+  assert.equal(result.resolvedService.id, 'small-dog-bath')
+  assert.equal(result.resolvedService.price, 72)
+  assert.equal(result.resolvedService.species, 'dog')
+  assert.equal(result.availability.status, 'available')
+  assert.ok(result.availability.available_slots.length > 0)
+  assert.equal(result.toolRuns.some((run) => run.name === 'resolve_petshop_service'), true)
+  assert.equal(result.toolRuns.some((run) => run.name === 'check_petshop_availability'), true)
+})
+
+test('falha total do modelo depois do preflight usa resposta local e nao pede repeticao', async () => {
+  const preloaded = [{
+    name: 'check_petshop_availability',
+    ok: true,
+    preloaded: true,
+    result: {
+      ok: true,
+      status: 'available',
+      available_slots: [{ time: '13:00' }, { time: '13:30' }],
+    },
+  }]
+  let calls = 0
+  const result = await runPetbotAgent({
+    model: 'gpt-4o-mini',
+    systemPrompt: 'Atenda naturalmente.',
+    message: 'Ela tem 8 kg e é um Shih Tzu. Quais horários tem hoje?',
+    initialToolRuns: preloaded,
+    callModel: async () => {
+      calls += 1
+      throw new Error('simulated OpenAI outage')
+    },
+    executeTool: async () => ({ ok: true }),
+    fallbackReply: ({ toolRuns }) => {
+      const availability = toolRuns.find((run) => run.name === 'check_petshop_availability')?.result
+      return `Encontrei estes horários disponíveis: ${availability.available_slots.map((slot) => slot.time).join(', ')}.`
+    },
+  })
+
+  assert.equal(result.recovered, true)
+  assert.match(result.reply, /13:00, 13:30/)
+  assert.doesNotMatch(result.reply, /repita|repetir/i)
+  assert.ok(calls >= 1)
+})
+
+
+test('validador bloqueia fallback generico que pede para repetir fatos ja salvos', () => {
+  const result = validatePetbotConversationReply({
+    reply: 'Desculpe, tive uma instabilidade. Pode repetir a última informação?',
+    facts: { pet_name: 'Toby', breed: 'Shih Tzu', weight_kg: 7, service_date: '2026-07-22' },
+  })
+  assert.equal(result.ok, false)
+  assert.ok(result.problems.some((problem) => /repetir dados/.test(problem)))
+})
+
+test('agenda aceita o id exato ja resolvido sem exigir peso novamente', () => {
+  const result = buildServiceAvailability({
+    serviceQuery: 'small-dog-bath',
+    orderType: 'banho_tosa',
+    date: '2026-07-22',
+    services: [{
+      id: 'small-dog-bath', code: 'banho_pet_pequeno',
+      name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+      group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+      active: true, catalog_source: 'products', source_product_id: 'small-dog-product',
+      species: 'dog', weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+    }],
+    appointments: [],
+    settings: {
+      timezone: 'America/Sao_Paulo',
+      businessHours: { 3: [{ open: '08:00', close: '18:00' }] },
+      bookingLeadMinutes: 0,
+    },
+    now: new Date('2026-07-22T12:00:00.000Z'),
+    requireServiceClassification: false,
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'available')
+  assert.equal(result.service.id, 'small-dog-bath')
+  assert.deepEqual(result.missing_fields || [], [])
+})
+
+test('troca de pet limpa fatos do animal mas preserva servico data e horario da conversa', () => {
+  const facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { pet_name: 'Nina' },
+    previousFacts: {
+      pet_name: 'Thor', species: 'dog', breed: 'Shih Tzu', weight_kg: 8,
+      weight_label: '8 kg', coat_type: 'longo', service_type: 'banho',
+      service_date: 'hoje', service_preferred_time: '13h', service_time_preference: 'specific',
+    },
+  })
+
+  assert.equal(facts.pet_name, 'Nina')
+  assert.equal(facts.breed, null)
+  assert.equal(facts.weight_kg, null)
+  assert.equal(facts.coat_type, null)
+  assert.equal(facts.service_type, 'banho')
+  assert.equal(facts.service_date, 'hoje')
+  assert.equal(facts.service_preferred_time, '13h')
+  assert.equal(facts.service_time_preference, 'specific')
+})
+
+test('agenda normaliza data e horario naturais em qualquer rota de ferramenta', () => {
+  const result = buildServiceAvailability({
+    serviceQuery: 'small-dog-bath',
+    orderType: 'banho_tosa',
+    date: 'hoje',
+    preferredTime: 'às 13h',
+    services: [{
+      id: 'small-dog-bath', code: 'banho_pet_pequeno',
+      name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+      group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+      active: true, catalog_source: 'products', source_product_id: 'small-dog-product',
+      species: 'dog', weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+    }],
+    appointments: [],
+    settings: {
+      timezone: 'America/Sao_Paulo',
+      businessHours: { 3: [{ open: '08:00', close: '18:00' }] },
+      bookingLeadMinutes: 0,
+    },
+    now: new Date('2026-07-22T12:00:00.000Z'),
+    requireServiceClassification: false,
+  })
+
+  assert.equal(result.status, 'available')
+  assert.equal(result.business_date, '2026-07-22')
+  assert.equal(result.requested_slot.available, true)
+  assert.match(result.requested_slot.scheduled_at, /T13:00/)
+})
+
+test('falha ao atualizar agenda preserva fatos e nao anuncia horario de cache', () => {
+  const result = buildPetbotOperationalPreflight({
+    facts: {
+      pet_name: 'Toby', breed: 'Shih Tzu', weight_kg: 7,
+      service_type: 'banho', service_date: 'hoje',
+    },
+    orderType: 'banho_tosa',
+    services: [{
+      id: 'small-dog-bath', code: 'banho_pet_pequeno',
+      name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+      group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+      active: true, catalog_source: 'products', source_product_id: 'small-dog-product',
+      species: 'dog', weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
+    }],
+    appointments: [],
+    settings: { timezone: 'America/Sao_Paulo' },
+    now: new Date('2026-07-22T12:00:00.000Z'),
+    agendaAvailable: false,
+  })
+
+  assert.equal(result.resolution.status, 'resolved')
+  assert.equal(result.availability.status, 'temporarily_unavailable')
+  assert.equal(result.availability.error_code, 'agenda_refresh_failed')
+  assert.deepEqual(result.availability.available_slots, [])
+  assert.equal(result.toolRuns.at(-1).ok, false)
+})
+
+test('todas as ferramentas do agente percorrem o protocolo de retorno sem payload invalido', async () => {
+  const toolNames = PETBOT_AGENT_TOOLS.map((tool) => tool.function.name)
+  assert.deepEqual(toolNames, [
+    'search_petshop_products',
+    'resolve_petshop_service',
+    'check_petshop_availability',
+    'get_petshop_transport_options',
+    'prepare_petshop_order',
+    'create_confirmed_petshop_order',
+    'cancel_pending_petshop_order',
+    'send_product_image',
+    'handoff_to_human',
+  ])
+
+  for (const toolName of toolNames) {
+    let sequence = 0
+    await runPetbotAgent({
+      model: 'gpt-4o-mini-test',
+      systemPrompt: 'Teste de contrato.',
+      message: 'continue',
+      tools: PETBOT_AGENT_TOOLS,
+      callModel: async (params) => {
+        sequence += 1
+        if (sequence === 1) {
+          return {
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: `${toolName}-call`,
+                  type: 'function',
+                  function: { name: toolName, arguments: '{}' },
+                }],
+              },
+            }],
+          }
+        }
+        const toolMessage = params.messages.find((entry) => entry.role === 'tool')
+        assert.ok(toolMessage, toolName)
+        assert.equal(toolMessage.tool_call_id, `${toolName}-call`, toolName)
+        assert.equal(Object.hasOwn(toolMessage, 'name'), false, toolName)
+        assert.doesNotThrow(() => JSON.parse(toolMessage.content), toolName)
+        return { choices: [{ message: { content: 'Certo, vou continuar.' } }] }
+      },
+      executeTool: async (toolCall) => ({ ok: true, action: toolCall.function.name, status: 'tested' }),
+      validateReply: () => ({ ok: true }),
+    })
+    assert.equal(sequence, 2, toolName)
+  }
 })

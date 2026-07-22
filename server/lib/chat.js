@@ -13,6 +13,7 @@ import {
 import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
 import {
   PETBOT_AGENT_TOOLS,
+  buildPetbotOperationalPreflight,
   buildServiceAvailability,
   findPetshopSubscriptionBenefit,
   groundPetbotServiceArgs,
@@ -92,22 +93,6 @@ const PRODUCT_STOP_WORDS = new Set([
 
 const DEFAULT_BOT_MODEL = serverEnv.openAiModel
 const DEFAULT_BOT_TEMPERATURE = 0.5
-const PETBOT_AGENT_REPLY_FORMAT = {
-  type: 'json_schema',
-  json_schema: {
-    name: 'petbot_agent_reply',
-    strict: true,
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        message: { type: 'string' },
-      },
-      required: ['message'],
-    },
-  },
-}
-
 function parsePetbotAgentReply(value = '') {
   const text = cleanText(value)
   if (!text) return { message: '' }
@@ -119,7 +104,7 @@ function parsePetbotAgentReply(value = '') {
   }
 }
 
-const DEFAULT_DELIVERY_FEE = 10
+const DEFAULT_DELIVERY_FEE = 8
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
 const BUSY_STATUSES = new Set(['agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado', 'blocked', 'bloqueado'])
 const KNOWN_BREED_TERMS = new Set([
@@ -777,14 +762,21 @@ async function loadPetshopServices(supabase, moduleId, tenantId) {
   let { data: dedicatedServices, error: dedicatedError } = dedicatedResult
   if (dedicatedError) {
     if (tenantId && isMissingTenantColumnError(dedicatedError)) {
-      throw new HttpError(500, 'Tenant isolation is not enabled in petshop_services table.')
+      logger.warn('PetBot auxiliary service catalog has no tenant column; using tenant-scoped products instead', {
+        moduleId,
+        tenantId,
+        message: dedicatedError.message,
+      })
+      dedicatedServices = []
+      dedicatedError = null
+    } else {
+      logger.warn('PetBot dedicated service catalog unavailable; continuing with products', {
+        moduleId,
+        tenantId,
+        message: dedicatedError.message,
+      })
+      dedicatedServices = []
     }
-    logger.warn('PetBot dedicated service catalog unavailable; continuing with products', {
-      moduleId,
-      tenantId,
-      message: dedicatedError.message,
-    })
-    dedicatedServices = []
   }
 
   const runProductQuery = async (columns) => {
@@ -803,6 +795,9 @@ async function loadPetshopServices(supabase, moduleId, tenantId) {
     'id,name,category,description,species_target,price,active,bot_metadata',
     'id,name,category,description,price,active,bot_metadata',
     'id,name,category,price,active,bot_metadata',
+    'id,name,category,description,species_target,price,active',
+    'id,name,category,description,price,active',
+    'id,name,category,price,active',
   ]
   let productResult = null
   for (const columns of productColumnSets) {
@@ -1345,8 +1340,24 @@ async function callOpenAIWithTimeout(params, timeoutMs) {
       if (response.ok) return payload
 
       const detail = payload?.error?.message || `HTTP ${response.status}`
+      const requestId = response.headers.get('x-request-id') || response.headers.get('openai-request-id') || null
       const retryable = [408, 409, 429].includes(response.status) || response.status >= 500
       const error = new HttpError(502, `OpenAI request failed: ${detail}`)
+      error.openai = {
+        status: response.status,
+        request_id: requestId,
+        type: payload?.error?.type || null,
+        code: payload?.error?.code || null,
+        param: payload?.error?.param || null,
+      }
+      logger.warn('OpenAI chat completion failed', {
+        status: response.status,
+        request_id: requestId,
+        type: payload?.error?.type || null,
+        code: payload?.error?.code || null,
+        param: payload?.error?.param || null,
+        message: detail,
+      })
       if (!retryable || attempt >= maxRetries) throw error
       lastError = error
     } catch (error) {
@@ -1452,6 +1463,78 @@ function getPendingAgentOrder(context) {
   const pending = parsed?.petbot_agent?.pending_order
   if (!pending || typeof pending !== 'object' || !pending.id || !pending.order) return null
   return pending
+}
+
+function inferPetbotServiceOrderType({ interpretation = {}, facts = {}, message = '', history = [] } = {}) {
+  const interpretedIntent = cleanText(interpretation?.intent).toLowerCase()
+  // Product conversations can contain words such as "banho" (for example,
+  // shampoo para banho). Never preload the service catalog when the structured
+  // interpreter has already classified the turn as a product sale.
+  if (interpretedIntent === 'produto') return ''
+  if (interpretedIntent === 'veterinaria') return 'veterinaria'
+  if (interpretedIntent === 'banho_tosa') return 'banho_tosa'
+
+  const text = normalizeSearchText([
+    facts?.service_type,
+    interpretation?.service_type,
+    ...(history || []).slice(-6).map((entry) => entry?.content),
+    message,
+  ].filter(Boolean).join(' '))
+  if (/veterin|consulta|vacina|exame|cirurg/.test(text)) return 'veterinaria'
+  if (/banho|tosa|escovac|desembolo|hidrat|higien/.test(text)) return 'banho_tosa'
+  return ''
+}
+
+function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedService = null, timezone = 'America/Sao_Paulo' } = {}) {
+  const runs = Array.isArray(toolRuns) ? toolRuns : []
+  const availabilityRun = [...runs].reverse().find((run) => (
+    run?.name === 'check_petshop_availability'
+    && run?.ok !== false
+    && run?.result
+  )) || [...runs].reverse().find((run) => run?.name === 'check_petshop_availability')
+  const resolutionRun = [...runs].reverse().find((run) => (
+    run?.name === 'resolve_petshop_service'
+    && run?.ok !== false
+    && run?.result
+  )) || [...runs].reverse().find((run) => run?.name === 'resolve_petshop_service')
+  const availability = availabilityRun?.result || null
+  const resolution = resolutionRun?.result || null
+  const petName = cleanText(facts.pet_name)
+
+  if (availability?.status === 'available') {
+    if (availability.requested_slot?.available) {
+      const time = cleanText(availability.requested_slot.scheduled_at)
+      const formatted = time
+        ? DateTime.fromISO(time, { setZone: true }).setZone(timezone).toFormat('HH:mm')
+        : cleanText(facts.service_preferred_time)
+      return `${formatted ? `Sim, ${formatted} está disponível.` : 'Sim, o horário solicitado está disponível.'}${petName ? ' Posso preparar o resumo do agendamento?' : ' Qual é o nome do seu pet?'}`
+    }
+    const slots = (availability.available_slots || []).slice(0, 6).map((slot) => cleanText(slot.time)).filter(Boolean)
+    if (slots.length) {
+      return `Encontrei estes horários disponíveis: ${slots.join(', ')}. Qual deles você prefere?`
+    }
+  }
+
+  if (availability?.status === 'unavailable') {
+    return 'Não encontrei horário disponível nessa data. Você prefere tentar outro dia ou outro período?'
+  }
+
+  const missingFields = new Set(resolution?.missing_fields || [])
+  if (missingFields.has('breed') && missingFields.has('weight_kg')) {
+    return 'Qual é a raça e o peso aproximado do seu pet?'
+  }
+  if (missingFields.has('breed')) return 'Qual é a raça do seu pet?'
+  if (missingFields.has('weight_kg')) return 'Qual é o peso aproximado do seu pet?'
+  if (resolvedService && !cleanText(facts.service_date)) return 'Qual dia você prefere para o agendamento?'
+
+  if (availability?.status === 'temporarily_unavailable') {
+    return 'Já guardei as informações do seu pet, mas não consegui atualizar a agenda agora. Posso tentar a consulta novamente?'
+  }
+  if (resolution?.status === 'ambiguous' || resolution?.status === 'not_found') {
+    return 'Não consegui identificar com segurança um único serviço compatível no cadastro. Vou precisar que a equipe revise o catálogo antes de confirmar o agendamento.'
+  }
+
+  return 'Já guardei as informações que você enviou. Vou continuar o atendimento a partir delas, sem pedir que você repita os dados.'
 }
 
 
@@ -1585,6 +1668,38 @@ async function respondWithPetbotAgent({
   ])
   liveSubscriptionBenefits = subscriptionBenefits
 
+  const serviceOrderType = inferPetbotServiceOrderType({
+    interpretation: llmInterpretation,
+    facts: serviceFacts,
+    message: trimmedMessage,
+    history,
+  })
+  let preloadedToolRuns = []
+  let operationalContext = null
+  if (serviceOrderType) {
+    // Availability shown to the customer must come from a fresh agenda read.
+    // The cached load is useful for initial context, but it is not authoritative
+    // enough to advertise a slot. If the refresh fails, preflight returns a
+    // temporary-unavailable result while preserving all customer facts.
+    const needsAgendaRefresh = Boolean(cleanText(serviceFacts.service_date))
+    const appointmentRefresh = needsAgendaRefresh
+      ? await refreshAppointmentContext()
+      : { ok: true }
+    const preflight = buildPetbotOperationalPreflight({
+      facts: serviceFacts,
+      orderType: serviceOrderType,
+      services: liveServices,
+      appointments: liveAppointments,
+      subscriptionBenefits: liveSubscriptionBenefits,
+      settings: storeSettings,
+      agendaAvailable: appointmentRefresh.ok,
+    })
+    serviceFacts = preflight.facts
+    preloadedToolRuns = preflight.toolRuns
+    operationalContext = preflight.context
+    if (preflight.resolvedService) resolvedServiceThisTurn = preflight.resolvedService
+  }
+
   const systemPrompt = buildPetbotAgentV3Prompt({
     storeName: storeSettings.storeName,
     storePhone: storeSettings.storePhone,
@@ -1639,6 +1754,7 @@ async function respondWithPetbotAgent({
       package_kg: Number(llmInterpretation?.package_kg || 0) || null,
     },
     pendingOrder: pendingAtTurnStart,
+    operationalContext,
     customInstructions,
     timezone: storeSettings.petbotTimezone,
   })
@@ -1696,7 +1812,7 @@ async function respondWithPetbotAgent({
 
     if (name === 'resolve_petshop_service') {
       const groundedArgs = mergeServiceFactsFromToolArgs(args)
-      await refreshServiceCatalog({ required: true })
+      await refreshServiceCatalog({ required: false })
       let resolution = resolvePetshopService({
         serviceQuery: args.service_query || llmInterpretation?.service_type || args.order_type,
         orderType: args.order_type || llmInterpretation?.intent,
@@ -1792,6 +1908,10 @@ async function respondWithPetbotAgent({
       const availability = buildServiceAvailability({
         serviceQuery: args.service_id,
         orderType: args.order_type || llmInterpretation?.intent,
+        species: serviceFacts.species,
+        breed: serviceFacts.breed,
+        weightKg: serviceFacts.weight_kg,
+        coatType: serviceFacts.coat_type,
         date: args.date || serviceFacts.service_date,
         preferredTime: args.preferred_time || serviceFacts.service_preferred_time,
         period: args.period || serviceFacts.service_time_preference,
@@ -2067,8 +2187,18 @@ async function respondWithPetbotAgent({
     callModel: (params) => callOpenAIWithTimeout(params, serverEnv.openAiTimeoutMs),
     executeTool,
     initialToolChoice,
-    responseFormat: PETBOT_AGENT_REPLY_FORMAT,
+    // A one-field JSON response format added an unnecessary compatibility
+    // surface to multi-turn function calling. Tool arguments remain strict;
+    // customer-facing replies are plain text and validated server-side.
+    responseFormat: null,
     parseReply: parsePetbotAgentReply,
+    initialToolRuns: preloadedToolRuns,
+    fallbackReply: ({ toolRuns }) => buildPetbotLocalRecoveryReply({
+      facts: serviceFacts,
+      toolRuns,
+      resolvedService: resolvedServiceThisTurn,
+      timezone: storeSettings.petbotTimezone,
+    }),
     validateReply: ({ reply: draftReply, toolRuns }) => {
       const operationalValidation = validatePetbotOperationalReply({
         reply: draftReply,
@@ -2271,8 +2401,8 @@ async function respondWithPetbotRecoverableFailure({
 }) {
   const serviceConversation = isPetbotServiceConversation(intent)
   const reply = serviceConversation
-    ? 'Desculpe, tive uma instabilidade momentânea ao consultar os serviços e a agenda. Pode repetir a última informação para eu tentar novamente?'
-    : 'Desculpe, tive uma instabilidade momentânea ao consultar os dados. Pode repetir a última informação para eu tentar novamente?'
+    ? 'Desculpe, não consegui concluir a consulta dos serviços e da agenda agora. As informações que você enviou continuam na conversa; posso tentar novamente sem você repetir os dados.'
+    : 'Desculpe, não consegui concluir a consulta agora. As informações que você enviou continuam na conversa; posso tentar novamente sem você repetir os dados.'
   const botSentAt = new Date().toISOString()
   const existingContext = parseJsonObject(session.context)
   const previousAgentState = existingContext.petbot_agent && typeof existingContext.petbot_agent === 'object'
@@ -2334,6 +2464,7 @@ async function respondWithPetbotRecoverableFailure({
     metadata: {
       source: options.source || 'dashboard_simulation',
       error: cleanText(error instanceof Error ? error.message : error).slice(0, 300),
+      openai: error?.openai || null,
     },
   })
 

@@ -177,8 +177,17 @@ export function validatePetbotConversationReply({ reply = '', facts = {} } = {})
     || /\b(?:informe|informar|diga|dizer|poderia me informar|pode me dizer)\b.{0,45}\braca\b/.test(normalized)
   const asksDate = /\b(?:qual(?: e)? (?:a )?data|que dia|confirma(?:r)?(?: novamente)?(?: a)? data)\b/.test(normalized)
   const asksTime = /\b(?:qual(?: e)? (?:o )?horario|que horas|confirma(?:r)?(?: novamente)?(?: o)? horario)\b/.test(normalized)
+  const asksGenericRepeat = /\b(?:repita|repetir|diga novamente|informe novamente|confirme novamente|ultima informacao)\b/.test(normalized)
+  const hasKnownConversationFacts = Boolean(
+    clean(facts.pet_name)
+    || clean(facts.breed)
+    || Number(facts.weight_kg || 0) > 0
+    || clean(facts.service_date)
+    || clean(facts.service_preferred_time),
+  )
 
   if (asksCoat) problems.push('pergunta de pelagem proibida; a classificação deve vir da raça cadastrada')
+  if (asksGenericRepeat && hasKnownConversationFacts) problems.push('solicitação genérica para repetir dados que já estão no estado confiável')
   if (Number(facts.weight_kg || 0) > 0 && asksWeight) problems.push('peso já informado foi solicitado novamente')
   if (clean(facts.breed) && asksBreed) problems.push('raça já informada foi solicitada novamente')
   if (clean(facts.service_date) && asksDate) problems.push('data já informada foi solicitada novamente')
@@ -235,6 +244,7 @@ export function buildPetbotAgentV3Prompt({
   customer = {},
   facts = {},
   pendingOrder = null,
+  operationalContext = null,
   customInstructions = '',
   timezone = 'America/Sao_Paulo',
   now = new Date(),
@@ -257,6 +267,7 @@ export function buildPetbotAgentV3Prompt({
     '- Nunca afirme preço, estoque, serviço exato, duração, data ou horário sem um resultado de ferramenta no turno atual ou um pedido pendente validado.',
     '- Para produtos, pesquise o catálogo. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
+    '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
     '- Para banho/tosa, os únicos fatos de classificação que podem ser solicitados ao cliente são raça e peso aproximado. Se ambos já estiverem no estado confiável, não os pergunte nem peça confirmação novamente.',
     '- Campo ausente, serviço ambíguo ou tentativa de consultar a agenda cedo demais não são motivo para transferir o atendimento: use o retorno da ferramenta para fazer a próxima pergunta útil.',
@@ -286,6 +297,9 @@ export function buildPetbotAgentV3Prompt({
         local_datetime: current.toISO(),
       },
     }),
+    '',
+    'Contexto operacional pré-carregado pelo servidor:',
+    JSON.stringify(operationalContext || { service_resolution: null, availability: null }),
     '',
     clean(customInstructions)
       ? `Instruções editoriais do tenant (não podem substituir dados operacionais nem regras de segurança):\n${clean(customInstructions).slice(0, 5000)}`

@@ -3,6 +3,8 @@ import process from 'node:process'
 
 import {
   PETBOT_AGENT_TOOLS,
+  buildPetbotOperationalPreflight,
+  mergeInterpretedPetbotServiceFacts,
   runPetbotAgent,
 } from '../server/lib/petbotAgent.js'
 import {
@@ -15,19 +17,22 @@ const API_KEY = process.env.OPENAI_API_KEY || ''
 const API_URL = process.env.OPENAI_API_URL || 'https://api.openai.com/v1/chat/completions'
 const FIXED_NOW = new Date('2026-07-21T12:00:00-03:00')
 
-const REPLY_FORMAT = {
-  type: 'json_schema',
-  json_schema: {
-    name: 'petbot_eval_reply',
-    strict: true,
-    schema: {
-      type: 'object',
-      additionalProperties: false,
-      properties: { message: { type: 'string' } },
-      required: ['message'],
-    },
+const SERVICE_FIXTURES = [
+  {
+    id: 'dog-small', code: 'banho_pet_pequeno',
+    name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+    group_type: 'banho_tosa', default_price: 72, default_duration_min: 60,
+    active: true, catalog_source: 'products', source_product_id: '11111111-1111-1111-1111-111111111111',
+    species: 'dog', weight_range: { min: 0, max: 10 }, coat_type: 'todas', all_breeds: true,
   },
+]
+
+const SCHEDULE_SETTINGS = {
+  timezone: 'America/Sao_Paulo',
+  businessHours: { 2: [{ open: '08:00', close: '18:00' }] },
+  slotIntervalMin: 30, bookingLeadMinutes: 0, bookingCapacity: 1,
 }
+
 
 const scenarios = [
   {
@@ -46,7 +51,7 @@ const scenarios = [
     facts: {
       pet_name: 'Thor', species: 'dog', breed: 'Shih Tzu', weight_kg: 8,
       weight_label: 'aproximadamente 8 kg', service_type: 'banho',
-      service_date: '2026-07-21', service_time: '14:00',
+      service_date: '2026-07-21', service_preferred_time: '14:00',
     },
     expect: {
       allTools: ['resolve_petshop_service', 'check_petshop_availability'],
@@ -135,8 +140,8 @@ function fakeToolResult(name, args, scenario) {
         id: 'catalog-service-long-small',
         code: 'catalog_service_long_small',
         product_id: '11111111-1111-1111-1111-111111111111',
-        name: 'Banho 0 a 10 kg - Pelo Longo',
-        price: 90,
+        name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)',
+        price: 72,
         duration_min: 60,
       },
     }
@@ -146,11 +151,11 @@ function fakeToolResult(name, args, scenario) {
     return {
       ok: true,
       status: 'available',
-      service: { id: args.service_id, name: 'Banho 0 a 10 kg - Pelo Longo', price: 90 },
+      service: { id: args.service_id, name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)', price: 72 },
       requested_slot: { available: true, time: '14:00' },
       available_slots: [
-        { time: '14:00', scheduled_at: '2026-07-21T14:00:00-03:00', price: 90, duration_min: 60 },
-        { time: '14:30', scheduled_at: '2026-07-21T14:30:00-03:00', price: 90, duration_min: 60 },
+        { time: '14:00', scheduled_at: '2026-07-21T14:00:00-03:00', price: 72, duration_min: 60 },
+        { time: '14:30', scheduled_at: '2026-07-21T14:30:00-03:00', price: 72, duration_min: 60 },
       ],
     }
   }
@@ -214,11 +219,26 @@ function assertScenario(scenario, result) {
 
 async function runScenario(scenario) {
   let orderResult = null
+  const facts = mergeInterpretedPetbotServiceFacts({ interpretation: scenario.facts || {} })
+  const serviceOrderType = ['banho_tosa', 'veterinaria'].includes(scenario.facts?.intent)
+    ? scenario.facts.intent
+    : (scenario.facts?.service_type ? 'banho_tosa' : '')
+  const preflight = serviceOrderType
+    ? buildPetbotOperationalPreflight({
+      facts,
+      orderType: serviceOrderType,
+      services: SERVICE_FIXTURES,
+      appointments: [],
+      settings: SCHEDULE_SETTINGS,
+      now: FIXED_NOW,
+    })
+    : { facts, toolRuns: [], context: null }
   const prompt = buildPetbotAgentV3Prompt({
     storeName: 'Pet Shop de Avaliação',
     customer: { name: 'Cliente de teste', known: true },
-    facts: scenario.facts,
+    facts: preflight.facts,
     pendingOrder: scenario.pendingOrder || null,
+    operationalContext: preflight.context,
     timezone: 'America/Sao_Paulo',
     now: FIXED_NOW,
   })
@@ -237,8 +257,9 @@ async function runScenario(scenario) {
       if (name === 'create_confirmed_petshop_order' && toolResult.status === 'committed') orderResult = toolResult
       return toolResult
     },
-    responseFormat: REPLY_FORMAT,
+    responseFormat: null,
     parseReply,
+    initialToolRuns: preflight.toolRuns,
     validateReply: ({ reply, toolRuns }) => {
       const validation = validatePetbotOperationalReply({
         reply,

@@ -193,3 +193,11 @@ test('webhook nao mantem um segundo agente ou fluxo conversacional legado', () =
   assert.match(webhook, /respondToChatMessage/)
   assert.doesNotMatch(webhook, /PETBOT_TOOLS|buildSystemPrompt|runPetbotGuard|preparePetshopOrderDraft/)
 })
+
+test('preflight operacional nao mistura venda de produto com servico e exige agenda fresca', () => {
+  const localChat = read('server/lib/chat.js')
+  assert.match(localChat, /if \(interpretedIntent === 'produto'\) return ''/)
+  assert.match(localChat, /const appointmentRefresh = needsAgendaRefresh[\s\S]*await refreshAppointmentContext\(\)/)
+  assert.match(localChat, /agendaAvailable: appointmentRefresh\.ok/)
+  assert.match(localChat, /check_petshop_availability'[\s\S]*species: serviceFacts\.species[\s\S]*weightKg: serviceFacts\.weight_kg/)
+})
