@@ -33,9 +33,10 @@ A arquitetura evita os dois extremos que causavam falhas anteriores:
 1. `search_petshop_products`
 2. `resolve_petshop_service`
 3. `check_petshop_availability`
-4. `prepare_petshop_order`
-5. `create_confirmed_petshop_order`
-6. `cancel_pending_petshop_order`
+4. `prepare_petshop_product_order`
+5. `prepare_petshop_service_booking`
+6. `create_confirmed_petshop_order`
+7. `cancel_pending_petshop_order`
 7. `send_product_image`
 8. `handoff_to_human`
 

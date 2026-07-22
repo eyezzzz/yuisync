@@ -184,7 +184,7 @@ function fakeToolResult(name, args, scenario) {
     }
   }
 
-  if (name === 'prepare_petshop_order') {
+  if (name === 'prepare_petshop_product_order' || name === 'prepare_petshop_service_booking') {
     return {
       ok: true,
       status: 'prepared',

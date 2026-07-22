@@ -344,7 +344,10 @@ async function updateCustomerRegistrationFromMessage(supabase, session, message)
 
 function isPlaceholderName(value = '') {
   const name = cleanText(value).toLowerCase()
-  return !name || ['cliente', 'cliente whatsapp', 'whatsapp', 'sem nome'].includes(name) || /^cliente[-\s]?\d+/i.test(name)
+  return !name
+    || ['cliente', 'cliente whatsapp', 'whatsapp', 'sem nome'].includes(name)
+    || /^cliente[-\s]?\d+/i.test(name)
+    || /^\+?\d[\d\s().-]{6,}$/.test(name)
 }
 
 function normalizeSpecies(value = '') {
@@ -1267,7 +1270,9 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
     order_id: cleanText(data?.order_id) || null,
     appointment_id: cleanText(data?.appointment_id) || null,
     total: Number(data?.total || payload.expected_total || 0),
-    payment_status: cleanText(data?.payment_status),
+    payment_status: args.order_type === 'produto'
+      ? cleanText(data?.payment_status)
+      : 'a_receber',
     subscription_benefit_used: Boolean(data?.subscription_benefit_used),
     subscription_plan_name: cleanText(data?.subscription_plan_name) || null,
     duplicated: Boolean(data?.duplicated),
@@ -1501,6 +1506,24 @@ function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedServ
   const resolution = resolutionRun?.result || null
   const petName = cleanText(facts.pet_name)
 
+  const committedRun = [...runs].reverse().find((run) => (
+    run?.name === 'create_confirmed_petshop_order'
+    && run?.ok !== false
+    && ['committed', 'already_committed'].includes(run?.result?.status)
+  ))
+  if (committedRun) {
+    return petName
+      ? `Pronto! O agendamento do ${petName} foi confirmado com sucesso.`
+      : 'Pronto! O agendamento foi confirmado com sucesso.'
+  }
+
+  const preparedRun = [...runs].reverse().find((run) => (
+    ['prepare_petshop_service_booking', 'prepare_petshop_product_order', 'prepare_petshop_order'].includes(run?.name)
+    && run?.ok !== false
+    && run?.result?.status === 'prepared'
+  ))
+  if (preparedRun?.result?.summary) return cleanText(preparedRun.result.summary)
+
   if (availability?.status === 'available') {
     if (availability.requested_slot?.available) {
       const time = cleanText(availability.requested_slot.scheduled_at)
@@ -1656,6 +1679,17 @@ async function respondWithPetbotAgent({
         error: error instanceof Error ? error.message : String(error),
       })
     }
+  }
+
+  const trustedCustomerName = () => {
+    const candidates = [
+      cleanText(llmInterpretation?.customer_name),
+      cleanText(activeCustomer?.client?.name),
+      cleanText(updatedCustomerName),
+      cleanText(sessionForAgent.customer_name),
+      cleanText(session.customer_name),
+    ]
+    return candidates.find((value) => value && !isPlaceholderName(value)) || ''
   }
 
   const [savedPets, subscriptionBenefits] = await Promise.all([
@@ -1955,11 +1989,28 @@ async function respondWithPetbotAgent({
       }
     }
 
-    if (name === 'prepare_petshop_order') {
-      const effectiveArgs = args.order_type === 'produto'
-        ? args
-        : mergeServiceFactsFromToolArgs(args)
-      if (effectiveArgs.order_type === 'produto') {
+    if (['prepare_petshop_product_order', 'prepare_petshop_service_booking', 'prepare_petshop_order'].includes(name)) {
+      const isProductOrder = name === 'prepare_petshop_product_order'
+        || (name === 'prepare_petshop_order' && args.order_type === 'produto')
+      const baseArgs = isProductOrder
+        ? { ...args, order_type: 'produto' }
+        : mergeServiceFactsFromToolArgs({ ...args, order_type: args.order_type || serviceOrderType || 'banho_tosa' })
+      const modelCustomerName = cleanText(baseArgs.customer_name)
+      const effectiveArgs = {
+        ...baseArgs,
+        customer_name: trustedCustomerName() || (!isPlaceholderName(modelCustomerName) ? modelCustomerName : ''),
+        ...(isProductOrder ? {} : {
+          items: [],
+          payment_method: null,
+          fulfillment_type: 'servico',
+          delivery_address: null,
+          delivery_neighborhood: null,
+          delivery_city: null,
+          delivery_reference: null,
+          change_for: null,
+        }),
+      }
+      if (isProductOrder) {
         const productIds = (Array.isArray(effectiveArgs.items) ? effectiveArgs.items : [])
           .map((item) => cleanText(item.product_id))
           .filter(Boolean)
@@ -2175,7 +2226,10 @@ async function respondWithPetbotAgent({
     return { ok: false, error: `Ferramenta desconhecida: ${name}` }
   }
 
-  const initialToolChoice = 'auto'
+  const currentMessageIsConfirmation = Boolean(pendingAtTurnStart && isExplicitPetbotConfirmation(trimmedMessage))
+  const initialToolChoice = currentMessageIsConfirmation
+    ? { type: 'function', function: { name: 'create_confirmed_petshop_order' } }
+    : 'auto'
 
   const agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
@@ -2210,6 +2264,12 @@ async function respondWithPetbotAgent({
       const conversationValidation = validatePetbotConversationReply({
         reply: draftReply,
         facts: serviceFacts,
+        pendingOrder,
+        currentMessageIsConfirmation,
+        serviceContext: Boolean(
+          serviceOrderType
+          || (pendingOrder?.order?.order_type && pendingOrder.order.order_type !== 'produto'),
+        ),
       })
       const problems = [
         ...(operationalValidation.problems || []),

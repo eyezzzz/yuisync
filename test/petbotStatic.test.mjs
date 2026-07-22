@@ -174,7 +174,7 @@ test('PetBot v3 deixa a conversa com a LLM e exige operacoes transacionais valid
   assert.match(localChat, /A migracao transacional do PetBot nao foi aplicada/)
   assert.doesNotMatch(localChat, /return createConfirmedPetshopOrder\(supabase, session, settings, args\)/)
   assert.match(localChat, /idempotency_key: `\$\{sessionId\}:\$\{pendingAtTurnStart\.id\}`/)
-  assert.match(localChat, /const initialToolChoice = 'auto'/)
+  assert.match(localChat, /currentMessageIsConfirmation[\s\S]*create_confirmed_petshop_order/)
   assert.match(localChat, /engine_version: 'petbot_agent_v3'/)
   assert.doesNotMatch(localChat, /buildNaturalPetbotServiceQuestion/)
   assert.match(grounding, /valor não validado/)

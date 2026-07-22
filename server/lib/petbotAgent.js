@@ -920,7 +920,7 @@ function appointmentsOverlap(left = {}, right = {}) {
 }
 
 function isNoTransport(value = '') {
-  return /^(nao|sem|nenhum|nao_quero|sem_transporte|cliente_leva|tutor_leva|proprio)$/.test(normalizeCode(value))
+  return /^(nao|sem|nenhum|nao_quero|sem_transporte|cliente_leva|cliente_leva_a_loja|cliente_leva_o_pet_a_loja|tutor_leva|tutor_leva_a_loja|tutor_leva_o_pet_a_loja|proprio)$/.test(normalizeCode(value))
 }
 
 function normalizeTransportOptions(settings = {}) {
@@ -948,16 +948,34 @@ export function listPetTransportOptions(settings = {}) {
   }))
 }
 
-export function resolvePetTransportSelection({ args = {}, settings = {}, orderType = '' } = {}) {
+export function resolvePetTransportSelection({ args = {}, settings = {}, orderType = '', requireDecision = false } = {}) {
   if (clean(orderType) !== 'banho_tosa') {
-    return { ok: true, requested: false, fee: 0, mode: null, label: null }
+    return { ok: true, requested: false, fee: 0, mode: null, label: null, customer_brings_pet: false }
   }
 
   const requestedMode = clean(args.service_transport_mode)
   const requestedLabel = clean(args.service_transport_label)
   const requestedValue = requestedMode || requestedLabel
-  if (!requestedValue || isNoTransport(requestedValue)) {
-    return { ok: true, requested: false, fee: 0, mode: null, label: null }
+  if (!requestedValue) {
+    if (requireDecision) {
+      return {
+        ok: false,
+        requested: false,
+        decision_required: true,
+        error: 'como o pet chegará à loja (cliente leva ou MotoDog)',
+      }
+    }
+    return { ok: true, requested: false, fee: 0, mode: null, label: null, customer_brings_pet: false }
+  }
+  if (isNoTransport(requestedValue)) {
+    return {
+      ok: true,
+      requested: false,
+      fee: 0,
+      mode: null,
+      label: 'Cliente leva o pet à loja',
+      customer_brings_pet: true,
+    }
   }
 
   const options = normalizeTransportOptions(settings)
@@ -982,6 +1000,7 @@ export function resolvePetTransportSelection({ args = {}, settings = {}, orderTy
     fee: Number(option.fee),
     mode: option.id,
     label: option.label,
+    customer_brings_pet: false,
   }
 }
 
@@ -1068,8 +1087,12 @@ function formatOrderSummary(order, settings = {}) {
     lines.push(`• Serviço: ${order.service_label || order.service_type || order.order_type}`)
     lines.push(`• Horário: ${formatScheduledAt(order.scheduled_at, normalizePetbotSchedulingSettings(settings).timezone)}`)
     if (order.service_grooming_detail) lines.push(`• Acabamento: ${order.service_grooming_detail}`)
-    if (Number(order.service_transport_fee || 0) > 0) {
-      lines.push(`• Transporte do pet: ${money(order.service_transport_fee)}`)
+    if (order.order_type === 'banho_tosa') {
+      if (Number(order.service_transport_fee || 0) > 0) {
+        lines.push(`• MotoDog: ${order.service_transport_label || 'transporte do pet'} — ${money(order.service_transport_fee)}`)
+      } else {
+        lines.push('• Chegada do pet: cliente leva à loja')
+      }
     }
   } else {
     lines.push(`• Pagamento: ${order.payment_method}`)
@@ -1167,7 +1190,7 @@ export const PETBOT_AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'get_petshop_transport_options',
-      description: 'Consulta as opções e taxas reais de transporte do pet configuradas pela loja. Use antes de oferecer MotoDog ou citar taxa.',
+      description: 'Consulta as opções e taxas reais do MotoDog configuradas pela loja. Use somente quando o cliente quiser que a loja busque ou leve o pet.',
       strict: true,
       parameters: {
         type: 'object',
@@ -1180,30 +1203,22 @@ export const PETBOT_AGENT_TOOLS = [
   {
     type: 'function',
     function: {
-      name: 'prepare_petshop_order',
-      description: 'Revalida catálogo, preço, estoque, agenda, taxas e total e cria um pedido pendente para confirmação. Não registra a venda.',
+      name: 'prepare_petshop_product_order',
+      description: 'Prepara exclusivamente uma compra de produtos. Revalida preço, estoque, entrega e total. Para serviços use prepare_petshop_service_booking.',
       strict: true,
       parameters: {
         type: 'object',
         additionalProperties: false,
         properties: {
           customer_name: { type: 'string' },
-          pet_name: strictNullableString(),
-          species: { type: ['string', 'null'], enum: ['dog', 'cat', 'other', null] },
-          size: strictNullableString(),
-          breed: strictNullableString(),
-          weight_kg: strictNullableNumber(),
-          weight_label: strictNullableString(),
-          weight_estimated: { type: 'boolean' },
-          symptom: strictNullableString(),
-          order_type: { type: 'string', enum: ['produto', 'banho_tosa', 'veterinaria'] },
+          order_type: { type: 'string', enum: ['produto'] },
           items: {
             type: 'array',
             items: {
               type: 'object',
               additionalProperties: false,
               properties: {
-                product_id: strictNullableString(),
+                product_id: { type: 'string' },
                 name: { type: 'string' },
                 quantity: { type: 'number' },
                 upsell: { type: 'boolean' },
@@ -1211,21 +1226,50 @@ export const PETBOT_AGENT_TOOLS = [
               required: ['product_id', 'name', 'quantity', 'upsell'],
             },
           },
-          appointment_id: strictNullableString(),
-          scheduled_at: strictNullableString(),
-          service_product_id: strictNullableString('UUID do produto-serviço resolvido no catálogo comercial.'),
-          service_code: strictNullableString(),
-          service_type: strictNullableString(),
-          service_grooming_detail: strictNullableString(),
-          payment_method: { type: ['string', 'null'], enum: ['pix', 'dinheiro', 'cartao', null] },
-          fulfillment_type: { type: ['string', 'null'], enum: ['entrega', 'retirada', 'servico', null] },
+          payment_method: { type: 'string', enum: ['pix', 'dinheiro', 'cartao'] },
+          fulfillment_type: { type: 'string', enum: ['entrega', 'retirada'] },
           delivery_address: strictNullableString(),
           delivery_neighborhood: strictNullableString(),
           delivery_city: strictNullableString(),
           delivery_reference: strictNullableString(),
-          change_for: strictNullableNumber(),
-          service_transport_fee: strictNullableNumber(),
-          service_transport_mode: strictNullableString(),
+          change_for: strictNullableNumber('Somente para pagamento em dinheiro; use null para Pix ou cartão.'),
+          notes: strictNullableString(),
+        },
+        required: [
+          'customer_name', 'order_type', 'items', 'payment_method', 'fulfillment_type',
+          'delivery_address', 'delivery_neighborhood', 'delivery_city', 'delivery_reference',
+          'change_for', 'notes',
+        ],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'prepare_petshop_service_booking',
+      description: 'Prepara exclusivamente um agendamento de banho/tosa ou veterinária. Serviços são pagos após a execução: nunca peça forma de pagamento ou troco. Para banho/tosa informe explicitamente se o cliente leva o pet (cliente_leva) ou a opção real do MotoDog.',
+      strict: true,
+      parameters: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          customer_name: { type: 'string' },
+          pet_name: { type: 'string' },
+          species: { type: 'string', enum: ['dog', 'cat', 'other'] },
+          size: strictNullableString(),
+          breed: strictNullableString(),
+          weight_kg: strictNullableNumber(),
+          weight_label: strictNullableString(),
+          weight_estimated: { type: 'boolean' },
+          symptom: strictNullableString(),
+          order_type: { type: 'string', enum: ['banho_tosa', 'veterinaria'] },
+          appointment_id: strictNullableString(),
+          scheduled_at: { type: 'string' },
+          service_product_id: strictNullableString('UUID do produto-serviço resolvido no catálogo comercial.'),
+          service_code: strictNullableString(),
+          service_type: strictNullableString(),
+          service_grooming_detail: strictNullableString(),
+          service_transport_mode: strictNullableString('Para banho/tosa: cliente_leva ou ID exato de opção retornada por get_petshop_transport_options.'),
           service_transport_label: strictNullableString(),
           service_transport_address: strictNullableString(),
           service_transport_neighborhood: strictNullableString(),
@@ -1234,12 +1278,11 @@ export const PETBOT_AGENT_TOOLS = [
           notes: strictNullableString(),
         },
         required: [
-          'customer_name', 'pet_name', 'species', 'size', 'breed', 'weight_kg', 'weight_label', 'weight_estimated',
-          'symptom', 'order_type', 'items', 'appointment_id', 'scheduled_at', 'service_product_id',
-          'service_code', 'service_type', 'service_grooming_detail', 'payment_method', 'fulfillment_type',
-          'delivery_address', 'delivery_neighborhood', 'delivery_city', 'delivery_reference', 'change_for',
-          'service_transport_fee', 'service_transport_mode', 'service_transport_label', 'service_transport_address',
-          'service_transport_neighborhood', 'service_transport_city', 'service_transport_reference', 'notes'
+          'customer_name', 'pet_name', 'species', 'size', 'breed', 'weight_kg', 'weight_label',
+          'weight_estimated', 'symptom', 'order_type', 'appointment_id', 'scheduled_at',
+          'service_product_id', 'service_code', 'service_type', 'service_grooming_detail',
+          'service_transport_mode', 'service_transport_label', 'service_transport_address',
+          'service_transport_neighborhood', 'service_transport_city', 'service_transport_reference', 'notes',
         ],
       },
     },
@@ -1248,7 +1291,7 @@ export const PETBOT_AGENT_TOOLS = [
     type: 'function',
     function: {
       name: 'create_confirmed_petshop_order',
-      description: 'Registra exatamente o pedido pendente validado em um turno anterior após confirmação inequívoca.',
+      description: 'Registra exatamente o pedido ou agendamento pendente validado em um turno anterior após confirmação inequívoca. Quando houver pedido pendente e o cliente confirmar, use imediatamente esta ferramenta sem repetir o resumo ou pedir nova confirmação.',
       strict: true,
       parameters: {
         type: 'object',
@@ -1267,9 +1310,7 @@ export const PETBOT_AGENT_TOOLS = [
       parameters: {
         type: 'object',
         additionalProperties: false,
-        properties: {
-          reason: strictNullableString(),
-        },
+        properties: { reason: strictNullableString() },
         required: ['reason'],
       },
     },
@@ -1863,7 +1904,15 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     : null
   const servicePrice = subscriptionBenefit ? 0 : regularServicePrice
 
-  const transport = resolvePetTransportSelection({ args, settings, orderType })
+  const transport = resolvePetTransportSelection({
+    args,
+    settings,
+    orderType,
+    // Do not expose transport as a missing field before the service and slot are
+    // fully resolved. The LLM may still preserve a transport choice volunteered
+    // earlier, but it only has to ask this question at the final booking step.
+    requireDecision: orderType === 'banho_tosa' && missing.length === 0,
+  })
   if (!transport.ok) missing.push(transport.error)
   const transportAddress = nullableString(args.service_transport_address, 200)
   const transportNeighborhood = nullableString(args.service_transport_neighborhood, 100)
@@ -1902,6 +1951,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     service_transport_fee: serviceTransportFee,
     service_transport_mode: transport.mode,
     service_transport_label: transport.label,
+    service_transport_customer_brings: Boolean(transport.customer_brings_pet),
     service_transport_address: transport.requested ? transportAddress : null,
     service_transport_neighborhood: transport.requested ? transportNeighborhood : null,
     service_transport_city: transport.requested ? transportCity : null,

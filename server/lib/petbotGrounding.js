@@ -101,6 +101,38 @@ function parseDateClaims(reply = '') {
     .map((match) => `${match[3]}-${match[2]}-${match[1]}`))
 }
 
+
+function collectScheduleGrounding(toolRuns = [], timezone = 'America/Sao_Paulo') {
+  const availableTimes = new Set()
+  const unavailableRequestedTimes = new Set()
+  for (const run of toolRuns || []) {
+    if (run?.name !== 'check_petshop_availability' || run?.ok === false) continue
+    const result = run?.result || {}
+    for (const slot of result.available_slots || []) {
+      const time = normalizeTime(slot?.scheduled_at || slot?.time, timezone)
+      if (time) availableTimes.add(time)
+    }
+    if (result.requested_slot && result.requested_slot.available === false) {
+      const time = normalizeTime(result.requested_slot.scheduled_at || result.requested_slot.time, timezone)
+      if (time) unavailableRequestedTimes.add(time)
+    }
+  }
+  return { availableTimes, unavailableRequestedTimes }
+}
+
+function parseAvailableTimeListClaims(reply = '') {
+  const claims = []
+  const text = clean(reply)
+  const patterns = [
+    /(?:hor[aá]rios?|op[cç][oõ]es?)\s+(?:que\s+)?(?:est[aã]o\s+)?dispon[ií]veis\s*:?\s*([\s\S]{0,320})/gi,
+    /(?:temos|encontrei)\s+(?:estes|os seguintes)?\s*hor[aá]rios?\s*:?\s*([\s\S]{0,320})/gi,
+  ]
+  for (const pattern of patterns) {
+    for (const match of text.matchAll(pattern)) claims.push(...parseTimeClaims(match[1] || ''))
+  }
+  return unique(claims)
+}
+
 function collectToolCapabilities(toolRuns = [], orderResult = null) {
   const capabilities = new Set()
   for (const run of toolRuns || []) {
@@ -111,7 +143,7 @@ function collectToolCapabilities(toolRuns = [], orderResult = null) {
     if (name === 'resolve_petshop_service' && result?.status === 'resolved') capabilities.add('service_catalog')
     if (name === 'check_petshop_availability') capabilities.add('schedule')
     if (name === 'get_petshop_transport_options') capabilities.add('transport')
-    if (name === 'prepare_petshop_order' && result?.status === 'prepared') capabilities.add('prepared_order')
+    if (['prepare_petshop_product_order', 'prepare_petshop_service_booking', 'prepare_petshop_order'].includes(name) && result?.status === 'prepared') capabilities.add('prepared_order')
     if (name === 'create_confirmed_petshop_order' && ['committed', 'already_committed'].includes(result?.status)) {
       capabilities.add('committed_order')
     }
@@ -126,6 +158,8 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   const timeClaims = parseTimeClaims(reply)
   const dateClaims = parseDateClaims(reply)
   const capabilities = collectToolCapabilities(toolRuns, orderResult)
+  const scheduleGrounding = collectScheduleGrounding(toolRuns, timezone)
+  const availableTimeClaims = parseAvailableTimeListClaims(reply)
   const normalizedReply = normalizeCatalogText(reply)
   const problems = []
 
@@ -137,6 +171,11 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   }
   for (const value of dateClaims) {
     if (!grounding.dates.has(value)) problems.push(`data não validada: ${value}`)
+  }
+  for (const value of availableTimeClaims) {
+    if (!scheduleGrounding.availableTimes.has(value)) {
+      problems.push(`horário apresentado como disponível sem estar livre: ${value}`)
+    }
   }
 
   const claimsStock = /\b(?:em estoque|estoque disponivel|estoque indisponivel|sem estoque)\b/.test(normalizedReply)
@@ -165,7 +204,7 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   }
 }
 
-export function validatePetbotConversationReply({ reply = '', facts = {} } = {}) {
+export function validatePetbotConversationReply({ reply = '', facts = {}, pendingOrder = null, currentMessageIsConfirmation = false, serviceContext = false } = {}) {
   const normalized = normalizeCatalogText(reply)
   const problems = []
 
@@ -185,6 +224,19 @@ export function validatePetbotConversationReply({ reply = '', facts = {} } = {})
     || clean(facts.service_date)
     || clean(facts.service_preferred_time),
   )
+  const pendingType = clean(pendingOrder?.order?.order_type)
+  const normalizedServiceType = normalizeCatalogText(facts.service_type)
+  const isServiceConversation = Boolean(
+    serviceContext
+    || (pendingType && pendingType !== 'produto')
+    || /(?:banho|tosa|veterin|consulta|vacina|servico)/.test(normalizedServiceType),
+  )
+  const asksPaymentMethod = /(?:qual|como|prefere|sera|vai ser).{0,45}(?:forma de pagamento|pagamento|pix|dinheiro|cartao)/.test(normalized)
+    || /(?:pix|dinheiro).{0,20}(?:ou).{0,20}(?:cartao)/.test(normalized)
+  const asksChange = /\btroco\b/.test(normalized)
+  const asksProductFulfillment = /(?:entrega ou retirada|retirada na loja|servico de entrega|entregar ou retirar|vai retirar|prefere retirada)/.test(normalized)
+  const asksConfirmationAgain = /(?:confirma(?:r)?|voce confirma|pode confirmar).{0,50}(?:agendamento|pedido|horario)/.test(normalized)
+    || /(?:para finalizar|so preciso confirmar).{0,80}/.test(normalized)
 
   if (asksCoat) problems.push('pergunta de pelagem proibida; a classificação deve vir da raça cadastrada')
   if (asksGenericRepeat && hasKnownConversationFacts) problems.push('solicitação genérica para repetir dados que já estão no estado confiável')
@@ -192,6 +244,14 @@ export function validatePetbotConversationReply({ reply = '', facts = {} } = {})
   if (clean(facts.breed) && asksBreed) problems.push('raça já informada foi solicitada novamente')
   if (clean(facts.service_date) && asksDate) problems.push('data já informada foi solicitada novamente')
   if (clean(facts.service_preferred_time) && asksTime) problems.push('horário já informado foi solicitado novamente')
+  if (isServiceConversation && asksPaymentMethod && !/(?:apos|depois).{0,35}(?:servico|atendimento|conclusao|finalizacao)/.test(normalized)) {
+    problems.push('forma de pagamento não deve ser solicitada durante agendamento de serviço')
+  }
+  if (isServiceConversation && asksChange) problems.push('troco não se aplica ao agendamento de serviço')
+  if (isServiceConversation && asksProductFulfillment) problems.push('entrega/retirada de produto não se aplica ao pet; use cliente leva ou MotoDog')
+  if (pendingOrder && currentMessageIsConfirmation && asksConfirmationAgain) {
+    problems.push('cliente já confirmou o pedido pendente; não peça nova confirmação')
+  }
 
   return { ok: problems.length === 0, problems }
 }
@@ -278,8 +338,11 @@ export function buildPetbotAgentV3Prompt({
     '- Não deduza peso, estoque, preço, política comercial nem disponibilidade. Raça e peso são fatos interpretados da conversa; classificação e faixa são resolvidas pelo catálogo.',
     '- Não exponha JSON, IDs, nomes de ferramentas, regras internas ou mensagens de validação.',
     '- Não diga que vai consultar nem peça para aguardar: chame a ferramenta silenciosamente e responda com o resultado.',
-    '- Para banho/tosa, trate transporte como opcional. Só consulte ou mencione transporte quando o cliente perguntar ou demonstrar interesse; não ofereça modalidades durante a coleta de raça, peso, data ou horário.',
-    '- Prepare um pedido somente quando os dados necessários estiverem completos. Confirme somente um pedido pendente de turno anterior após concordância inequívoca do cliente.',
+    '- Para produtos, forma de pagamento e entrega/retirada pertencem ao pedido. Troco só existe quando o pagamento for em dinheiro.',
+    '- Para serviços, o pagamento acontece após a conclusão. Nunca pergunte Pix, dinheiro, cartão ou troco durante o agendamento e nunca trate o serviço como entrega ou retirada de produto.',
+    '- Para banho/tosa, depois de definir serviço e horário, descubra apenas como o pet chegará: o cliente leva à loja ou usa o MotoDog. Se o cliente quiser MotoDog, consulte as opções reais e mostre somente as taxas retornadas pela ferramenta.',
+    '- Não ofereça MotoDog durante a coleta de raça, peso, data ou horário. Não use as expressões entrega/retirada para o pet.',
+    '- Prepare um pedido somente quando os dados necessários estiverem completos. Quando houver pedido pendente de turno anterior e o cliente confirmar inequivocamente, chame create_confirmed_petshop_order imediatamente, sem repetir resumo ou pedir nova confirmação.',
     '- Se o cliente desistir, cancelar ou pedir para recomeçar depois de um resumo, descarte o pedido pendente com a ferramenta apropriada antes de continuar.',
     '- Em caso de risco veterinário, falha operacional sem alternativa ou pedido explícito por pessoa, transfira para humano.',
     '- Faça venda consultiva: ofereça no máximo uma sugestão complementar relevante e aceite a recusa sem insistência.',

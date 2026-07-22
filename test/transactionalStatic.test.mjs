@@ -312,3 +312,16 @@ test('catalogo de servicos normaliza especie e protege novos cadastros', async (
   assert.match(agent, /isUniversalSmallDogBathService/)
   assert.match(agent, /normalizedWeight <= 10/)
 })
+
+
+test('agendamento PetBot permanece a receber e aceita origem WhatsApp', async () => {
+  const migration = await read('supabase/migrations/20260722001000_petbot_service_booking_flow.sql')
+  assert.match(migration, /appointments_source_check[\s\S]*source ~ '\^\[a-z0-9\]/)
+  assert.match(migration, /fulfillment_type = 'servico'/)
+  assert.match(migration, /payment_method := null/)
+  assert.match(migration, /payment_status := 'a_receber'/)
+  assert.match(migration, /service_delivery_orders/)
+  assert.match(migration, /create trigger normalize_petbot_service_booking_sale\s+before insert on public\.sales/)
+  assert.match(migration, /create trigger normalize_petbot_service_delivery_payment\s+before insert on public\.service_delivery_orders/)
+  assert.doesNotMatch(migration, /normalize_petbot_service_booking_sale\s+before insert or update/)
+})

@@ -12,6 +12,7 @@ import {
   normalizePetbotRequestedDate,
   normalizePetbotRequestedTime,
   preparePetshopOrderDraft,
+  resolvePetTransportSelection,
   resolvePetshopService,
   runPetbotAgent,
   serviceFromCatalogProduct,
@@ -602,7 +603,7 @@ test('pelagem nunca vira pergunta e fica fora das ferramentas conversacionais', 
   assert.match(prompt, /Nunca pergunte tipo de pelo ou pelagem/i)
 
   const resolveTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'resolve_petshop_service')
-  const prepareTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'prepare_petshop_order')
+  const prepareTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'prepare_petshop_service_booking')
   assert.ok(resolveTool)
   assert.ok(prepareTool)
   assert.equal(Object.hasOwn(resolveTool.function.parameters.properties, 'coat_type'), false)
@@ -974,7 +975,8 @@ test('todas as ferramentas do agente percorrem o protocolo de retorno sem payloa
     'resolve_petshop_service',
     'check_petshop_availability',
     'get_petshop_transport_options',
-    'prepare_petshop_order',
+    'prepare_petshop_product_order',
+    'prepare_petshop_service_booking',
     'create_confirmed_petshop_order',
     'cancel_pending_petshop_order',
     'send_product_image',
@@ -1016,4 +1018,126 @@ test('todas as ferramentas do agente percorrem o protocolo de retorno sem payloa
     })
     assert.equal(sequence, 2, toolName)
   }
+})
+
+
+test('ferramentas separam compra de produto de agendamento de servico', () => {
+  const productTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'prepare_petshop_product_order')
+  const serviceTool = PETBOT_AGENT_TOOLS.find((tool) => tool.function.name === 'prepare_petshop_service_booking')
+  assert.ok(productTool)
+  assert.ok(serviceTool)
+
+  const productFields = productTool.function.parameters.properties
+  const serviceFields = serviceTool.function.parameters.properties
+  assert.ok(Object.hasOwn(productFields, 'payment_method'))
+  assert.ok(Object.hasOwn(productFields, 'fulfillment_type'))
+  assert.ok(Object.hasOwn(productFields, 'change_for'))
+  assert.equal(Object.hasOwn(serviceFields, 'payment_method'), false)
+  assert.equal(Object.hasOwn(serviceFields, 'fulfillment_type'), false)
+  assert.equal(Object.hasOwn(serviceFields, 'change_for'), false)
+  assert.equal(Object.hasOwn(serviceFields, 'delivery_address'), false)
+  assert.ok(Object.hasOwn(serviceFields, 'service_transport_mode'))
+})
+
+test('banho exige decisao de chegada do pet mas nunca forma de pagamento', () => {
+  const baseArgs = {
+    customer_name: 'Ricardo', pet_name: 'Toby', species: 'dog', breed: 'Shih Tzu', weight_kg: 6,
+    weight_label: '6 kg', weight_estimated: true, coat_type: 'longo', order_type: 'banho_tosa',
+    items: [], appointment_id: null, scheduled_at: '2026-07-22T14:30:00-03:00',
+    service_code: service.code, service_type: service.code,
+  }
+  const missingTransport = preparePetshopOrderDraft({
+    args: baseArgs,
+    services: [service], appointments: [], now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(missingTransport.ok, false)
+  assert.ok(missingTransport.missing.includes('como o pet chegará à loja (cliente leva ou MotoDog)'))
+  assert.equal(missingTransport.missing.some((item) => /pagamento|troco|retirada/i.test(item)), false)
+
+  const clientBrings = preparePetshopOrderDraft({
+    args: { ...baseArgs, service_transport_mode: 'cliente_leva' },
+    services: [service], appointments: [], now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+  assert.equal(clientBrings.ok, true)
+  assert.equal(clientBrings.order.payment_method, null)
+  assert.equal(clientBrings.order.fulfillment_type, 'servico')
+  assert.equal(clientBrings.order.change_for, null)
+  assert.match(clientBrings.summary, /cliente leva à loja/i)
+  assert.doesNotMatch(clientBrings.summary, /Pix|dinheiro|cartão|troco|retirada na loja/i)
+})
+
+test('MotoDog so vira pergunta obrigatoria depois de servico e horario resolvidos', () => {
+  const incomplete = preparePetshopOrderDraft({
+    args: {
+      customer_name: 'Ricardo', pet_name: 'Toby', species: 'dog', breed: 'Shih Tzu', weight_kg: 6,
+      weight_label: '6 kg', weight_estimated: true, order_type: 'banho_tosa', items: [],
+      appointment_id: null, scheduled_at: null, service_code: service.code, service_type: service.code,
+    },
+    services: [service], appointments: [], now: new Date('2026-07-21T10:00:00-03:00'),
+  })
+
+  assert.equal(incomplete.ok, false)
+  assert.ok(incomplete.missing.includes('horário real da agenda'))
+  assert.equal(incomplete.missing.some((item) => /MotoDog|chegará à loja/i.test(item)), false)
+})
+
+test('MotoDog usa apenas opcao e taxa configuradas pela loja', () => {
+  const selection = resolvePetTransportSelection({
+    orderType: 'banho_tosa',
+    args: { service_transport_mode: 'somente_buscar', service_transport_fee: 999 },
+    settings: { petTransportOptions: [{ id: 'somente_buscar', label: 'Somente buscar', fee: 15, active: true }] },
+    requireDecision: true,
+  })
+  assert.equal(selection.ok, true)
+  assert.equal(selection.fee, 15)
+  assert.equal(selection.label, 'Somente buscar')
+})
+
+test('validador bloqueia pagamento troco e entrega de produto em agendamento', () => {
+  const common = { facts: { service_type: 'banho', pet_name: 'Toby' }, serviceContext: true }
+  for (const reply of [
+    'Qual forma prefere para o pagamento? Pix, dinheiro ou cartão?',
+    'Precisa de troco para quanto?',
+    'Você prefere retirada na loja ou entrega?',
+  ]) {
+    const result = validatePetbotConversationReply({ reply, ...common })
+    assert.equal(result.ok, false, reply)
+  }
+
+  const natural = validatePetbotConversationReply({
+    reply: 'Você vai trazer o Toby à loja ou prefere que a gente busque com o MotoDog?',
+    ...common,
+  })
+  assert.equal(natural.ok, true)
+})
+
+test('validador nao permite listar como livre um horario reservado', () => {
+  const result = validatePetbotOperationalReply({
+    reply: 'Hoje às 14:00 está reservado. Horários disponíveis: 13:30, 14:00 e 14:30.',
+    toolRuns: [{
+      name: 'check_petshop_availability', ok: true,
+      result: {
+        status: 'available',
+        requested_slot: { time: '14:00', scheduled_at: '2026-07-22T14:00:00-03:00', available: false },
+        available_slots: [
+          { time: '13:30', scheduled_at: '2026-07-22T13:30:00-03:00' },
+          { time: '14:30', scheduled_at: '2026-07-22T14:30:00-03:00' },
+        ],
+      },
+    }],
+  })
+  assert.equal(result.ok, false)
+  assert.ok(result.problems.some((problem) => problem.includes('14:00')))
+})
+
+test('confirmacao ja dada nao pode gerar nova pergunta de confirmacao', () => {
+  const result = validatePetbotConversationReply({
+    reply: 'Só preciso confirmar: você confirma o agendamento para 14:30?',
+    facts: { service_type: 'banho' },
+    pendingOrder: { order: { order_type: 'banho_tosa' } },
+    currentMessageIsConfirmation: true,
+    serviceContext: true,
+  })
+  assert.equal(result.ok, false)
+  assert.ok(result.problems.some((problem) => /já confirmou/i.test(problem)))
 })
