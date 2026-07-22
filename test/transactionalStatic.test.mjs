@@ -289,6 +289,8 @@ test('contexto persistente do agente usa JSONB e converte dados legados com segu
   assert.match(migration, /if jsonb_typeof\(v_json\) = 'object'/)
   assert.match(migration, /return jsonb_build_object\('legacy_value', v_json\)/)
   assert.match(migration, /return jsonb_build_object\('legacy_text', p_value\)/)
+  assert.match(migration, /from information_schema\.columns as column_info/)
+  assert.doesNotMatch(migration, /information_schema\.columns column/)
   assert.match(migration, /alter column context type jsonb\s+using public\._yuisync_safe_chat_context\(context::text\)/)
   assert.match(migration, /alter column context set default '\{\}'::jsonb/)
   assert.match(migration, /alter column context set not null/)

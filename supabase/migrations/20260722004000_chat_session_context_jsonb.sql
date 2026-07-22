@@ -36,12 +36,12 @@ do $migration$
 declare
   v_context_type text;
 begin
-  select column.udt_name
+  select column_info.udt_name
   into v_context_type
-  from information_schema.columns column
-  where column.table_schema = 'public'
-    and column.table_name = 'chat_sessions'
-    and column.column_name = 'context';
+  from information_schema.columns as column_info
+  where column_info.table_schema = 'public'
+    and column_info.table_name = 'chat_sessions'
+    and column_info.column_name = 'context';
 
   if v_context_type is null then
     alter table public.chat_sessions
