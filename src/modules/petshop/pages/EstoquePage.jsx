@@ -107,7 +107,7 @@ function isServiceProduct(product = {}) {
   const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
   // Some legacy rows received the category "Serviço" during import even
   // though they are physical merchandise. Product names take precedence.
-  if (/banheira|banho a seco|brinquedo|casinha|roupa|shampoo|varinha/.test(normalize(product.name))) return false
+  if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|varinha/.test(normalize(product.name))) return false
   // Bath packages are managed in the Plans area, never in the service catalog.
   if (/pacote.*banho|banho.*pacote/.test(normalize(product.name))) return false
   return metadata.product_type === 'servico'
@@ -149,6 +149,9 @@ function metadataToForm(product) {
 
 function inferBotProductType(form) {
   const text = normalize([form.name, form.category, form.description].filter(Boolean).join(' '))
+  const name = normalize(form.name)
+  if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return 'produto'
+  if (/pacote.*banho|banho.*pacote/.test(name)) return 'produto'
   if (/granel|a granel/.test(text)) return 'granel'
   if (/banho|tosa|consulta|vacina|exame|ultrassom|cirurg/.test(text)) return 'servico'
   if (/areia|higienica/.test(text)) return 'areia'
@@ -194,7 +197,7 @@ function buildBotMetadata(form, product) {
     coat_type: coatType || null,
     service_group: productType === 'servico'
       ? (form.bot_service_group || current.service_group || null)
-      : (current.service_group || null),
+      : null,
     breed,
     all_breeds: coatType === 'todas',
     package_kg: form.bot_package_kg ? Number(form.bot_package_kg) : null,

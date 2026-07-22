@@ -7,6 +7,7 @@ import {
   buildServiceAvailability,
   findPetshopSubscriptionBenefit,
   groundPetbotServiceArgs,
+  isServiceCatalogProduct,
   listPetTransportOptions,
   mergeInterpretedPetbotServiceFacts,
   normalizePetbotRequestedDate,
@@ -327,6 +328,21 @@ test('area explicita do servico no cadastro tem prioridade sobre inferencia pelo
   })
 
   assert.equal(product.group_type, 'veterinaria')
+})
+
+test('mercadoria de banho e pacote nao entram no catalogo de agendamento', () => {
+  const legacyServiceMetadata = { product_type: 'servico', service_group: 'banho_tosa' }
+  for (const name of [
+    'BANHO A SECO BEEPS 200ML',
+    'PO BANHO SECO MUNDO PET',
+    'PACOTE BANHO 0 A 10 KG',
+  ]) {
+    assert.equal(isServiceCatalogProduct({
+      name,
+      category: 'Banho',
+      bot_metadata: legacyServiceMetadata,
+    }), false, name)
+  }
 })
 
 test('banho de gato continua selecionando somente o catalogo felino', () => {

@@ -423,7 +423,7 @@ export function isServiceCatalogProduct(product = {}) {
   const name = normalize(product.name)
   const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
 
-  if (/banheira|banho a seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return false
+  if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return false
   if (/pacote.*banho|banho.*pacote/.test(name)) return false
 
   return normalize(metadata.product_type) === 'servico'
