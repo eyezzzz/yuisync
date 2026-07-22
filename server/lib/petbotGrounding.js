@@ -147,6 +147,7 @@ function collectToolCapabilities(toolRuns = [], orderResult = null) {
     if (name === 'create_confirmed_petshop_order' && ['committed', 'already_committed'].includes(result?.status)) {
       capabilities.add('committed_order')
     }
+    if (name === 'handoff_to_human') capabilities.add('human_handoff')
   }
   if (orderResult) capabilities.add('committed_order')
   return capabilities
@@ -195,6 +196,12 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
     || /\b(?:confirmamos|registramos|finalizamos|concluimos|agendamos)\b.{0,30}\b(?:pedido|agendamento|servico)\b/.test(normalizedReply)
   if (claimsCommitted && !capabilities.has('committed_order')) {
     problems.push('conclusão de pedido sem transação confirmada')
+  }
+
+  const claimsHandoff = /\b(?:vou|vamos|estou|estamos)\b.{0,35}\b(?:transferir|transferindo|chamar|chamando|passar|passando)\b/.test(normalizedReply)
+    || /\b(?:transferencia|encaminhamento)\b.{0,35}\b(?:atendente|equipe|veterinaria|humano)\b/.test(normalizedReply)
+  if (claimsHandoff && !capabilities.has('human_handoff')) {
+    problems.push('transferência humana anunciada sem executar o handoff')
   }
 
   return {
@@ -356,6 +363,7 @@ export function buildPetbotAgentV3Prompt({
   storeName = 'YuiSync',
   storePhone = '',
   storeLocation = '',
+  storeInformation = {},
   customer = {},
   facts = {},
   pendingOrder = null,
@@ -403,7 +411,11 @@ export function buildPetbotAgentV3Prompt({
     '- Prepare um pedido somente quando os dados necessários estiverem completos. Quando houver pedido pendente de turno anterior e o cliente confirmar inequivocamente, chame create_confirmed_petshop_order imediatamente, sem repetir resumo ou pedir nova confirmação.',
     '- Se o cliente desistir, cancelar ou pedir para recomeçar depois de um resumo, descarte o pedido pendente com a ferramenta apropriada antes de continuar.',
     '- Em caso de risco veterinário, falha operacional sem alternativa ou pedido explícito por pessoa, transfira para humano.',
+    '- Se veterinary_risk estiver como emergency, chame handoff_to_human para veterinaria imediatamente e não continue a venda ou o agendamento.',
+    '- Nunca diga que está transferindo ou chamando uma pessoa sem executar handoff_to_human no mesmo turno.',
     '- Em compras de produtos, faça venda consultiva com no máximo uma sugestão complementar relevante e aceite a recusa sem insistência. Essa regra não se aplica a agendamentos.',
+    '- Para dúvidas sobre a loja, responda somente com as Informações verificadas da loja abaixo. Use a mensagem aprovada correspondente quando existir.',
+    '- Se a resposta não estiver nas informações verificadas, diga claramente que precisa confirmar com a equipe e ofereça falar com um atendente. Não invente nem transfira antes de o cliente aceitar.',
     '',
     'Estado confiável da conversa:',
     JSON.stringify({
@@ -418,6 +430,9 @@ export function buildPetbotAgentV3Prompt({
         local_datetime: current.toISO(),
       },
     }),
+    '',
+    'Informações verificadas da loja:',
+    JSON.stringify(storeInformation && typeof storeInformation === 'object' ? storeInformation : {}),
     '',
     'Contexto operacional pré-carregado pelo servidor:',
     JSON.stringify(operationalContext || { service_resolution: null, availability: null }),
@@ -436,4 +451,65 @@ export function normalizeProductQueryFacts(interpretation = {}, serviceFacts = {
     brand: normalizeCatalogText(interpretation.brand),
     package_kg: Number(interpretation.package_kg || 0) || null,
   }
+}
+
+export function buildVerifiedStoreQuestionReply({ message = '', storeInformation = {} } = {}) {
+  const normalized = normalizeCatalogText(message)
+  const lines = []
+  const address = clean(storeInformation?.address)
+  const phone = clean(storeInformation?.phone)
+  const businessHours = storeInformation?.business_hours && typeof storeInformation.business_hours === 'object'
+    ? storeInformation.business_hours
+    : {}
+
+  if (/\b(?:endereco|localizacao|onde fica|como chegar)\b/.test(normalized) && address) {
+    lines.push(`Endereço: ${address}.`)
+  }
+  if (/\b(?:telefone|whatsapp|contato)\b/.test(normalized) && phone) {
+    lines.push(`Telefone: ${phone}.`)
+  }
+  if (/\b(?:horario|funcionamento|abre|abrem|fecha|fecham)\b/.test(normalized)) {
+    const requestedDay = Object.keys(businessHours).find((day) => normalized.includes(normalizeCatalogText(day)))
+    const entries = (requestedDay ? [[requestedDay, businessHours[requestedDay]]] : Object.entries(businessHours))
+      .map(([day, periods]) => {
+        const values = Array.isArray(periods) ? periods.filter(Boolean) : []
+        return `${day}: ${values.length ? values.join(' e ') : 'fechado'}`
+      })
+    if (entries.length) lines.push(`Horário de funcionamento: ${entries.join('; ')}.`)
+  }
+  if (/\b(?:forma|formas|meio|meios)\b.{0,25}\bpagamento\b|\bpagamento\b/.test(normalized)) {
+    const methods = Array.isArray(storeInformation?.product_payment_methods)
+      ? storeInformation.product_payment_methods.filter(Boolean)
+      : []
+    if (methods.length) lines.push(`Para produtos, aceitamos ${methods.join(', ')}.`)
+    if (clean(storeInformation?.service_payment_policy)) lines.push(clean(storeInformation.service_payment_policy))
+  }
+
+  return lines.join('\n')
+}
+
+export function buildUnknownStoreQuestionReply({ storeInformation = {} } = {}) {
+  const approved = storeInformation?.approved_messages && typeof storeInformation.approved_messages === 'object'
+    ? storeInformation.approved_messages
+    : {}
+  return clean(
+    approved.unknown_information
+    || approved.unknown_question
+    || approved.human_assistance_offer,
+  ) || 'Não tenho essa informação confirmada no cadastro da loja. Posso chamar um atendente para verificar para você?'
+}
+
+export function shouldAnswerVerifiedStoreQuestion({
+  message = '',
+  detectedIntent = '',
+  interpretedIntent = '',
+  serviceOrderType = '',
+  hasPendingOrder = false,
+} = {}) {
+  if (clean(detectedIntent).toLowerCase() !== 'duvida' || hasPendingOrder || clean(serviceOrderType)) return false
+  if (['produto', 'banho_tosa', 'veterinaria', 'multi'].includes(clean(interpretedIntent).toLowerCase())) return false
+
+  const normalized = normalizeCatalogText(message)
+  return String(message).includes('?')
+    || /\b(?:qual|quais|onde|quando|como|voces|tem|teria|fazem|oferecem|aceitam|abre|abrem|fecha|fecham|funciona|funcionamento|horario|endereco|telefone|pagamento)\b/.test(normalized)
 }

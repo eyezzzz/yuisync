@@ -143,6 +143,8 @@ export function mergeInterpretedPetbotServiceFacts({
   const serviceTransportMode = currentTransportMode
     || clean(inheritedPet.service_transport_mode)
     || null
+  const size = clean(current.size) || clean(inheritedPet.size) || null
+  const symptom = clean(current.symptom) || clean(inheritedPet.symptom) || null
 
   return {
     pet_name: petName,
@@ -151,6 +153,10 @@ export function mergeInterpretedPetbotServiceFacts({
     species_explicit: Boolean(species),
     breed,
     breed_explicit: Boolean(breed),
+    size,
+    size_explicit: Boolean(size),
+    symptom,
+    symptom_explicit: Boolean(symptom),
     weight_kg: weightKg,
     weight_label: weightLabel,
     weight_estimated: hasCurrentWeight
@@ -200,6 +206,12 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     breed: facts.breed_explicit
       ? clean(facts.breed) || null
       : clean(args.breed) || null,
+    size: facts.size_explicit
+      ? clean(facts.size) || null
+      : clean(args.size) || null,
+    symptom: facts.symptom_explicit
+      ? clean(facts.symptom) || null
+      : clean(args.symptom) || null,
     weight_kg: weightKg,
     weight_label: facts.weight_explicit
       ? clean(facts.weight_label) || null
@@ -1384,6 +1396,60 @@ export function isExplicitPetbotConfirmation(message = '') {
   if (!text) return false
   if (/^(sim|s|sm|confirmo|confirmado|pode|pode sim|pode finalizar|pode fechar|fecha|finaliza|ok|certo|correto|isso)$/.test(text)) return true
   return /\b(confirmo|pode finalizar|pode fechar|pode separar|confirma o agendamento|esta correto|tudo certo)\b/.test(text)
+}
+
+export function explicitPetbotHandoffTarget(message = '', interpretation = {}) {
+  const text = normalize(message).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  const asksToTalk = /\b(falar|conversar|chamar|chame|transferir|transfere|transfira|passar|passa|passe|atendimento)\b/.test(text)
+  const namesHuman = /\b(atendente|pessoa|alguem|humano|humana|equipe|veterinario|veterinaria)\b/.test(text)
+  if (!asksToTalk || (!namesHuman && !interpretation?.wants_human)) return ''
+  return /\b(veterinario|veterinaria)\b/.test(text) ? 'veterinaria' : 'atendente'
+}
+
+export function acceptedPetbotHandoffOffer(message = '', history = []) {
+  const answer = normalize(message).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!/^(?:sim|s|quero|pode|pode sim|sim por favor|por favor|isso)$/.test(answer)) return false
+
+  const lastAssistant = [...(Array.isArray(history) ? history : [])]
+    .reverse()
+    .find((entry) => entry?.role === 'assistant')
+  const previous = normalize(lastAssistant?.content)
+  return /\b(?:posso|quer|gostaria)\b.{0,70}\b(?:chamar|falar|transferir)\b.{0,45}\b(?:atendente|pessoa|humano|equipe)\b/.test(previous)
+}
+
+export function shouldForcePetbotServicePreparation({
+  orderType = '',
+  customerName = '',
+  facts = {},
+  resolvedService = null,
+  operationalContext = null,
+} = {}) {
+  const hasSchedule = Boolean(
+    clean(facts.service_date)
+    && (clean(facts.service_preferred_time) || clean(facts.service_time_preference)),
+  )
+  const commonReady = Boolean(
+    clean(customerName)
+    && clean(facts.pet_name)
+    && clean(facts.species)
+    && hasSchedule
+    && resolvedService
+    && operationalContext?.availability?.requested_slot?.available === true,
+  )
+  if (!commonReady) return false
+
+  if (clean(orderType) === 'veterinaria') {
+    return Boolean((clean(facts.size) || clean(facts.breed)) && clean(facts.symptom))
+  }
+
+  if (clean(orderType) !== 'banho_tosa') return false
+  return Boolean(
+    clean(facts.breed)
+    && Number(facts.weight_kg || 0) > 0
+    && clean(facts.service_transport_mode)
+    && normalize(facts.service_transport_mode) !== 'motodog'
+    && facts.service_notes_resolved,
+  )
 }
 
 export function buildServiceAvailability({

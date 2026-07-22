@@ -51,6 +51,20 @@ test('PetBot aplica a RPC transacional de estoque e agenda na cadeia de migracoe
   assert.match(migration, /status = 'agendado'/)
 })
 
+test('smoke test do PetBot valida operacoes reais e sempre descarta os dados', async () => {
+  const smoke = await read('supabase/petbot_controlled_smoke_test.sql')
+  assert.match(smoke, /^begin;/m)
+  assert.match(smoke, /create_petbot_order_transaction/)
+  assert.match(smoke, /item\.quantity = 0\.5/)
+  assert.match(smoke, /Estoque insuficiente/)
+  assert.match(smoke, /confirmacao duplicada movimentou o estoque novamente/)
+  assert.match(smoke, /agendamento veterinario nao apareceu corretamente na agenda/)
+  assert.match(smoke, /Horario nao esta mais disponivel/)
+  assert.match(smoke, /last_petbot_idempotency_key/)
+  assert.match(smoke, /rollback;\s*$/i)
+  assert.doesNotMatch(smoke, /\bcommit\s*;/i)
+})
+
 test('deploy permanece dentro do limite de funcoes do Vercel Hobby', async () => {
   const apiFiles = await readdir(new URL('api/', root), { recursive: true })
   const serverlessFunctions = apiFiles.filter((path) => path.endsWith('.ts'))

@@ -11,6 +11,7 @@ const FULFILLMENTS = new Set(['entrega', 'retirada'])
 const AGES = new Set(['filhote', 'adulto', 'castrado', 'senior'])
 const SIZES = new Set(['pequeno', 'medio', 'grande'])
 const SERVICE_TRANSPORT_MODES = new Set(['cliente_leva', 'motodog'])
+const VETERINARY_RISKS = new Set(['none', 'urgent', 'emergency'])
 
 function clean(value = '') {
   return String(value ?? '').trim()
@@ -162,6 +163,7 @@ export function normalizePetbotInterpretation(input = {}) {
     service_time_preference: pickString(data.service_time_preference || data.serviceTimePreference || data.time_preference || data.timePreference, 40),
     service_preferred_time: pickString(data.service_preferred_time || data.servicePreferredTime || data.preferred_time || data.preferredTime, 40),
     symptom: pickString(data.symptom, 160),
+    veterinary_risk: pickEnum(data.veterinary_risk || data.veterinaryRisk, VETERINARY_RISKS) || 'none',
     payment_method: payment,
     fulfillment_type: pickEnum(data.fulfillment_type || data.fulfillmentType, FULFILLMENTS),
     delivery_address: pickString(data.delivery_address || data.deliveryAddress, 200),
@@ -176,6 +178,22 @@ export function normalizePetbotInterpretation(input = {}) {
     confidence: clampNumber(data.confidence, 0, 1) ?? 0,
     raw_summary: pickString(data.raw_summary || data.rawSummary, 240),
   }
+}
+
+export function detectExplicitVeterinaryEmergency(message = '') {
+  const normalized = norm(message).replace(/[^a-z0-9\s]/g, ' ').replace(/\s+/g, ' ').trim()
+  if (!normalized) return false
+
+  return [
+    /\b(?:dificuldade|dificuldades) (?:para|pra|de) respirar\b/,
+    /\b(?:falta de ar|nao (?:esta )?respirando|nao respira|sem respirar)\b/,
+    /\b(?:sangramento intenso|sangrando muito|hemorragia)\b/,
+    /\b(?:convulsao|convulsionando|ataque convulsivo)\b/,
+    /\b(?:desmaiado|desmaiada|inconsciente|sem consciencia)\b/,
+    /\b(?:envenenado|envenenada|envenenamento|intoxicado|intoxicada|intoxicacao)\b/,
+    /\b(?:atropelado|atropelada|atropelamento)\b/,
+    /\b(?:engasgado|engasgada|engasgando)\b/,
+  ].some((pattern) => pattern.test(normalized))
 }
 
 export function reconcilePetbotIdentityInterpretation(message = '', interpretation = null) {
@@ -222,10 +240,11 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Se disser uma faixa suficiente para o catalogo, como "ate 10 kg" ou "mais de 10 kg", use um valor operacional compativel em weight_kg, preserve a frase em weight_label e marque weight_estimated=true.',
         'Extraia coat_type somente quando o cliente disser a pelagem. A classificacao de pelagem por raca sera resolvida pelo catalogo do sistema, nao por esta camada.',
         'Para banho/tosa e veterinaria, pagamento nao e obrigatorio no chat; extraia payment_method somente quando o cliente falar pagamento espontaneamente.',
+        'Classifique veterinary_risk="emergency" quando houver dificuldade para respirar, sangramento intenso, convulsao, desmaio/inconsciencia, envenenamento, atropelamento ou outro risco imediato. Use "urgent" para sintomas preocupantes sem risco imediato e "none" nos demais casos.',
         'Se o cliente disser "Robertao, quero uma racao", extraia customer_name "Robertao" e intent "produto".',
         'Interjeicoes como "ue", "uai", "oxe", "opa" nao sao nome.',
         'Retorne apenas JSON valido, sem markdown.',
-        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, service_type, service_grooming_detail, service_notes, service_transport_mode, service_date, service_time_preference, service_preferred_time, symptom, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, confirmation, negation, confidence, raw_summary.',
+        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, service_type, service_grooming_detail, service_notes, service_transport_mode, service_date, service_time_preference, service_preferred_time, symptom, veterinary_risk, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, confirmation, negation, confidence, raw_summary.',
         'Enums: intent produto|banho_tosa|veterinaria|multi; species dog|cat; size pequeno|medio|grande; age_category filhote|adulto|castrado|senior; product_kind food|flea|litter|specific; payment_method pix|dinheiro|cartao; fulfillment_type entrega|retirada.',
         clean(customInstructions) ? `Instrucoes de atendimento publicadas para este tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
       ].join('\n'),
@@ -274,6 +293,7 @@ const PETBOT_INTERPRETATION_SCHEMA = {
       service_time_preference: { type: ['string', 'null'] },
       service_preferred_time: { type: ['string', 'null'] },
       symptom: { type: ['string', 'null'] },
+      veterinary_risk: { type: 'string', enum: ['none', 'urgent', 'emergency'] },
       payment_method: { type: ['string', 'null'], enum: ['pix', 'dinheiro', 'cartao', null] },
       fulfillment_type: { type: ['string', 'null'], enum: ['entrega', 'retirada', null] },
       delivery_address: { type: ['string', 'null'] },
@@ -292,7 +312,7 @@ const PETBOT_INTERPRETATION_SCHEMA = {
       'customer_name', 'intent', 'pet_name', 'species', 'breed', 'size', 'weight_kg', 'weight_label',
       'weight_estimated', 'coat_type', 'age_category', 'product_kind', 'brand', 'package_preference',
       'package_kg', 'quantity', 'service_type', 'service_grooming_detail', 'service_notes', 'service_transport_mode', 'service_date',
-      'service_time_preference', 'service_preferred_time', 'symptom', 'payment_method', 'fulfillment_type',
+      'service_time_preference', 'service_preferred_time', 'symptom', 'veterinary_risk', 'payment_method', 'fulfillment_type',
       'delivery_address', 'neighborhood', 'city', 'reference', 'wants_human', 'wants_discount', 'wants_image',
       'confirmation', 'negation', 'confidence', 'raw_summary',
     ],
@@ -341,9 +361,25 @@ export async function interpretPetbotMessageWithLlm(options = {}) {
     messages: buildInterpreterMessages(options),
   })
   const parsed = safeJsonParse(content)
-  return parsed
-    ? reconcilePetbotIdentityInterpretation(options.message, normalizePetbotInterpretation(parsed))
-    : null
+  const emergency = detectExplicitVeterinaryEmergency(options.message)
+  if (!parsed) {
+    return emergency
+      ? normalizePetbotInterpretation({
+        intent: 'veterinaria',
+        symptom: options.message,
+        veterinary_risk: 'emergency',
+        confidence: 1,
+      })
+      : null
+  }
+
+  const interpretation = reconcilePetbotIdentityInterpretation(
+    options.message,
+    normalizePetbotInterpretation(parsed),
+  )
+  return emergency
+    ? { ...interpretation, intent: 'veterinaria', veterinary_risk: 'emergency' }
+    : interpretation
 }
 
 export function buildInterpretedPetbotSearchText(message = '', interpretation = null) {

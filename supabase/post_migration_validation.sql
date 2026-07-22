@@ -38,7 +38,17 @@ select jsonb_build_object(
     'fiscal_queue_failures', to_regclass('public.fiscal_queue_failures') is not null,
     'checkout_function', to_regprocedure('public.create_pdv_checkout_transaction(jsonb)') is not null,
     'booking_function', to_regprocedure('public.book_petshop_appointment_transaction(jsonb)') is not null,
-    'public_booking_function', to_regprocedure('public.create_petshop_booking_request(text,text,text,text,text,date,text,text,boolean,text,text,text,text,text)') is not null
+    'public_booking_function', to_regprocedure('public.create_petshop_booking_request(text,text,text,text,text,date,text,text,boolean,text,text,text,text,text)') is not null,
+    'petbot_order_commits', to_regclass('public.petbot_order_commits') is not null,
+    'petbot_transaction_function', to_regprocedure('public.create_petbot_order_transaction(jsonb)') is not null,
+    'chat_context_jsonb', exists (
+      select 1
+      from information_schema.columns
+      where table_schema = 'public'
+        and table_name = 'chat_sessions'
+        and column_name = 'context'
+        and udt_name = 'jsonb'
+    )
   ),
   'data', jsonb_build_object(
     'pets_without_tenant', (select count(*) from public.pets where tenant_id is null),
@@ -57,7 +67,9 @@ select jsonb_build_object(
     'mock_document_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.fiscal_documents'::regclass and tgname = 'prevent_mock_fiscal_outside_test'),
     'mock_profile_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.tenant_fiscal_profiles'::regclass and tgname = 'prevent_mock_fiscal_profile_outside_test'),
     'appointment_overlap_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.appointments'::regclass and tgname = 'prevent_appointment_overlap'),
-    'motodog_fee_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.petshop_growth_booking_requests'::regclass and tgname = 'enforce_booking_motodog_fee')
+    'motodog_fee_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.petshop_growth_booking_requests'::regclass and tgname = 'enforce_booking_motodog_fee'),
+    'petbot_service_payment_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.sales'::regclass and tgname = 'normalize_petbot_service_booking_sale'),
+    'petbot_service_order_trigger', exists (select 1 from pg_trigger where tgrelid = 'public.service_delivery_orders'::regclass and tgname = 'normalize_petbot_service_delivery_payment')
   ),
   'table_checks', (select jsonb_agg(to_jsonb(table_checks) order by table_name) from table_checks),
   'table_failures', (

@@ -13,8 +13,10 @@ import {
 import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
 import {
   PETBOT_AGENT_TOOLS,
+  acceptedPetbotHandoffOffer,
   buildPetbotOperationalPreflight,
   buildServiceAvailability,
+  explicitPetbotHandoffTarget,
   findPetshopSubscriptionBenefit,
   groundPetbotServiceArgs,
   isExplicitPetbotConfirmation,
@@ -27,11 +29,15 @@ import {
   resolvePetshopService,
   resolvePetTransportSelection,
   runPetbotAgent,
+  shouldForcePetbotServicePreparation,
 } from './petbotAgent.js'
 import {
   analyzeProductDifferentiation,
   buildPetbotAgentV3Prompt,
+  buildUnknownStoreQuestionReply,
+  buildVerifiedStoreQuestionReply,
   normalizeProductQueryFacts,
+  shouldAnswerVerifiedStoreQuestion,
   validatePetbotConversationReply,
   validatePetbotOperationalReply,
 } from './petbotGrounding.js'
@@ -197,7 +203,7 @@ async function cachedLoad(cache, key, ttlMs, loader) {
 function detectIntent(message = '') {
   const lower = normalizeSearchText(message)
 
-  if (/racao|petisc|brinquedo|shampoo|coleira|comprar|preco|estoque|tem |tem\?|voces tem/i.test(lower)) {
+  if (/racao|petisc|brinquedo|shampoo|coleira|antipulga|carrapato|areia|produto|comprar|preco|estoque/i.test(lower)) {
     return 'produto'
   }
 
@@ -1489,6 +1495,45 @@ async function insertUserMessages(supabase, sessionId, userMessages) {
   }
 }
 
+function buildVerifiedStoreInformation(settings = {}) {
+  const weekdayLabels = {
+    1: 'segunda-feira',
+    2: 'terça-feira',
+    3: 'quarta-feira',
+    4: 'quinta-feira',
+    5: 'sexta-feira',
+    6: 'sábado',
+    7: 'domingo',
+  }
+  const businessHours = Object.fromEntries(
+    Object.entries(settings.petbotBusinessHours || {}).map(([weekday, periods]) => [
+      weekdayLabels[weekday] || weekday,
+      (Array.isArray(periods) ? periods : [])
+        .map((period) => `${cleanText(period?.open)}-${cleanText(period?.close)}`)
+        .filter((period) => period !== '-'),
+    ]),
+  )
+  const approvedMessages = Object.fromEntries(
+    Object.entries(settings.messageTemplates || {})
+      .filter(([, value]) => typeof value === 'string' && cleanText(value))
+      .sort(([left], [right]) => {
+        const priority = ['unknown_information', 'unknown_question', 'human_assistance_offer']
+        return Number(priority.includes(right)) - Number(priority.includes(left))
+      })
+      .slice(0, 12)
+      .map(([key, value]) => [key, cleanText(value).slice(0, 1600)]),
+  )
+
+  return {
+    address: [settings.storeAddress, settings.storeNeighborhood, settings.storeCity].filter(Boolean).join(' - ') || null,
+    phone: cleanText(settings.storePhone) || null,
+    business_hours: businessHours,
+    product_payment_methods: ['Pix', 'dinheiro', 'cartão'],
+    service_payment_policy: 'Pagamento após a conclusão do serviço.',
+    approved_messages: approvedMessages,
+  }
+}
+
 async function recordPetbotEvent(supabase, payload) {
   try {
     const { error } = await supabase.from('petbot_events').insert(payload)
@@ -1764,11 +1809,11 @@ async function respondWithPetbotAgent({
     customer_name: cleanText(llmInterpretation?.customer_name),
     pet_name: cleanText(serviceFacts.pet_name),
     species: cleanText(serviceFacts.species),
-    size: cleanText(llmInterpretation?.size),
+    size: cleanText(serviceFacts.size),
     breed: cleanText(serviceFacts.breed),
     weight_kg: Number(serviceFacts.weight_kg || 0) || null,
     coat_type: cleanText(serviceFacts.coat_type),
-    symptom: cleanText(llmInterpretation?.symptom),
+    symptom: cleanText(serviceFacts.symptom),
     address: cleanText(llmInterpretation?.delivery_address),
     neighborhood: cleanText(llmInterpretation?.neighborhood),
     city: cleanText(llmInterpretation?.city),
@@ -1807,7 +1852,11 @@ async function respondWithPetbotAgent({
   ])
   liveSubscriptionBenefits = subscriptionBenefits
 
-  const serviceOrderType = inferPetbotServiceOrderType({
+  const requestedHandoffTarget = cleanText(llmInterpretation?.veterinary_risk) === 'emergency'
+    ? 'veterinaria'
+    : (explicitPetbotHandoffTarget(trimmedMessage, llmInterpretation || {})
+      || (acceptedPetbotHandoffOffer(trimmedMessage, history) ? 'atendente' : ''))
+  const serviceOrderType = requestedHandoffTarget ? '' : inferPetbotServiceOrderType({
     interpretation: llmInterpretation,
     facts: serviceFacts,
     message: trimmedMessage,
@@ -1839,10 +1888,12 @@ async function respondWithPetbotAgent({
     if (preflight.resolvedService) resolvedServiceThisTurn = preflight.resolvedService
   }
 
+  const verifiedStoreInformation = buildVerifiedStoreInformation(storeSettings)
   const systemPrompt = buildPetbotAgentV3Prompt({
     storeName: storeSettings.storeName,
     storePhone: storeSettings.storePhone,
     storeLocation: [storeSettings.storeAddress, storeSettings.storeNeighborhood, storeSettings.storeCity].filter(Boolean).join(' - '),
+    storeInformation: verifiedStoreInformation,
     customer: {
       name: cleanText(updatedCustomerName) || null,
       known: Boolean(activeCustomer?.isKnown),
@@ -1866,6 +1917,9 @@ async function respondWithPetbotAgent({
       pet_name: serviceFacts.pet_name,
       species: serviceFacts.species,
       breed: serviceFacts.breed,
+      size: serviceFacts.size,
+      symptom: serviceFacts.symptom,
+      veterinary_risk: cleanText(llmInterpretation?.veterinary_risk) || 'none',
       weight_kg: serviceFacts.weight_kg,
       weight_label: serviceFacts.weight_label,
       weight_estimated: serviceFacts.weight_estimated,
@@ -2335,28 +2389,58 @@ async function respondWithPetbotAgent({
   }
 
   const currentMessageIsConfirmation = Boolean(pendingAtTurnStart && isExplicitPetbotConfirmation(trimmedMessage))
-  const shouldForceServicePreparation = Boolean(
-    !pendingAtTurnStart
-    && serviceOrderType === 'banho_tosa'
-    && trustedCustomerName()
-    && cleanText(serviceFacts.pet_name)
-    && cleanText(serviceFacts.species)
-    && cleanText(serviceFacts.breed)
-    && Number(serviceFacts.weight_kg || 0) > 0
-    && cleanText(serviceFacts.service_date)
-    && (cleanText(serviceFacts.service_preferred_time) || cleanText(serviceFacts.service_time_preference))
-    && cleanText(serviceFacts.service_transport_mode)
-    && normalizeSearchText(serviceFacts.service_transport_mode) !== 'motodog'
-    && serviceFacts.service_notes_resolved
-    && resolvedServiceThisTurn
-    && operationalContext?.availability?.requested_slot?.available === true
-  )
+  const shouldAnswerStoreQuestion = shouldAnswerVerifiedStoreQuestion({
+    message: trimmedMessage,
+    detectedIntent: intent,
+    interpretedIntent: llmInterpretation?.intent,
+    serviceOrderType,
+    hasPendingOrder: Boolean(pendingAtTurnStart),
+  })
+  const verifiedStoreReply = shouldAnswerStoreQuestion
+    ? buildVerifiedStoreQuestionReply({
+      message: trimmedMessage,
+      storeInformation: verifiedStoreInformation,
+    }) || buildUnknownStoreQuestionReply({ storeInformation: verifiedStoreInformation })
+    : ''
+  const shouldForceServicePreparation = !pendingAtTurnStart && shouldForcePetbotServicePreparation({
+    orderType: serviceOrderType,
+    customerName: trustedCustomerName(),
+    facts: serviceFacts,
+    resolvedService: resolvedServiceThisTurn,
+    operationalContext,
+  })
   const initialToolChoice = shouldForceServicePreparation
     ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
     : 'auto'
 
   let agentResult
-  if (currentMessageIsConfirmation) {
+  if (requestedHandoffTarget) {
+    needsHuman = true
+    handoffTarget = requestedHandoffTarget
+    agentResult = {
+      reply: handoffTarget === 'veterinaria'
+        ? 'Claro. Vou transferir seu atendimento para nossa equipe veterinária agora.'
+        : 'Claro. Vou transferir seu atendimento para um atendente agora.',
+      toolRuns: [...preloadedToolRuns, {
+        name: 'handoff_to_human',
+        ok: true,
+        status: 'transferred',
+        duration_ms: 0,
+        result: {
+          ok: true,
+          action: 'handoff_to_human',
+          target: handoffTarget,
+          reason: 'Solicitação explícita do cliente.',
+        },
+      }],
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 1,
+      terminal: true,
+      durationMs: 0,
+    }
+  } else if (currentMessageIsConfirmation) {
     const confirmationStartedAt = Date.now()
     const confirmationToolCall = {
       id: `confirm-${pendingAtTurnStart.id}`,
@@ -2390,6 +2474,17 @@ async function respondWithPetbotAgent({
       steps: 1,
       terminal: true,
       durationMs: Date.now() - confirmationStartedAt,
+    }
+  } else if (verifiedStoreReply) {
+    agentResult = {
+      reply: verifiedStoreReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
     }
   } else agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
@@ -2477,7 +2572,7 @@ async function respondWithPetbotAgent({
     breed: cleanText(serviceFacts.breed),
     weight_kg: Number(serviceFacts.weight_kg || 0) || null,
     coat_type: cleanText(serviceFacts.coat_type),
-    symptom: cleanText(llmInterpretation?.symptom),
+    symptom: cleanText(serviceFacts.symptom),
   }
   if (Object.values(finalProfilePatch).some(Boolean)) {
     try {
