@@ -7,21 +7,21 @@ begin;
 do $migration$
 declare
   v_definition text;
-  v_anchor text := E'begin\n  if v_session_id is null or v_tenant_id is null then';
+  v_anchor_pattern text := 'begin[[:space:]]+if[[:space:]]+v_session_id[[:space:]]+is[[:space:]]+null[[:space:]]+or[[:space:]]+v_tenant_id[[:space:]]+is[[:space:]]+null[[:space:]]+then';
   v_replacement text := E'begin\n  select null::text as id, null::text as label, 0::numeric as fee\n  into v_transport_option;\n\n  if v_session_id is null or v_tenant_id is null then';
 begin
   select pg_get_functiondef('public.create_petbot_order_transaction(jsonb)'::regprocedure)
   into v_definition;
 
-  if position('select null::text as id, null::text as label, 0::numeric as fee' in v_definition) > 0 then
+  if v_definition ~* 'select[[:space:]]+null::text[[:space:]]+as[[:space:]]+id,[[:space:]]+null::text[[:space:]]+as[[:space:]]+label,[[:space:]]+0::numeric[[:space:]]+as[[:space:]]+fee' then
     return;
   end if;
 
-  if position(v_anchor in v_definition) = 0 then
+  if v_definition !~* v_anchor_pattern then
     raise exception 'Nao foi possivel localizar o ponto de inicializacao da RPC do PetBot.';
   end if;
 
-  execute replace(v_definition, v_anchor, v_replacement);
+  execute regexp_replace(v_definition, v_anchor_pattern, v_replacement, 'i');
 end
 $migration$;
 
