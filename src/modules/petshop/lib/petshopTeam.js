@@ -20,17 +20,10 @@ export const STAFF_TYPE_OPTIONS = [
   { value: 'gerente', label: 'Gerente', description: 'Gestao operacional' },
 ]
 
-export const DEFAULT_PETSHOP_SERVICES = [
-  { code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 60, default_duration_min: 60, commission_type: 'percentage', commission_rate: 5, active: true, sort_order: 10, icon: 'droplets' },
-  { code: 'tosa', name: 'Tosa', group_type: 'banho_tosa', default_price: 80, default_duration_min: 60, commission_type: 'percentage', commission_rate: 10, active: true, sort_order: 20, icon: 'scissors' },
-  { code: 'banho_e_tosa', name: 'Banho e Tosa', group_type: 'banho_tosa', default_price: 120, default_duration_min: 90, commission_type: 'percentage', commission_rate: 10, active: true, sort_order: 30, icon: 'scissors' },
-  { code: 'escovacao', name: 'Escovacao', group_type: 'banho_tosa', default_price: 40, default_duration_min: 45, commission_type: 'percentage', commission_rate: 7, active: true, sort_order: 40, icon: 'paw' },
-  { code: 'consulta', name: 'Consulta Veterinaria', group_type: 'veterinaria', default_price: 120, default_duration_min: 40, commission_type: 'percentage', commission_rate: 0, active: true, sort_order: 50, icon: 'stethoscope' },
-  { code: 'veterinario', name: 'Veterinario', group_type: 'veterinaria', default_price: 150, default_duration_min: 40, commission_type: 'percentage', commission_rate: 0, active: true, sort_order: 60, icon: 'stethoscope' },
-  { code: 'vacina', name: 'Vacina', group_type: 'veterinaria', default_price: 90, default_duration_min: 30, commission_type: 'percentage', commission_rate: 0, active: true, sort_order: 70, icon: 'syringe' },
-  { code: 'motoboy', name: 'Motoboy/Transporte', group_type: 'motoboy', default_price: 20, default_duration_min: 30, commission_type: 'fixed', commission_rate: 5, active: true, sort_order: 80, icon: 'bike' },
-  { code: 'outro', name: 'Outro', group_type: 'outro', default_price: 0, default_duration_min: 60, commission_type: 'percentage', commission_rate: 0, active: true, sort_order: 999, icon: 'paw' },
-]
+// O catalogo de servicos deve vir exclusivamente dos registros reais do tenant.
+// Manter esta exportacao vazia preserva compatibilidade com imports antigos sem
+// voltar a exibir servicos sinteticos como "Banho", "Tosa" ou "Escovacao".
+export const DEFAULT_PETSHOP_SERVICES = []
 
 export const SERVICE_GROUPS = [
   { id: 'banho_tosa', label: 'Banho/Tosa', icon: Scissors },
@@ -90,7 +83,7 @@ export function normalizeService(row = {}) {
 }
 
 export function normalizeServices(rows = []) {
-  const source = rows?.length ? rows : DEFAULT_PETSHOP_SERVICES
+  const source = Array.isArray(rows) ? rows : []
   const byCode = new Map()
   source.map(normalizeService).forEach((service) => byCode.set(service.code, service))
   return [...byCode.values()].sort((a, b) => (a.sort_order - b.sort_order) || a.name.localeCompare(b.name))
@@ -102,15 +95,15 @@ export function activeServices(rows = []) {
 
 export function getServiceGroupFromCode(type = '') {
   const service = normalizeCode(type)
-  if (/vet|consulta|vacina|clinica|medico/.test(service)) return 'veterinaria'
+  if (/vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|curativo|hemograma|radiograf|raio_x|odontolog/.test(service)) return 'veterinaria'
+  if (/banho|tosa|desembolo|escovac|hidrat|higien|groom|unha|ouvido|orelha/.test(service)) return 'banho_tosa'
   if (/moto|entrega|transporte|retirada|busca/.test(service)) return 'motoboy'
-  if (!service || service === 'outro') return 'outro'
-  return 'banho_tosa'
+  return 'outro'
 }
 
 export function serviceOptionsForGroup(services = [], group = 'banho_tosa') {
   const options = activeServices(services)
-  return options.filter((service) => service.group_type === group || service.code === 'outro')
+  return options.filter((service) => service.group_type === group)
 }
 
 export function findService(services = [], code = '') {

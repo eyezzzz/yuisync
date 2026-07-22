@@ -13,15 +13,19 @@ const services = [
   { value: 'escovacao', label: 'Escovacao', price: 40, duration: 30, group_type: 'banho_tosa', active: true },
   { value: 'consulta', label: 'Consulta Veterinaria', price: 120, duration: 40, group_type: 'veterinaria', active: true },
   { value: 'contabilidade', label: 'Consultoria Contabil', price: 300, duration: 60, group_type: 'outro', active: true },
+  { value: 'hemograma', label: 'Hemograma completo', price: 85, duration: 30, active: true },
+  { value: 'banho_terapeutico', label: 'Banho terapeutico', price: 95, duration: 45, group_type: 'veterinaria', active: true },
 ]
 
 test('agenda separa banho/tosa, veterinaria e servicos sem classificacao', () => {
   assert.equal(classifyAppointmentServiceGroup(services[0]), 'banho_tosa')
   assert.equal(classifyAppointmentServiceGroup(services[2]), 'veterinaria')
   assert.equal(classifyAppointmentServiceGroup(services[3]), 'outro')
+  assert.equal(classifyAppointmentServiceGroup(services[4]), 'veterinaria')
+  assert.equal(classifyAppointmentServiceGroup(services[5]), 'veterinaria')
 
   assert.deepEqual(serviceOptionsForAppointmentGroup(services, 'banho_tosa').map((item) => item.value), ['banho', 'escovacao'])
-  assert.deepEqual(serviceOptionsForAppointmentGroup(services, 'veterinaria').map((item) => item.value), ['consulta'])
+  assert.deepEqual(serviceOptionsForAppointmentGroup(services, 'veterinaria').map((item) => item.value), ['consulta', 'hemograma', 'banho_terapeutico'])
 })
 
 test('multiplos servicos somam exatamente preco e duracao do catalogo', () => {
@@ -53,13 +57,28 @@ test('migracao corrige origem manual, taxa de entrega e contrato multisservico',
   assert.match(sql, /v_total := greatest\(0, round\(v_subtotal - v_requested_discount, 2\)\) \+ v_delivery_fee/i)
 })
 
-test('tela da agenda permite mais de um servico e envia origem manual', () => {
+test('tela da agenda usa busca compacta para adicionar varios servicos reais', () => {
   const source = readFileSync(new URL('../src/modules/petshop/pages/AgendaPage.jsx', import.meta.url), 'utf8')
+  const team = readFileSync(new URL('../src/modules/petshop/lib/petshopTeam.js', import.meta.url), 'utf8')
   assert.match(source, /service_codes/)
-  assert.match(source, /toggleService/)
-  assert.match(source, /Selecione um ou mais servicos/)
+  assert.match(source, /Buscar e adicionar servico/)
+  assert.match(source, /addService/)
+  assert.match(source, /removeService/)
+  assert.doesNotMatch(source, /toggleService/)
   assert.match(source, /source: 'manual'/)
   assert.match(source, /serviceTotals\.price/)
+  assert.match(team, /DEFAULT_PETSHOP_SERVICES = \[\]/)
+  assert.doesNotMatch(team, /default_price: 60/)
+})
+
+test('migracao incremental remove seeds e torna a area do servico explicita', () => {
+  const sql = readFileSync(new URL('../supabase/migrations/20260721009000_infra_service_picker_strict_groups.sql', import.meta.url), 'utf8')
+  const catalog = readFileSync(new URL('../src/modules/petshop/pages/EstoquePage.jsx', import.meta.url), 'utf8')
+  assert.match(sql, /resolve_petshop_service_group/i)
+  assert.match(sql, /code = 'banho'.*name = 'Banho'/is)
+  assert.match(sql, /service_group/i)
+  assert.match(catalog, /Area do servico/)
+  assert.match(catalog, /bot_service_group/)
 })
 
 test('checkout exibe e persiste taxa de entrega', () => {

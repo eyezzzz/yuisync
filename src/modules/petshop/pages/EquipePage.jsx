@@ -18,7 +18,6 @@ import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency } from '../../../lib/supabase'
 import {
   COMMISSION_SCOPES,
-  DEFAULT_PETSHOP_SERVICES,
   SERVICE_GROUPS,
   STAFF_TYPE_OPTIONS,
   commissionScopeLabel,
@@ -179,7 +178,7 @@ function RuleModal({ profiles, services, products, categories, rule, onClose, on
 }
 
 function ServiceModal({ service, onClose, onSave }) {
-  const base = service || DEFAULT_PETSHOP_SERVICES[0]
+  const base = service || {}
   const [form, setForm] = useState({
     id: service?.id,
     code: base.code || '',
@@ -355,7 +354,7 @@ export default function EquipePage() {
   const [rules, setRules] = useState([])
   const [rows, setRows] = useState([])
   const [pendingServices, setPendingServices] = useState([])
-  const [services, setServices] = useState(DEFAULT_PETSHOP_SERVICES)
+  const [services, setServices] = useState([])
   const [products, setProducts] = useState([])
   const [categories, setCategories] = useState([])
   const [range, setRange] = useState(emptyRange)

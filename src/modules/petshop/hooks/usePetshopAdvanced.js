@@ -4,7 +4,7 @@ import { useModuleCtx } from '../../../context/ModuleContext'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { createManagedUser, listManagedUsers, updateManagedUser, updateManagedUserStatus } from '../../../lib/api'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../../lib/tenant'
-import { DEFAULT_PETSHOP_SERVICES, normalizeCode, normalizeServices } from '../lib/petshopTeam'
+import { normalizeCode, normalizeServices } from '../lib/petshopTeam'
 
 const DEFAULT_LOYALTY_SETTINGS = { points_per_real: 1, points_per_service: 10, redemption_rate: 100, expiry_days: 365 }
 const CLIENT_SELECT = 'id,name,phone,email,address,neighborhood,city,details'
@@ -403,11 +403,11 @@ export function usePetshopAdvanced() {
     })
 
     if (res.error) {
-      if (isPetshopServicesSchemaError(res.error)) return normalizeServices(DEFAULT_PETSHOP_SERVICES)
+      if (isPetshopServicesSchemaError(res.error)) return []
       throw res.error
     }
 
-    return normalizeServices(res.data || DEFAULT_PETSHOP_SERVICES)
+    return normalizeServices(res.data || [])
   }, [activeTenantId, moduleId, runScoped])
 
   const savePetshopService = useCallback(async (payload) => {

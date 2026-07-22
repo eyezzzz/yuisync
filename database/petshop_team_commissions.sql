@@ -107,47 +107,9 @@ $$;
 create index if not exists idx_commission_rules_match_v2
   on public.commission_rules (tenant_id, module_id, profile_id, active, scope, service_code, category, product_id);
 
-with seed(code, name, group_type, default_price, default_duration_min, commission_type, commission_rate, sort_order, icon) as (
-  values
-    ('banho', 'Banho', 'banho_tosa', 60::numeric, 60, 'percentage', 5::numeric, 10, 'droplets'),
-    ('tosa', 'Tosa', 'banho_tosa', 80::numeric, 60, 'percentage', 10::numeric, 20, 'scissors'),
-    ('banho_e_tosa', 'Banho e Tosa', 'banho_tosa', 120::numeric, 90, 'percentage', 10::numeric, 30, 'scissors'),
-    ('escovacao', 'Escovacao', 'banho_tosa', 40::numeric, 45, 'percentage', 7::numeric, 40, 'paw'),
-    ('consulta', 'Consulta Veterinaria', 'veterinaria', 120::numeric, 40, 'percentage', 0::numeric, 50, 'stethoscope'),
-    ('veterinario', 'Veterinario', 'veterinaria', 150::numeric, 40, 'percentage', 0::numeric, 60, 'stethoscope'),
-    ('vacina', 'Vacina', 'veterinaria', 90::numeric, 30, 'percentage', 0::numeric, 70, 'syringe'),
-    ('motoboy', 'Motoboy/Transporte', 'motoboy', 20::numeric, 30, 'fixed', 5::numeric, 80, 'bike'),
-    ('outro', 'Outro', 'outro', 0::numeric, 60, 'percentage', 0::numeric, 999, 'paw')
-)
-insert into public.petshop_services (
-  tenant_id,
-  module_id,
-  code,
-  name,
-  group_type,
-  default_price,
-  default_duration_min,
-  commission_type,
-  commission_rate,
-  sort_order,
-  icon
-)
-select
-  t.id,
-  'petshop',
-  seed.code,
-  seed.name,
-  seed.group_type,
-  seed.default_price,
-  seed.default_duration_min,
-  seed.commission_type,
-  seed.commission_rate,
-  seed.sort_order,
-  seed.icon
-from public.tenants t
-cross join seed
-where t.active = true
-on conflict (tenant_id, module_id, code) do nothing;
+-- Services are tenant data. Do not seed generic catalog rows such as
+-- "Banho", "Tosa" or "Consulta Veterinaria". They must be created in
+-- Estoque > Servicos and synchronized to petshop_services by the catalog trigger.
 
 alter table public.petshop_services enable row level security;
 

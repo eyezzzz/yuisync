@@ -12,10 +12,7 @@ import { useAuthCtx }      from '../../../context/AuthContext'
 import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
-import {
-  DEFAULT_PETSHOP_SERVICES,
-  serviceIcon,
-} from '../lib/petshopTeam'
+import { serviceIcon } from '../lib/petshopTeam'
 import {
   appointmentServiceCodes,
   appointmentServiceGroup,
@@ -26,8 +23,8 @@ import {
 } from '../lib/appointmentServices'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
-const asAgendaServices = (services = DEFAULT_PETSHOP_SERVICES) =>
-  (services?.length ? services : DEFAULT_PETSHOP_SERVICES).map((service) => ({
+const asAgendaServices = (services = []) =>
+  (Array.isArray(services) ? services : []).map((service) => ({
     value: service.code || service.value,
     label: service.name || service.label,
     price: Number(service.default_price ?? service.price ?? 0),
@@ -37,7 +34,7 @@ const asAgendaServices = (services = DEFAULT_PETSHOP_SERVICES) =>
     active: service.active !== false,
   }))
 
-const SERVICES = asAgendaServices(DEFAULT_PETSHOP_SERVICES)
+const SERVICES = []
 
 const AGENDA_TABS = [
   { id: 'banho_tosa', label: 'Banho/Tosa', icon: Scissors },
@@ -301,8 +298,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   const [selectedClient, setSelectedClient] = useState(() => appt?.pets || null)
   const [remotePets, setRemotePets] = useState([])
   const [searchingClients, setSearchingClients] = useState(false)
+  const [serviceSearch, setServiceSearch] = useState('')
+  const [servicePickerOpen, setServicePickerOpen] = useState(false)
   const clientPickerRef = useRef(null)
   const clientSearchRef = useRef(null)
+  const servicePickerRef = useRef(null)
+  const serviceSearchRef = useRef(null)
   const searchRequestRef = useRef(0)
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
@@ -312,6 +313,14 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     () => calculateAppointmentServiceTotals(form.service_codes, serviceOptions),
     [form.service_codes, serviceOptions],
   )
+  const availableServiceOptions = useMemo(() => {
+    const query = safeLower(serviceSearch)
+    const selectedCodes = new Set(form.service_codes.map(String))
+    return serviceOptions
+      .filter((service) => !selectedCodes.has(String(service.value)))
+      .filter((service) => !query || safeLower([service.label, service.value].filter(Boolean).join(' ')).includes(query))
+      .slice(0, 12)
+  }, [serviceOptions, form.service_codes, serviceSearch])
   const searchablePets = useMemo(() => (pets || []).map((pet) => ({
     pet,
     searchText: safeLower([
@@ -366,15 +375,18 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   }, [petSearch, onSearchClients])
 
   useEffect(() => {
-    if (!clientPickerOpen) return undefined
+    if (!clientPickerOpen && !servicePickerOpen) return undefined
     const closePicker = (event) => {
-      if (clientPickerRef.current && !clientPickerRef.current.contains(event.target)) {
+      if (clientPickerOpen && clientPickerRef.current && !clientPickerRef.current.contains(event.target)) {
         setClientPickerOpen(false)
+      }
+      if (servicePickerOpen && servicePickerRef.current && !servicePickerRef.current.contains(event.target)) {
+        setServicePickerOpen(false)
       }
     }
     document.addEventListener('mousedown', closePicker)
     return () => document.removeEventListener('mousedown', closePicker)
-  }, [clientPickerOpen])
+  }, [clientPickerOpen, servicePickerOpen])
 
   const openClientPicker = () => {
     setClientPickerOpen(true)
@@ -388,16 +400,29 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     setClientPickerOpen(false)
   }
 
-  const toggleService = (serviceCode) => {
-    setForm((current) => {
-      const selected = current.service_codes.includes(serviceCode)
-      return {
-        ...current,
-        service_codes: selected
-          ? current.service_codes.filter((code) => code !== serviceCode)
-          : [...current.service_codes, serviceCode],
-      }
-    })
+  const openServicePicker = () => {
+    setServicePickerOpen(true)
+    requestAnimationFrame(() => serviceSearchRef.current?.focus())
+  }
+
+  const addService = (serviceCode) => {
+    setForm((current) => ({
+      ...current,
+      service_codes: current.service_codes.includes(serviceCode)
+        ? current.service_codes
+        : [...current.service_codes, serviceCode],
+    }))
+    setServiceSearch('')
+    setServicePickerOpen(true)
+    setErr('')
+    requestAnimationFrame(() => serviceSearchRef.current?.focus())
+  }
+
+  const removeService = (serviceCode) => {
+    setForm((current) => ({
+      ...current,
+      service_codes: current.service_codes.filter((code) => code !== serviceCode),
+    }))
     setErr('')
   }
 
@@ -520,43 +545,107 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               )}
             </div>
 
-            <div>
+            <div ref={servicePickerRef}>
               <label className="inp-label">{serviceGroupLabel}</label>
               {serviceOptions.length === 0 ? (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-                  Nenhum servico ativo e corretamente classificado nesta aba.
+                  Nenhum servico real esta classificado nesta aba. Revise a area do servico no cadastro.
                 </div>
               ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                  {serviceOptions.map((service) => {
-                    const selected = form.service_codes.includes(service.value)
-                    const Icon = service.icon || PawPrint
-                    return (
+                <div className="space-y-3">
+                  <div className="relative">
+                    <div className="flex overflow-hidden rounded-xl border border-[var(--border2)] bg-white/5 focus-within:border-amber-400/45 focus-within:ring-2 focus-within:ring-amber-400/10">
                       <button
-                        key={service.value}
                         type="button"
-                        onClick={() => toggleService(service.value)}
-                        className={`rounded-xl border px-4 py-3 text-left flex items-start gap-3 transition-colors ${
-                          selected
-                            ? 'border-amber-400/45 bg-amber-500/12 text-text'
-                            : 'border-[var(--border2)] bg-white/5 text-muted hover:text-text hover:bg-white/8'
-                        }`}
+                        aria-label="Adicionar outro servico"
+                        title="Adicionar servico"
+                        onClick={openServicePicker}
+                        className="flex w-11 flex-shrink-0 items-center justify-center border-r border-[var(--border2)] text-amber-400 hover:bg-amber-500/10"
                       >
-                        <span className={`mt-0.5 flex h-5 w-5 items-center justify-center rounded border ${selected ? 'border-amber-400 bg-amber-400 text-gray-950' : 'border-[var(--border)]'}`}>
-                          {selected && <Check size={13}/>}
-                        </span>
-                        <span className="min-w-0 flex-1">
-                          <span className="flex items-center gap-2 text-sm font-bold"><Icon size={14}/>{service.label}</span>
-                          <span className="mt-1 block text-xs text-muted">
-                            {fmtCurrency(service.price)} · {service.duration || 60} min
-                          </span>
-                        </span>
+                        <Plus size={17}/>
                       </button>
-                    )
-                  })}
+                      <div className="relative min-w-0 flex-1">
+                        <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
+                        <input
+                          ref={serviceSearchRef}
+                          aria-label="Buscar servico para adicionar"
+                          className="h-11 w-full bg-transparent pl-9 pr-3 text-sm text-text outline-none placeholder:text-muted"
+                          placeholder="Buscar e adicionar servico..."
+                          value={serviceSearch}
+                          onFocus={() => setServicePickerOpen(true)}
+                          onChange={(event) => {
+                            setServiceSearch(event.target.value)
+                            setServicePickerOpen(true)
+                          }}
+                          autoComplete="off"
+                        />
+                      </div>
+                    </div>
+
+                    {servicePickerOpen && (
+                      <div role="listbox" aria-label="Servicos encontrados" className="absolute z-30 mt-2 max-h-64 w-full overflow-y-auto rounded-xl border border-[var(--border2)] bg-surface shadow-2xl">
+                        {availableServiceOptions.map((service) => {
+                          const Icon = service.icon || PawPrint
+                          return (
+                            <button
+                              key={service.value}
+                              type="button"
+                              role="option"
+                              aria-selected="false"
+                              onClick={() => addService(service.value)}
+                              className="flex w-full items-center gap-3 border-b border-[var(--border2)] px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-white/7"
+                            >
+                              <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400"><Icon size={14}/></span>
+                              <span className="min-w-0 flex-1">
+                                <span className="block truncate text-sm font-bold text-text">{service.label}</span>
+                                <span className="block text-xs text-muted">{fmtCurrency(service.price)} · {service.duration || 60} min</span>
+                              </span>
+                              <Plus size={15} className="flex-shrink-0 text-amber-400"/>
+                            </button>
+                          )
+                        })}
+                        {availableServiceOptions.length === 0 && (
+                          <p className="px-3 py-3 text-xs text-muted">
+                            {form.service_codes.length === serviceOptions.length
+                              ? 'Todos os servicos desta area ja foram adicionados.'
+                              : 'Nenhum servico encontrado nesta busca.'}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {serviceTotals.services.length > 0 ? (
+                    <div className="divide-y divide-[var(--border2)] overflow-hidden rounded-xl border border-[var(--border2)] bg-white/[0.03]">
+                      {serviceTotals.services.map((service) => {
+                        const Icon = service.icon || PawPrint
+                        return (
+                          <div key={service.value} className="flex items-center gap-3 px-3 py-2.5">
+                            <Icon size={14} className="flex-shrink-0 text-amber-400"/>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-semibold text-text">{service.label}</span>
+                              <span className="block text-xs text-muted">{fmtCurrency(service.price)} · {service.duration || 60} min</span>
+                            </span>
+                            <button
+                              type="button"
+                              aria-label={`Remover ${service.label}`}
+                              title="Remover servico"
+                              onClick={() => removeService(service.value)}
+                              className="rounded-lg p-1.5 text-muted hover:bg-red-500/10 hover:text-red-400"
+                            >
+                              <X size={14}/>
+                            </button>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  ) : (
+                    <p className="rounded-xl border border-dashed border-[var(--border2)] px-3 py-3 text-xs text-muted">
+                      Nenhum servico adicionado. Use a busca acima para selecionar apenas itens cadastrados nesta area.
+                    </p>
+                  )}
                 </div>
               )}
-              <p className="text-[11px] text-muted mt-2">Selecione um ou mais servicos da mesma area. O valor e o tempo sao somados automaticamente.</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

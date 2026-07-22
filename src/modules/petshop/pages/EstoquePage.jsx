@@ -39,6 +39,11 @@ const BOT_PRODUCT_TYPE_LABELS = {
 }
 const BOT_AGES = ['', 'filhote', 'adulto', 'senior', 'castrado']
 const BOT_SIZES = ['', 'pequeno', 'medio', 'grande', 'mini', 'gigante']
+const SERVICE_GROUP_OPTIONS = [
+  { value: 'banho_tosa', label: 'Banho/Tosa' },
+  { value: 'veterinaria', label: 'Veterinaria' },
+  { value: 'outro', label: 'Outro (fora da agenda)' },
+]
 
 const normalize = (val) => (val || '').toString().normalize('NFD').replace(/[\u0300-\u036f]/g, "").toLowerCase().trim()
 
@@ -72,6 +77,7 @@ const emptyForm = {
   bot_brand: '',
   bot_breed: '',
   bot_coat_type: '',
+  bot_service_group: '',
   bot_package_kg: '',
   bot_is_bulk: false,
 }
@@ -109,6 +115,20 @@ function isServiceProduct(product = {}) {
     || /banho|tosa|desembolo|escovac|hidratacao|hidratacao|higienizacao|consulta|vacina|exame|cirurg/.test(text)
 }
 
+function inferServiceGroup(product = {}) {
+  const metadata = product?.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
+  if (['banho_tosa', 'veterinaria', 'outro'].includes(metadata.service_group)) return metadata.service_group
+
+  const text = normalize([
+    product?.name,
+    product?.category,
+    product?.description,
+  ].filter(Boolean).join(' '))
+  if (/vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao|hemograma|radiograf|raio[ -]?x|coleta|sorolog|odontolog|anestesia|medicacao|eletrocard|ecocard|emergencia|procedimento/.test(text)) return 'veterinaria'
+  if (/banho|tosa|desembolo|escovac|hidrat|higien|groom|perfume|spa|trim|unha|ouvido|orelha/.test(text)) return 'banho_tosa'
+  return ''
+}
+
 // ── Product Modal ─────────────────────────────────────────────────────────────
 function metadataToForm(product) {
   const metadata = product?.bot_metadata || {}
@@ -120,6 +140,7 @@ function metadataToForm(product) {
     bot_brand: metadata.brand || '',
     bot_breed: Array.isArray(metadata.breed) ? metadata.breed.join(', ') : metadata.breed || '',
     bot_coat_type: metadata.coat_type || inferServiceCoatType(product?.name) || '',
+    bot_service_group: metadata.service_group || inferServiceGroup(product) || '',
     bot_package_kg: metadata.package_kg || '',
     bot_is_bulk: Boolean(metadata.is_bulk),
     unit: PRODUCT_UNITS.some((option) => option.value === metadata.unit) ? metadata.unit : 'UN',
@@ -171,6 +192,9 @@ function buildBotMetadata(form, product) {
     size: form.bot_size || null,
     brand: form.bot_brand ? String(form.bot_brand).trim().toLowerCase() : current.brand || null,
     coat_type: coatType || null,
+    service_group: productType === 'servico'
+      ? (form.bot_service_group || current.service_group || null)
+      : (current.service_group || null),
     breed,
     all_breeds: coatType === 'todas',
     package_kg: form.bot_package_kg ? Number(form.bot_package_kg) : null,
@@ -228,6 +252,9 @@ function ProductModal({ product, products, moduleId, tenantId, serviceMode = fal
   async function handleSubmit() {
     if (!form.name.trim()) return setErr('Nome obrigatório')
     if (!form.price)       return setErr('Preço obrigatório')
+    if (serviceMode && !['banho_tosa', 'veterinaria', 'outro'].includes(form.bot_service_group)) {
+      return setErr('Selecione a area correta do servico.')
+    }
     setSaving(true); setErr('')
     try {
       // Limpar o objeto form para garantir que enviamos apenas o que o banco espera
@@ -476,6 +503,17 @@ function ProductModal({ product, products, moduleId, tenantId, serviceMode = fal
                   <input className="inp" type="number" min="0" step="0.1" placeholder="1, 2.5, 15..."
                     value={form.bot_package_kg} onChange={e => set('bot_package_kg', e.target.value)}/>
                 </div>
+                {serviceMode && (
+                  <div>
+                    <label className="inp-label">Area do servico</label>
+                    <select className="inp" value={form.bot_service_group} onChange={e => set('bot_service_group', e.target.value)}>
+                      <option value="">Selecione a area</option>
+                      {SERVICE_GROUP_OPTIONS.map((group) => (
+                        <option key={group.value} value={group.value}>{group.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                )}
                 {serviceMode && (
                   <div>
                     <label className="inp-label">Pelagem do servico</label>

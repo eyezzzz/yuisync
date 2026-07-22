@@ -4,7 +4,8 @@ const stripAccents = (value = '') => String(value || '')
   .toLowerCase()
   .trim()
 
-const VETERINARY_PATTERN = /\b(vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao)\w*/
+const VALID_APPOINTMENT_GROUPS = new Set(['banho_tosa', 'veterinaria'])
+const VETERINARY_PATTERN = /\b(vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao|hemograma|radiograf|raio[ -]?x|coleta|sorolog|odontolog|anestesia|medicacao|eletrocard|ecocard|emergencia|procedimento)\w*/
 const GROOMING_PATTERN = /\b(banho|tosa|desembolo|escovac|hidrat|higien|groom|perfume|spa|trim|unha|unhas|ouvido|orelhas)\w*/
 
 export function normalizeAppointmentServiceText(value = '') {
@@ -12,23 +13,30 @@ export function normalizeAppointmentServiceText(value = '') {
 }
 
 export function classifyAppointmentServiceGroup(service = {}) {
-  const declared = stripAccents(service.group_type || service.groupType || '')
+  const declared = stripAccents(service.group_type || service.groupType || service.service_group || '')
+
+  // A classificacao cadastrada e a fonte de verdade. Heuristica por nome existe
+  // apenas para registros legados que ainda nao possuem um grupo definido.
+  if (VALID_APPOINTMENT_GROUPS.has(declared)) return declared
+  if (declared === 'outro' || declared === 'motoboy') return 'outro'
+
   const text = stripAccents([
     service.code,
     service.value,
     service.name,
     service.label,
     service.category,
+    service.description,
   ].filter(Boolean).join(' '))
 
   if (VETERINARY_PATTERN.test(text)) return 'veterinaria'
   if (GROOMING_PATTERN.test(text)) return 'banho_tosa'
-  if (declared === 'veterinaria' || declared === 'banho_tosa') return declared
   return 'outro'
 }
 
 export function serviceFitsAppointmentGroup(service, group) {
   if (!service || service.active === false) return false
+  if (!VALID_APPOINTMENT_GROUPS.has(group)) return false
   return classifyAppointmentServiceGroup(service) === group
 }
 
@@ -73,12 +81,12 @@ export function appointmentServiceLabel(appointment = {}, services = []) {
 }
 
 export function appointmentServiceGroup(appointment = {}, services = []) {
-  if (appointment?.service_group === 'veterinaria' || appointment?.service_group === 'banho_tosa') {
+  if (VALID_APPOINTMENT_GROUPS.has(appointment?.service_group)) {
     return appointment.service_group
   }
 
   const items = Array.isArray(appointment?.service_items) ? appointment.service_items : []
-  const itemGroup = items.find((item) => ['veterinaria', 'banho_tosa'].includes(item?.group_type))?.group_type
+  const itemGroup = items.find((item) => VALID_APPOINTMENT_GROUPS.has(item?.group_type))?.group_type
   if (itemGroup) return itemGroup
 
   const code = appointment?.service_type || appointment
