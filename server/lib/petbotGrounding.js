@@ -235,6 +235,8 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
     || /(?:pix|dinheiro).{0,20}(?:ou).{0,20}(?:cartao)/.test(normalized)
   const asksChange = /\btroco\b/.test(normalized)
   const asksProductFulfillment = /(?:entrega ou retirada|retirada na loja|servico de entrega|entregar ou retirar|vai retirar|prefere retirada)/.test(normalized)
+  const asksServiceNotes = /(?:alguma|tem|possui|precisa de|gostaria de adicionar).{0,45}(?:observacao|observacoes|recado|cuidado especial)/.test(normalized)
+    || /(?:observacao|observacoes).{0,45}(?:banho|tosa|servico|agendamento)/.test(normalized)
   const asksConfirmationAgain = /(?:confirma(?:r)?|voce confirma|pode confirmar).{0,50}(?:agendamento|pedido|horario)/.test(normalized)
     || /(?:para finalizar|so preciso confirmar).{0,80}/.test(normalized)
 
@@ -249,6 +251,9 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   }
   if (isServiceConversation && asksChange) problems.push('troco não se aplica ao agendamento de serviço')
   if (isServiceConversation && asksProductFulfillment) problems.push('entrega/retirada de produto não se aplica ao pet; use cliente leva ou MotoDog')
+  if (isServiceConversation && facts.service_notes_resolved && asksServiceNotes) {
+    problems.push('observações do serviço já foram respondidas; não pergunte novamente')
+  }
   if (pendingOrder && currentMessageIsConfirmation && asksConfirmationAgain) {
     problems.push('cliente já confirmou o pedido pendente; não peça nova confirmação')
   }

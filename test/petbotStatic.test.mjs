@@ -6,9 +6,9 @@ function read(path) {
   return readFileSync(new URL(`../${path}`, import.meta.url), 'utf8')
 }
 
-test('webhook da Vercel nao usa debounce bloqueante por padrao', () => {
+test('webhook da Vercel agrupa mensagens fragmentadas com debounce curto por padrao', () => {
   const webhook = read('serverless/whatsappWebhook.ts')
-  assert.match(webhook, /DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 0/)
+  assert.match(webhook, /DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 1_000/)
   assert.match(webhook, /MAX_BLOCKING_WHATSAPP_REPLY_DEBOUNCE_MS = 1_500/)
 })
 
@@ -24,7 +24,7 @@ test('pedido PetBot usa uma unica RPC transacional compartilhada por painel e Wh
   const migration = read('supabase/migrations/20260721006000_petbot_agent_v3_runtime.sql')
 
   assert.match(localChat, /createConfirmedPetshopOrderViaRpc/)
-  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
+  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, runtimeMessage/)
   assert.doesNotMatch(webhook, /createConfirmedPetshopOrderViaRpc/)
   assert.match(migration, /create or replace function public\.create_petbot_order_transaction/)
   assert.match(migration, /if v_order_type = 'produto' then[\s\S]*insert into public\.sale_items/)
@@ -49,16 +49,39 @@ test('resposta do PetBot so e salva depois do estado autonomo persistir', () => 
   assert.match(localChat, /hasPetbotState\(updatedSession\.context\)/)
   assert.match(localChat, /recoverPetbotContextFromHistory/)
 
-  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
+  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, runtimeMessage/)
   assert.match(webhook, /skipUserPersistence: true/)
   assert.doesNotMatch(webhook, /runPetbotGuard/)
 })
 
 test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {
   const env = read('.env.example')
-  assert.match(env, /WHATSAPP_REPLY_DEBOUNCE_MS=0/)
+  assert.match(env, /WHATSAPP_REPLY_DEBOUNCE_MS=1000/)
   assert.match(env, /OPENAI_TRANSCRIPTION_MODEL=/)
   assert.match(env, /OPENAI_VISION_MODEL=/)
+})
+
+test('confirmacao transacional usa resposta terminal sem devolver o turno para a LLM', () => {
+  const agent = read('server/lib/petbotAgent.js')
+  const chat = read('server/lib/chat.js')
+  assert.match(agent, /resolveTerminalReply/)
+  assert.match(agent, /terminal:\s*true/)
+  assert.match(chat, /toolName !== 'create_confirmed_petshop_order'/)
+  assert.match(chat, /\['committed', 'already_committed'\]/)
+})
+
+test('turno antigo nao sobrescreve sessao atualizada por mensagem mais nova', () => {
+  const chat = read('server/lib/chat.js')
+  assert.match(chat, /sessionUpdate = sessionUpdate\.eq\('last_message_at', session\.last_message_at\)/)
+  assert.match(chat, /staleError\.code = 'PETBOT_STALE_TURN'/)
+  assert.match(chat, /if \(error\?\.code === 'PETBOT_STALE_TURN'\) throw error/)
+})
+
+test('webhook combina mensagens curtas consecutivas antes de chamar o runtime', () => {
+  const webhook = read('serverless/whatsappWebhook.ts')
+  assert.match(webhook, /loadRecentIncomingBurst/)
+  assert.match(webhook, /MAX_WHATSAPP_BURST_WINDOW_MS = 10_000/)
+  assert.match(webhook, /burst\.join\('\\n'\)/)
 })
 
 test('agenda separa banho/tosa e veterinaria em abas', () => {
@@ -117,7 +140,7 @@ test('WhatsApp e painel usam o mesmo runtime auditavel do PetBot', () => {
   const webhook = read('serverless/whatsappWebhook.ts')
   const migration = read('supabase/migrations/20260720005000_petbot_autonomy_foundation.sql')
 
-  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, event\.text/)
+  assert.match(webhook, /respondToChatMessage\(supabase as any, session\.id, runtimeMessage/)
   assert.match(webhook, /skipUserPersistence: true/)
   assert.match(webhook, /engine: 'petbot_agent_v3'/)
   assert.match(localChat, /customInstructions/)

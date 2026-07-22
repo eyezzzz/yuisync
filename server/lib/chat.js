@@ -233,6 +233,20 @@ function petbotServiceFactsSignature(facts = {}) {
   })
 }
 
+function isExplicitNoServiceNotesAnswer(message = '', history = []) {
+  const answer = normalizeSearchText(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!/^(?:nao|n|nenhuma|nenhum|nada|sem observacao|sem observacoes|tudo certo|normal)$/.test(answer)) return false
+
+  const previousAssistant = [...(history || [])]
+    .reverse()
+    .find((entry) => ['assistant', 'human_agent'].includes(entry?.role))
+  const previousText = normalizeSearchText(previousAssistant?.content)
+  return /\b(?:observacao|observacoes|recado|alergia|perfume|cuidado especial)\b/.test(previousText)
+}
+
 function appointmentDateIso(row = {}) {
   if (row.service_date) return String(row.service_date).slice(0, 10)
   if (!row.scheduled_at) return ''
@@ -1560,6 +1574,55 @@ function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedServ
   return 'Já guardei as informações que você enviou. Vou continuar o atendimento a partir delas, sem pedir que você repita os dados.'
 }
 
+function formatPetbotCurrency(value) {
+  return Number(value || 0).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  })
+}
+
+function buildPetbotCommittedReply({ pendingOrder = null, result = {}, timezone = 'America/Sao_Paulo' } = {}) {
+  const order = pendingOrder?.order || {}
+  const customerName = cleanText(order.customer_name)
+  const greeting = `Pronto${customerName ? `, ${customerName}` : ''}!`
+  const duplicated = cleanText(result.status) === 'already_committed'
+
+  if (order.order_type !== 'produto') {
+    const scheduled = DateTime.fromISO(cleanText(order.scheduled_at), { setZone: true }).setZone(timezone)
+    const scheduleLabel = scheduled.isValid
+      ? scheduled.setLocale('pt-BR').toFormat("dd/MM/yyyy 'às' HH:mm")
+      : cleanText(order.scheduled_at)
+    const petLabel = cleanText(order.pet_name) ? ` do ${cleanText(order.pet_name)}` : ''
+    const lines = [
+      duplicated
+        ? `${greeting} Esse agendamento${petLabel} já estava confirmado para ${scheduleLabel}.`
+        : `${greeting} O agendamento${petLabel} foi confirmado para ${scheduleLabel}.`,
+    ]
+
+    if (order.order_type === 'banho_tosa') {
+      if (Number(order.service_transport_fee || 0) > 0) {
+        lines.push(`MotoDog: ${cleanText(order.service_transport_label) || 'transporte do pet'} (${formatPetbotCurrency(order.service_transport_fee)}).`)
+      } else {
+        lines.push('Chegada do pet: cliente leva à loja.')
+      }
+    }
+    if (cleanText(order.notes)) lines.push(`Observação registrada: ${cleanText(order.notes)}.`)
+    lines.push(`Total: ${formatPetbotCurrency(result.total ?? order.total)}. Pagamento após a conclusão do serviço.`)
+    return lines.join('\n')
+  }
+
+  const lines = [
+    duplicated
+      ? `${greeting} Esse pedido já estava confirmado.`
+      : `${greeting} Seu pedido foi confirmado.`,
+    `Total: ${formatPetbotCurrency(result.total ?? order.total)}.`,
+  ]
+  if (cleanText(result.pix_key)) {
+    lines.push(`Chave Pix: ${cleanText(result.pix_key)}${cleanText(result.pix_holder_name) ? ` — ${cleanText(result.pix_holder_name)}` : ''}.`)
+  }
+  return lines.join('\n')
+}
+
 
 async function respondWithPetbotAgent({
   supabase,
@@ -1582,8 +1645,14 @@ async function respondWithPetbotAgent({
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
+  const interpretationForFacts = {
+    ...(llmInterpretation || {}),
+    ...(isExplicitNoServiceNotesAnswer(trimmedMessage, history)
+      ? { service_notes: null, service_notes_resolved: true }
+      : {}),
+  }
   let serviceFacts = mergeInterpretedPetbotServiceFacts({
-    interpretation: llmInterpretation || {},
+    interpretation: interpretationForFacts,
     previousFacts: previousAgentContext.facts || previousAgentContext.explicit_facts || {},
   })
   let pendingOrder = pendingAtTurnStart
@@ -2253,6 +2322,15 @@ async function respondWithPetbotAgent({
       resolvedService: resolvedServiceThisTurn,
       timezone: storeSettings.petbotTimezone,
     }),
+    resolveTerminalReply: ({ toolName, result }) => {
+      if (toolName !== 'create_confirmed_petshop_order') return ''
+      if (!['committed', 'already_committed'].includes(cleanText(result?.status))) return ''
+      return buildPetbotCommittedReply({
+        pendingOrder: pendingAtTurnStart,
+        result,
+        timezone: storeSettings.petbotTimezone,
+      })
+    },
     validateReply: ({ reply: draftReply, toolRuns }) => {
       const operationalValidation = validatePetbotOperationalReply({
         reply: draftReply,
@@ -2357,13 +2435,22 @@ async function respondWithPetbotAgent({
     last_message_at: botSentAt,
   }
 
-  const { data: updatedSession, error: sessionUpdateError } = await supabase
+  let sessionUpdate = supabase
     .from('chat_sessions')
     .update(sessionPatch)
     .eq('id', sessionId)
+  if (cleanText(session.last_message_at)) {
+    sessionUpdate = sessionUpdate.eq('last_message_at', session.last_message_at)
+  }
+  const { data: updatedSession, error: sessionUpdateError } = await sessionUpdate
     .select('id, context')
     .maybeSingle()
 
+  if (!sessionUpdateError && !updatedSession && cleanText(session.last_message_at)) {
+    const staleError = new HttpError(409, 'A newer customer message superseded this PetBot turn.')
+    staleError.code = 'PETBOT_STALE_TURN'
+    throw staleError
+  }
   if (sessionUpdateError || !updatedSession || !hasPetbotState(updatedSession.context)) {
     throw new HttpError(500, `Unable to persist PetBot agent state${sessionUpdateError?.message ? `: ${sessionUpdateError.message}` : '.'}`)
   }
@@ -2389,6 +2476,7 @@ async function respondWithPetbotAgent({
           steps: agentResult.steps || 0,
           validation_retries: agentResult.validationRetries || 0,
           recovered: Boolean(agentResult.recovered),
+          terminal: Boolean(agentResult.terminal),
           recovery_reason: cleanText(agentResult.recoveryReason).slice(0, 160) || null,
           duration_ms: agentResult.durationMs || 0,
           pending_order_id: pendingOrder?.id || null,
@@ -2485,10 +2573,21 @@ async function respondWithPetbotRecoverableFailure({
     },
   }
 
-  const { error: sessionError } = await supabase
+  let recoveryUpdate = supabase
     .from('chat_sessions')
     .update({ context: nextContext, last_message_at: botSentAt })
     .eq('id', sessionId)
+  if (cleanText(session.last_message_at)) {
+    recoveryUpdate = recoveryUpdate.eq('last_message_at', session.last_message_at)
+  }
+  const { data: recoveredSession, error: sessionError } = await recoveryUpdate
+    .select('id')
+    .maybeSingle()
+  if (!sessionError && !recoveredSession && cleanText(session.last_message_at)) {
+    const staleError = new HttpError(409, 'A newer customer message superseded this PetBot recovery turn.')
+    staleError.code = 'PETBOT_STALE_TURN'
+    throw staleError
+  }
   if (sessionError) throw new HttpError(500, 'Unable to persist recoverable PetBot error.')
 
   const { data: savedReply, error: replyError } = await supabase
@@ -2544,7 +2643,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
 
   const { data: session, error: sessionError } = await supabase
     .from('chat_sessions')
-    .select('id, module_id, tenant_id, customer_phone, customer_name, status, client_id, context, csat_score')
+    .select('id, module_id, tenant_id, customer_phone, customer_name, status, client_id, context, csat_score, last_message_at')
     .eq('id', sessionId)
     .maybeSingle()
 
@@ -2687,6 +2786,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       customInstructions,
     })
   } catch (error) {
+    if (error?.code === 'PETBOT_STALE_TURN') throw error
     logger.warn('PetBot agent failed', {
       sessionId,
       moduleId,

@@ -7,8 +7,10 @@ import { respondToChatMessage } from '../server/lib/chat.js'
 const DEFAULT_MODULE_ID = 'petshop'
 const DEFAULT_OPENAI_TRANSCRIPTION_MODEL = 'gpt-4o-mini-transcribe-2025-12-15'
 const DEFAULT_OPENAI_VISION_MODEL = 'gpt-4o-mini-2024-07-18'
-const DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 0
+const DEFAULT_WHATSAPP_REPLY_DEBOUNCE_MS = 1_000
 const MAX_BLOCKING_WHATSAPP_REPLY_DEBOUNCE_MS = 1_500
+const MAX_WHATSAPP_BURST_WINDOW_MS = 10_000
+const MAX_WHATSAPP_BURST_MESSAGES = 6
 const GRAPH_BASE_URL = 'https://graph.facebook.com'
 const MAX_WEBHOOK_BODY_BYTES = 256 * 1024
 const MAX_WHATSAPP_TEXT_CHARS = 4096
@@ -803,6 +805,43 @@ async function hasNewerIncomingMessage(
   return Boolean(data?.length)
 }
 
+async function loadRecentIncomingBurst(
+  supabase: SupabaseClient,
+  sessionId: string,
+  savedMessage: SavedMessage,
+  fallback: string,
+): Promise<string> {
+  const { data, error } = await supabase
+    .from('chat_messages')
+    .select('role, content, sent_at')
+    .eq('session_id', sessionId)
+    .order('sent_at', { ascending: false })
+    .limit(MAX_WHATSAPP_BURST_MESSAGES + 2)
+
+  if (error || !data?.length) return fallback
+
+  const ordered = [...data].reverse()
+  const lastAssistantIndex = ordered.reduce(
+    (index, message, currentIndex) => message.role === 'assistant' || message.role === 'human_agent' ? currentIndex : index,
+    -1,
+  )
+  const currentTimestamp = Date.parse(savedMessage.sent_at)
+  const burst = ordered
+    .slice(lastAssistantIndex + 1)
+    .filter((message) => {
+      if (message.role !== 'user' || !clean(message.content)) return false
+      const messageTimestamp = Date.parse(message.sent_at)
+      if (!Number.isFinite(currentTimestamp) || !Number.isFinite(messageTimestamp)) return true
+      return currentTimestamp - messageTimestamp <= MAX_WHATSAPP_BURST_WINDOW_MS
+    })
+    .slice(-MAX_WHATSAPP_BURST_MESSAGES)
+    .map((message) => clean(message.content))
+    .filter(Boolean)
+
+  const combined = burst.join('\n').slice(0, 4000).trim()
+  return combined || fallback
+}
+
 async function saveAssistantMessage(
   supabase: SupabaseClient,
   sessionId: string,
@@ -1016,7 +1055,10 @@ async function processWhatsappEvent(supabase: SupabaseClient, env: WebhookEnv, e
   // O WhatsApp e o painel interno passam pelo mesmo runtime. O webhook fica
   // responsavel apenas por autenticar a Meta, persistir a entrada e entregar a
   // resposta ao cliente; regras, contexto, handoff e transacoes vivem no core.
-  const sharedResult = await respondToChatMessage(supabase as any, session.id, event.text, {
+  const runtimeMessage = env.whatsappReplyDebounceMs > 0
+    ? await loadRecentIncomingBurst(supabase, session.id, savedIncoming, event.text)
+    : event.text
+  const sharedResult = await respondToChatMessage(supabase as any, session.id, runtimeMessage, {
     source: 'whatsapp',
     skipUserPersistence: true,
     mediaContext: event.media?.description || '',

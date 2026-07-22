@@ -67,6 +67,10 @@ function normalizeCode(value = '') {
     .replace(/^_+|_+$/g, '')
 }
 
+function isNoServiceNotesValue(value = '') {
+  return /^(?:sem_obs|sem_observacao|sem_observacoes|nenhuma|nenhum|nao|nada|normal|tudo_certo)$/.test(normalizeCode(value))
+}
+
 function formatWeightValue(value) {
   const number = Number(value)
   if (!Number.isFinite(number)) return ''
@@ -123,6 +127,18 @@ export function mergeInterpretedPetbotServiceFacts({
     || inheritedCoat
     || coatFromCustomer
     || null
+  const currentServiceNotesRaw = clean(current.service_notes || current.notes)
+  const previousServiceNotes = clean(inheritedPet.service_notes)
+  const currentNoServiceNotes = Boolean(current.service_notes_resolved && !currentServiceNotesRaw)
+    || isNoServiceNotesValue(currentServiceNotesRaw)
+  const currentServiceNotes = currentNoServiceNotes ? '' : currentServiceNotesRaw
+  const serviceNotes = currentServiceNotes || previousServiceNotes || null
+  const serviceNotesResolved = Boolean(
+    currentNoServiceNotes
+    || currentServiceNotes
+    || inheritedPet.service_notes_resolved
+    || inheritedPet.service_notes_explicit,
+  )
 
   return {
     pet_name: petName,
@@ -150,6 +166,9 @@ export function mergeInterpretedPetbotServiceFacts({
     service_time_preference: clean(current.service_time_preference || current.period)
       || clean(previous.service_time_preference)
       || null,
+    service_notes: serviceNotes,
+    service_notes_resolved: serviceNotesResolved,
+    service_notes_explicit: serviceNotesResolved,
     pet_identity_changed: petIdentityChanged,
   }
 }
@@ -185,6 +204,9 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     coat_type: clean(facts.coat_type)
       || classifyCommonPetBreed(clean(facts.breed) || clean(args.breed))?.coat_type
       || null,
+    notes: facts.service_notes_explicit
+      ? clean(facts.service_notes) || null
+      : clean(args.notes) || null,
   }
 }
 
@@ -2103,6 +2125,7 @@ export async function runPetbotAgent({
   parseReply = null,
   initialToolRuns = [],
   fallbackReply = null,
+  resolveTerminalReply = null,
 } = {}) {
   if (typeof callModel !== 'function') throw new TypeError('callModel is required')
   if (typeof executeTool !== 'function') throw new TypeError('executeTool is required')
@@ -2264,6 +2287,34 @@ export async function runPetbotAgent({
         tool_call_id: toolCall.id,
         content: JSON.stringify(result).slice(0, 12000),
       })
+
+      if (typeof resolveTerminalReply === 'function') {
+        try {
+          const terminalReply = clean(await resolveTerminalReply({
+            toolCall,
+            toolName,
+            result,
+            toolRuns,
+            messages,
+          }))
+          if (terminalReply) {
+            return {
+              reply: terminalReply,
+              toolRuns,
+              tokensUsed,
+              messages,
+              validationRetries,
+              steps: step + 1,
+              terminal: true,
+              durationMs: Date.now() - startedAt,
+            }
+          }
+        } catch (error) {
+          const fallback = await useFallbackReply(`falha ao finalizar ferramenta terminal: ${toolName}`, error)
+          if (fallback) return { ...fallback, terminal: true }
+          throw error
+        }
+      }
 
       const signature = `${toolName}:${clean(toolCall?.function?.arguments)}:${toolStatus || ''}`
       const repetitions = (repeatedToolCalls.get(signature) || 0) + 1

@@ -83,6 +83,42 @@ test('mudanca explicita de pet nao herda peso ou raca do pet anterior', () => {
   assert.equal(facts.pet_identity_changed, true)
 })
 
+test('observacao de servico entra no estado confiavel e nao e apagada por negativa posterior', () => {
+  const withNote = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_notes: 'Não colocar perfume' },
+    previousFacts: { service_type: 'banho' },
+  })
+  assert.equal(withNote.service_notes, 'Não colocar perfume')
+  assert.equal(withNote.service_notes_resolved, true)
+
+  const noAdditionalNote = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_notes_resolved: true },
+    previousFacts: withNote,
+  })
+  assert.equal(noAdditionalNote.service_notes, 'Não colocar perfume')
+  assert.equal(noAdditionalNote.service_notes_resolved, true)
+
+  const grounded = groundPetbotServiceArgs({ notes: null }, noAdditionalNote)
+  assert.equal(grounded.notes, 'Não colocar perfume')
+
+  const changedPet = mergeInterpretedPetbotServiceFacts({
+    interpretation: { pet_name: 'Nina' },
+    previousFacts: { ...noAdditionalNote, pet_name: 'Thor' },
+  })
+  assert.equal(changedPet.service_notes, null)
+  assert.equal(changedPet.service_notes_resolved, false)
+})
+
+test('validador impede perguntar observacao novamente depois da etapa resolvida', () => {
+  const validation = validatePetbotConversationReply({
+    reply: 'Apenas para finalizar, você precisa de alguma observação especial para o banho?',
+    facts: { service_type: 'banho', service_notes_resolved: true },
+    serviceContext: true,
+  })
+  assert.equal(validation.ok, false)
+  assert.ok(validation.problems.some((problem) => /observações do serviço já foram respondidas/.test(problem)))
+})
+
 test('grounding bloqueia preco, agenda, estoque e confirmacao inventados', () => {
   const invalid = validatePetbotOperationalReply({
     reply: 'Temos em estoque por R$ 120,00. O horário 14:00 está disponível e o agendamento foi confirmado.',
@@ -356,6 +392,46 @@ test('loop do agente registra passos, retries e duracao de ferramentas', async (
   assert.equal(result.toolRuns.length, 1)
   assert.equal(typeof result.toolRuns[0].duration_ms, 'number')
   assert.equal(typeof result.durationMs, 'number')
+})
+
+test('ferramenta transacional terminal encerra o turno sem segunda chamada ao modelo', async () => {
+  let modelCalls = 0
+  const result = await runPetbotAgent({
+    model: 'gpt-4o-mini-test',
+    systemPrompt: 'Confirme o agendamento.',
+    message: 'Confirmo.',
+    initialToolChoice: { type: 'function', function: { name: 'create_confirmed_petshop_order' } },
+    callModel: async () => {
+      modelCalls += 1
+      return {
+        usage: { total_tokens: 7 },
+        choices: [{
+          message: {
+            content: null,
+            tool_calls: [{
+              id: 'confirm-1',
+              type: 'function',
+              function: {
+                name: 'create_confirmed_petshop_order',
+                arguments: JSON.stringify({ confirmation: true }),
+              },
+            }],
+          },
+        }],
+      }
+    },
+    executeTool: async () => ({ ok: true, status: 'committed', appointment_id: 'appt-1', total: 55 }),
+    resolveTerminalReply: ({ result: toolResult }) => (
+      toolResult.status === 'committed'
+        ? 'Pronto! O agendamento foi confirmado.'
+        : ''
+    ),
+  })
+
+  assert.equal(modelCalls, 1)
+  assert.equal(result.reply, 'Pronto! O agendamento foi confirmado.')
+  assert.equal(result.terminal, true)
+  assert.equal(result.toolRuns.length, 1)
 })
 
 test('fatos semanticos podem vir do tool calling sem criar roteiro deterministico', () => {
