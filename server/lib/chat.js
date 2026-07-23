@@ -9,6 +9,7 @@ import {
 import {
   buildInterpretedPetbotSearchText,
   interpretPetbotMessageWithLlm,
+  resolveEffectiveVeterinaryRisk,
   resolvePetbotTurnSemantics,
 } from './petbotAi.js'
 import {
@@ -40,12 +41,17 @@ import {
   buildPetbotAgentV3Prompt,
   buildProductCheckoutQualificationReply,
   buildRationQualificationReply,
+  acceptedVeterinaryConsultationOffer,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
+  buildVeterinaryConsultationReply,
+  declinedVeterinaryConsultationOffer,
   detectExplicitProductQuantity,
   enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
   prependPetbotConversationOpening,
+  isVeterinaryConsultationQuestion,
+  isVeterinaryTreatmentAdviceRequest,
   productFactsSignature,
   recoverProductQueryFactsFromHistory,
   resolveRecentProductCandidate,
@@ -2390,19 +2396,37 @@ async function respondWithPetbotAgent({
     }
   }
 
-  const fallbackHandoffTarget = explicitPetbotHandoffTarget(trimmedMessage, llmInterpretation || {})
-    || (acceptedPetbotHandoffOffer(trimmedMessage, history) ? 'atendente' : '')
-  const requestedHandoffTarget = cleanText(llmInterpretation?.veterinary_risk) === 'emergency'
+  const veterinaryConsultationAccepted = acceptedVeterinaryConsultationOffer(trimmedMessage, history)
+  const veterinaryConsultationDeclined = declinedVeterinaryConsultationOffer(trimmedMessage, history)
+  const veterinaryConsultationQuestion = isVeterinaryConsultationQuestion(trimmedMessage)
+  const veterinaryTreatmentAdvice = isVeterinaryTreatmentAdviceRequest(trimmedMessage)
+  const explicitHandoffTarget = explicitPetbotHandoffTarget(trimmedMessage, llmInterpretation || {})
+  const acceptedHandoffTarget = acceptedPetbotHandoffOffer(trimmedMessage, history) ? 'atendente' : ''
+  const effectiveVeterinaryRisk = resolveEffectiveVeterinaryRisk(
+    trimmedMessage,
+    llmInterpretation?.veterinary_risk,
+  )
+  const requestedHandoffTarget = effectiveVeterinaryRisk === 'emergency'
     ? 'veterinaria'
-    : turnSemantics?.requests_human
-      ? (cleanText(turnSemantics.handoff_target) || 'atendente')
-      : fallbackHandoffTarget
-  const serviceOrderType = requestedHandoffTarget ? '' : inferPetbotServiceOrderType({
-    interpretation: llmInterpretation,
-    facts: serviceFacts,
-    message: trimmedMessage,
-    history,
-  })
+    : explicitHandoffTarget || acceptedHandoffTarget
+  const shouldStartVeterinaryFlow = Boolean(
+    veterinaryConsultationAccepted
+    || veterinaryConsultationQuestion
+    || (
+      veterinaryTreatmentAdvice
+      && cleanText(llmInterpretation?.intent).toLowerCase() !== 'produto'
+    )
+  )
+  const serviceOrderType = requestedHandoffTarget || veterinaryConsultationDeclined
+    ? ''
+    : shouldStartVeterinaryFlow
+      ? 'veterinaria'
+      : inferPetbotServiceOrderType({
+        interpretation: llmInterpretation,
+        facts: serviceFacts,
+        message: trimmedMessage,
+        history,
+      })
   if (serviceOrderType === 'banho_tosa') {
     serviceFacts = enrichPetbotMotodogAddressFromCustomer(serviceFacts, activeCustomer)
   }
@@ -2464,7 +2488,7 @@ async function respondWithPetbotAgent({
       breed: isProductConversation ? productFacts.breed : serviceFacts.breed,
       size: isProductConversation ? productFacts.size : serviceFacts.size,
       symptom: serviceFacts.symptom,
-      veterinary_risk: cleanText(llmInterpretation?.veterinary_risk) || 'none',
+      veterinary_risk: effectiveVeterinaryRisk,
       weight_kg: isProductConversation ? null : serviceFacts.weight_kg,
       weight_label: isProductConversation ? null : serviceFacts.weight_label,
       weight_estimated: isProductConversation ? false : serviceFacts.weight_estimated,
@@ -3058,7 +3082,18 @@ async function respondWithPetbotAgent({
     ? buildPetbotTransportQualificationReply({ facts: serviceFacts, settings: storeSettings })
     : ''
 
-  const shouldAnswerStoreQuestion = shouldAnswerVerifiedStoreQuestion({
+  const veterinaryQualificationReply = !pendingAtTurnStart && veterinaryConsultationDeclined
+    ? 'Tudo bem. Como você não deseja agendar a consulta agora, posso chamar um atendente para orientar você?'
+    : !pendingAtTurnStart
+      && !veterinaryConsultationAccepted
+      && (veterinaryConsultationQuestion || veterinaryTreatmentAdvice)
+      ? buildVeterinaryConsultationReply({
+        service: resolvedServiceThisTurn,
+        veterinaryRisk: effectiveVeterinaryRisk,
+        treatmentAdvice: veterinaryTreatmentAdvice,
+      })
+      : ''
+  const shouldAnswerStoreQuestion = !veterinaryQualificationReply && shouldAnswerVerifiedStoreQuestion({
     message: trimmedMessage,
     detectedIntent: intent,
     interpretedIntent: llmInterpretation?.intent,
@@ -3180,6 +3215,17 @@ async function respondWithPetbotAgent({
   } else if (transportQualificationReply) {
     agentResult = {
       reply: transportQualificationReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
+    }
+  } else if (veterinaryQualificationReply) {
+    agentResult = {
+      reply: veterinaryQualificationReply,
       toolRuns: preloadedToolRuns,
       tokensUsed: 0,
       messages: [],

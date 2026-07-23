@@ -332,6 +332,14 @@ export function detectExplicitVeterinaryEmergency(message = '') {
   ].some((pattern) => pattern.test(normalized))
 }
 
+
+export function resolveEffectiveVeterinaryRisk(message = '', interpretedRisk = 'none') {
+  if (detectExplicitVeterinaryEmergency(message)) return 'emergency'
+  return ['urgent', 'emergency'].includes(String(interpretedRisk || '').trim().toLowerCase())
+    ? 'urgent'
+    : 'none'
+}
+
 export function reconcilePetbotIdentityInterpretation(message = '', interpretation = null) {
   if (!interpretation || typeof interpretation !== 'object') return interpretation
 

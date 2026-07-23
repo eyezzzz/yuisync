@@ -723,7 +723,10 @@ export function buildPetbotAgentV3Prompt({
     '- Durante agendamentos não ofereça produto, corte de unhas nem outro serviço adicional. Não crie etapas extras entre observação, resumo e confirmação.',
     '- Prepare um pedido somente quando os dados necessários estiverem completos. Quando houver pedido pendente de turno anterior e o cliente confirmar inequivocamente, chame create_confirmed_petshop_order imediatamente, sem repetir resumo ou pedir nova confirmação.',
     '- Se o cliente desistir, cancelar ou pedir para recomeçar depois de um resumo, descarte o pedido pendente com a ferramenta apropriada antes de continuar.',
-    '- Em caso de risco veterinário, falha operacional sem alternativa ou pedido explícito por pessoa, transfira para humano.',
+    '- Sintoma e intenção principal são campos separados. Quando o cliente perguntar preço, existência ou agendamento de consulta, responda à pergunta usando o catálogo mesmo que também relate um sintoma; somente emergency interrompe o fluxo.',
+    '- veterinary_risk=urgent recomenda avaliação rápida, mas não autoriza transferência automática. Continue oferecendo a consulta e a agenda normalmente.',
+    '- Pedidos de remédio, dose, diagnóstico ou tratamento nunca recebem orientação clínica. Ofereça primeiro a consulta veterinária. Se o cliente aceitar, continue o agendamento; se recusar, ofereça um atendente e só transfira após aceitação explícita.',
+    '- Em caso de risco veterinário emergency, falha operacional sem alternativa ou pedido explícito por pessoa, transfira para humano.',
     '- Se veterinary_risk estiver como emergency, chame handoff_to_human para veterinaria imediatamente e não continue a venda ou o agendamento.',
     '- Nunca diga que está transferindo ou chamando uma pessoa sem executar handoff_to_human no mesmo turno.',
     '- Em compras de produtos, faça venda consultiva com no máximo uma sugestão complementar relevante e aceite a recusa sem insistência. Essa regra não se aplica a agendamentos.',
@@ -1058,6 +1061,102 @@ export function resolveRecentProductCandidate(message = '', candidates = []) {
   if (/\b(?:terceir[oa]|a terceira|o terceiro)\b/.test(normalized)) index = 2
   if (index < 0 || index >= candidates.length) return null
   return candidates[index] || null
+}
+
+function normalizeVeterinaryMessage(message = '') {
+  return normalizeCatalogText(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+export function isVeterinaryConsultationQuestion(message = '') {
+  const normalized = normalizeVeterinaryMessage(message)
+  if (!normalized) return false
+  const mentionsConsultation = /\b(?:consulta|consultar|consultorio|clinica|veterinario|veterinaria|vet)\b/.test(normalized)
+  const asksObjectiveInformation = /\b(?:quanto|valor|preco|custa|tem|teria|fazem|oferecem|atende|atendimento)\b/.test(normalized)
+  return Boolean(mentionsConsultation && asksObjectiveInformation)
+}
+
+export function isVeterinaryTreatmentAdviceRequest(message = '') {
+  const normalized = normalizeVeterinaryMessage(message)
+  if (!normalized) return false
+
+  const asksToBuyMedication = /\b(?:vende|vendem|vender|comprar|tem para vender|estoque)\b.{0,35}\b(?:remedio|medicamento|dipirona|antibiotico|anti inflamatorio)\b/.test(normalized)
+    || /\b(?:remedio|medicamento|dipirona|antibiotico|anti inflamatorio)\b.{0,35}\b(?:vende|vendem|comprar|estoque)\b/.test(normalized)
+  if (asksToBuyMedication) return false
+
+  return /\b(?:qual|que)\b.{0,35}\b(?:remedio|medicamento|tratamento|dose|dosagem)\b/.test(normalized)
+    || /\b(?:posso|pode|devo)\b.{0,25}\b(?:dar|aplicar|administrar)\b/.test(normalized)
+    || /\b(?:dose|dosagem)\b/.test(normalized)
+    || /\b(?:como tratar|como cuido|o que eu faco|o que fazer)\b/.test(normalized)
+    || /\b(?:o que (?:ele|ela|meu cachorro|minha cachorra|meu gato|minha gata) tem|diagnostico|diagnosticar)\b/.test(normalized)
+}
+
+function lastAssistantVeterinaryConsultationOffer(history = []) {
+  const lastAssistant = [...(Array.isArray(history) ? history : [])]
+    .reverse()
+    .find((entry) => entry?.role === 'assistant')
+  const previous = normalizeVeterinaryMessage(lastAssistant?.content)
+  if (!previous || !/\b(?:consulta|veterinaria|veterinario)\b/.test(previous)) return false
+  return /\b(?:posso|quer|gostaria)\b.{0,80}\b(?:agendar|marcar|verificar|consultar|horario|consulta)\b/.test(previous)
+}
+
+export function acceptedVeterinaryConsultationOffer(message = '', history = []) {
+  if (!lastAssistantVeterinaryConsultationOffer(history)) return false
+  const answer = normalizeVeterinaryMessage(message)
+  return /^(?:sim|s|quero|pode|pode sim|sim por favor|por favor|vamos|quero sim|aceito|isso)$/.test(answer)
+    || /\b(?:quero|pode|vamos|prefiro)\b.{0,30}\b(?:agendar|marcar|consulta|horario)\b/.test(answer)
+}
+
+export function declinedVeterinaryConsultationOffer(message = '', history = []) {
+  if (!lastAssistantVeterinaryConsultationOffer(history)) return false
+  const answer = normalizeVeterinaryMessage(message)
+  return /^(?:nao|nao quero|agora nao|melhor nao|nao obrigado|nao obrigada|deixa pra la|deixa para la)$/.test(answer)
+    || /\b(?:nao quero|prefiro nao|nao vou|melhor nao)\b.{0,35}\b(?:consulta|agendar|marcar|horario)\b/.test(answer)
+}
+
+function formatVeterinaryCurrency(value = 0) {
+  return Number(value || 0).toLocaleString('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  })
+}
+
+export function buildVeterinaryConsultationReply({
+  service = null,
+  veterinaryRisk = 'none',
+  treatmentAdvice = false,
+} = {}) {
+  const price = Number(service?.price || service?.regular_price || 0)
+  const duration = Math.max(0, Number(service?.duration_min || 0) || 0)
+  const name = clean(service?.name) || 'consulta veterinária'
+  const hasCatalogService = Boolean(service && price > 0)
+  const lines = []
+
+  if (treatmentAdvice) {
+    lines.push('Não posso indicar remédio, dose, diagnóstico ou tratamento sem uma avaliação veterinária.')
+  }
+
+  if (!hasCatalogService) {
+    lines.push('Não encontrei uma consulta veterinária ativa e com preço confirmado no catálogo da loja.')
+    lines.push('Posso chamar um atendente para confirmar as opções para você?')
+    return lines.join('\n')
+  }
+
+  if (treatmentAdvice) {
+    lines.push(`Temos ${name} por ${formatVeterinaryCurrency(price)}${duration ? `, com duração prevista de aproximadamente ${duration} minutos` : ''}.`)
+  } else {
+    lines.push(`Sim, temos ${name}. O valor é ${formatVeterinaryCurrency(price)}${duration ? ` e a duração prevista é de aproximadamente ${duration} minutos` : ''}.`)
+  }
+
+  if (clean(veterinaryRisk) === 'urgent') {
+    lines.push('Como você relatou um sintoma preocupante, recomendo uma avaliação o quanto antes.')
+    lines.push('Posso verificar o primeiro horário disponível?')
+  } else {
+    lines.push('Posso verificar um horário para você?')
+  }
+  return lines.join('\n')
 }
 
 export function isPetshopServiceKnowledgeQuestion(message = '') {
