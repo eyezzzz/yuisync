@@ -224,6 +224,24 @@ test('PetBot usa LLM para interpretar e conduzir o agente sem guardiao conversac
   assert.doesNotMatch(webhook, /runPetbotGuard/)
 })
 
+test('atos semânticos são a fonte primária e reconhecedores literais ficam como fallback', () => {
+  const localChat = read('server/lib/chat.js')
+  const ai = read('server/lib/petbotAi.js')
+  const grounding = read('server/lib/petbotGrounding.js')
+
+  assert.match(ai, /resolvePetbotTurnSemantics/)
+  assert.match(ai, /dialogue_act/)
+  assert.match(ai, /reply_target/)
+  assert.match(ai, /SEMANTIC_CONFIDENCE_THRESHOLD/)
+  assert.match(localChat, /const turnSemantics = resolvePetbotTurnSemantics/)
+  assert.match(localChat, /turnSemantics\?\.confirms_pending_order/)
+  assert.match(localChat, /!turnSemantics\?\.confirmation_decision_made[\s\S]*isExplicitPetbotConfirmation/)
+  assert.match(localChat, /last_turn_semantics: turnSemantics/)
+  assert.match(localChat, /turn_semantics: turnSemantics/)
+  assert.match(grounding, /semanticFulfillmentType \|\| messageFulfillmentType/)
+  assert.match(grounding, /semanticPaymentMethod[\s\S]*\|\| messagePaymentMethod/)
+})
+
 test('WhatsApp e painel usam o mesmo runtime auditavel do PetBot', () => {
   const localChat = read('server/lib/chat.js')
   const webhook = read('serverless/whatsappWebhook.ts')

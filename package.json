@@ -11,7 +11,7 @@
     "audit": "npm audit --audit-level=high",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:petbot": "node --test test/petbotAgent.test.mjs test/petbotAgentV3.test.mjs test/petbotFlowMatrix.test.mjs test/petbotModes.test.mjs test/petbotStatic.test.mjs",
+    "test:petbot": "node --test test/petbotAgent.test.mjs test/petbotAgentV3.test.mjs test/petbotFlowMatrix.test.mjs test/petbotModes.test.mjs test/petbotSemantics.test.mjs test/petbotStatic.test.mjs",
     "test:transactions": "node --test test/transactionalStatic.test.mjs",
     "test:e2e": "playwright test",
     "test:tenant": "node scripts/test-tenant-isolation.mjs",

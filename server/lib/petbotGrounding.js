@@ -752,6 +752,7 @@ export function mergeProductQueryFacts({
   previousFacts = {},
   serviceFacts = {},
   message = '',
+  semantics = {},
 } = {}) {
   const current = normalizeProductQueryFacts(interpretation, serviceFacts)
   const previous = normalizeProductQueryFacts(previousFacts, serviceFacts)
@@ -762,6 +763,19 @@ export function mergeProductQueryFacts({
   const normalizedMessage = normalizeCatalogText(message)
   const messagePaymentMethod = detectExplicitProductPaymentMethod(message)
   const messageFulfillmentType = detectExplicitProductFulfillmentType(message)
+  const semanticPaymentMethod = ['pix', 'dinheiro', 'cartao'].includes(clean(semantics.payment_method))
+    ? clean(semantics.payment_method)
+    : ''
+  const semanticFulfillmentType = ['entrega', 'retirada'].includes(clean(semantics.fulfillment_type))
+    ? clean(semantics.fulfillment_type)
+    : ''
+  const semanticPackagePreference = normalizeRationPackagePreference(
+    semantics.package_preference,
+    semantics.package_kg,
+  )
+  const semanticQuantity = Number(semantics.quantity || 0) > 0
+    ? Number(semantics.quantity)
+    : null
   const explicitMessageFormat = /\b(?:granel|pacote|embalagem|saco|sacaria)\b/.test(normalizedMessage)
     ? normalizeRationPackagePreference(message)
     : ''
@@ -787,14 +801,15 @@ export function mergeProductQueryFacts({
   const bulkQuantityContinuation = Boolean(
     previous.package_preference === 'granel'
     && !explicitMessageFormat
-    && detectExplicitProductQuantity(message, 'granel'),
+    && !semanticPackagePreference
+    && (semanticQuantity || detectExplicitProductQuantity(message, 'granel')),
   )
   const currentPackagePreference = bulkQuantityContinuation
     ? 'granel'
     : (
       explicitMessageFormat
+      || semanticPackagePreference
       || previous.package_preference
-      || current.package_preference
       || currentRequest.packagePreference
     )
   const explicitQuantity = detectExplicitProductQuantity(
@@ -806,11 +821,15 @@ export function mergeProductQueryFacts({
     && previous.package_preference
     && currentPackagePreference !== previous.package_preference,
   )
-  const fulfillmentType = messageFulfillmentType || previous.fulfillment_type
+  const fulfillmentType = semanticFulfillmentType || messageFulfillmentType || previous.fulfillment_type
   const paymentMethod = fulfillmentType === 'retirada'
     ? 'a_combinar'
     : fulfillmentType === 'entrega'
-      ? (messagePaymentMethod || (previous.payment_method === 'a_combinar' ? '' : previous.payment_method))
+      ? (
+        semanticPaymentMethod
+        || messagePaymentMethod
+        || (previous.payment_method === 'a_combinar' ? '' : previous.payment_method)
+      )
       : ''
   const deliveryDetails = detectExplicitProductDeliveryDetails({
     message,
@@ -840,11 +859,12 @@ export function mergeProductQueryFacts({
     package_kg: bulkQuantityContinuation
       ? null
       : (
-        current.package_kg
+        Number(semantics.package_kg || 0)
         || currentRequest.packageKg
         || (changedPackageFormat ? null : previous.package_kg)
       ),
-    quantity: explicitQuantity
+    quantity: semanticQuantity
+      || explicitQuantity
       || (changedPackageFormat ? null : previous.quantity),
     payment_method: paymentMethod,
     fulfillment_type: fulfillmentType,

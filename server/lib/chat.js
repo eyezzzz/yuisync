@@ -9,6 +9,7 @@ import {
 import {
   buildInterpretedPetbotSearchText,
   interpretPetbotMessageWithLlm,
+  resolvePetbotTurnSemantics,
 } from './petbotAi.js'
 import {
   detectCatalogRequest,
@@ -1746,6 +1747,7 @@ async function respondWithPetbotAgent({
   runtimeConfig,
   customer,
   llmInterpretation,
+  turnSemantics,
   initialProductFacts,
   products,
   services,
@@ -1753,6 +1755,13 @@ async function respondWithPetbotAgent({
   customInstructions,
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
+  const trustedCurrentMessageConfirmation = Boolean(
+    turnSemantics?.confirms_pending_order
+    || (
+      !turnSemantics?.confirmation_decision_made
+      && isExplicitPetbotConfirmation(trimmedMessage)
+    ),
+  )
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
   const previousProductFacts = initialProductFacts || previousAgentContext.product_facts || {}
   const currentTurnIntent = cleanText(llmInterpretation?.intent || intent)
@@ -1762,7 +1771,10 @@ async function respondWithPetbotAgent({
   )
   const inferredTransportMode = productConversationAtTurnStart
     ? ''
-    : inferExplicitPetTransportMode(trimmedMessage, history)
+    : (
+      cleanText(turnSemantics?.service_transport_mode)
+      || inferExplicitPetTransportMode(trimmedMessage, history)
+    )
   const productBulkQuantityMessage = Boolean(
     cleanText(previousProductFacts.package_preference) === 'granel'
     && Number(detectExplicitProductQuantity(trimmedMessage, 'granel') || 0) > 0,
@@ -1804,7 +1816,7 @@ async function respondWithPetbotAgent({
     ...(isExplicitNoServiceNotesAnswer(trimmedMessage, history)
       ? { service_notes: null, service_notes_resolved: true }
       : {}),
-    ...(inferredTransportMode ? { service_transport_mode: inferredTransportMode } : {}),
+    service_transport_mode: inferredTransportMode || null,
   }
   let serviceFacts = mergeInterpretedPetbotServiceFacts({
     interpretation: interpretationForFacts,
@@ -1816,6 +1828,7 @@ async function respondWithPetbotAgent({
     previousFacts: previousProductFacts,
     serviceFacts,
     message: trimmedMessage,
+    semantics: turnSemantics,
   })
   let pendingOrder = pendingAtTurnStart
   let orderResult = null
@@ -1995,6 +2008,9 @@ async function respondWithPetbotAgent({
         trimmedMessage,
         lastProductCandidates,
       )
+      const semanticSelectedCandidate = Number(turnSemantics?.option_index || 0) > 0
+        ? lastProductCandidates[Number(turnSemantics.option_index) - 1] || null
+        : null
       const persistedSelectedCandidate = lastProductCandidates.find((candidate) => (
         cleanText(candidate.id) === cleanText(previousCandidateState.selected_product_id)
       ))
@@ -2004,7 +2020,8 @@ async function respondWithPetbotAgent({
       )
         ? lastProductCandidates[0]
         : null
-      selectedRecentProductCandidate = explicitlySelectedCandidate
+      selectedRecentProductCandidate = semanticSelectedCandidate
+        || explicitlySelectedCandidate
         || quantitySelectedSoleCandidate
         || (rejectsPreviousProductCandidate ? null : persistedSelectedCandidate)
     } catch (error) {
@@ -2016,10 +2033,13 @@ async function respondWithPetbotAgent({
     }
   }
 
+  const fallbackHandoffTarget = explicitPetbotHandoffTarget(trimmedMessage, llmInterpretation || {})
+    || (acceptedPetbotHandoffOffer(trimmedMessage, history) ? 'atendente' : '')
   const requestedHandoffTarget = cleanText(llmInterpretation?.veterinary_risk) === 'emergency'
     ? 'veterinaria'
-    : (explicitPetbotHandoffTarget(trimmedMessage, llmInterpretation || {})
-      || (acceptedPetbotHandoffOffer(trimmedMessage, history) ? 'atendente' : ''))
+    : turnSemantics?.requests_human
+      ? (cleanText(turnSemantics.handoff_target) || 'atendente')
+      : fallbackHandoffTarget
   const serviceOrderType = requestedHandoffTarget ? '' : inferPetbotServiceOrderType({
     interpretation: llmInterpretation,
     facts: serviceFacts,
@@ -2500,7 +2520,7 @@ async function respondWithPetbotAgent({
     }
 
     if (name === 'create_confirmed_petshop_order') {
-      if (args.confirmation !== true || !isExplicitPetbotConfirmation(trimmedMessage)) {
+      if (args.confirmation !== true || !trustedCurrentMessageConfirmation) {
         return {
           ok: false,
           action: name,
@@ -2662,7 +2682,10 @@ async function respondWithPetbotAgent({
     return { ok: false, error: `Ferramenta desconhecida: ${name}` }
   }
 
-  const currentMessageIsConfirmation = Boolean(pendingAtTurnStart && isExplicitPetbotConfirmation(trimmedMessage))
+  const currentMessageIsConfirmation = Boolean(
+    pendingAtTurnStart
+    && trustedCurrentMessageConfirmation,
+  )
   const shouldAnswerStoreQuestion = shouldAnswerVerifiedStoreQuestion({
     message: trimmedMessage,
     detectedIntent: intent,
@@ -2988,6 +3011,7 @@ async function respondWithPetbotAgent({
         }
         : null,
       last_action: agentResult.recovered ? 'agent_recovery' : (agentResult.toolRuns.at(-1)?.name || 'reply'),
+      last_turn_semantics: turnSemantics,
       last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null })),
       needs_human: needsHuman,
       handoff_target: handoffTarget,
@@ -3052,6 +3076,7 @@ async function respondWithPetbotAgent({
           order_saved: Boolean(orderResult),
           needs_human: needsHuman,
           handoff_target: handoffTarget,
+          turn_semantics: turnSemantics,
         },
       },
       tokens_used: agentResult.tokensUsed,
@@ -3082,6 +3107,7 @@ async function respondWithPetbotAgent({
       duration_ms: agentResult.durationMs || 0,
       pending_order_id: pendingOrder?.id || null,
       source: options.source || 'dashboard_simulation',
+      turn_semantics: turnSemantics,
     },
   })
 
@@ -3092,6 +3118,9 @@ async function respondWithPetbotAgent({
     tokens: agentResult.tokensUsed,
     guarded: false,
     engine: 'petbot_agent_v3',
+    dialogue_action: turnSemantics?.action || null,
+    dialogue_target: turnSemantics?.target || null,
+    semantic_confidence: Number(turnSemantics?.confidence || 0),
   })
 
   return { reply, savedMessage: savedReply }
@@ -3357,6 +3386,10 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     customInstructions,
   })
   const recoveredAgentContext = parseJsonObject(recoveredContext)?.petbot_agent || {}
+  const turnSemantics = resolvePetbotTurnSemantics({
+    interpretation: llmInterpretation || {},
+    hasPendingOrder: Boolean(getPendingAgentOrder(recoveredContext)),
+  })
   const productConversationText = buildCatalogSearchText(history, trimmedMessage)
   const recoveredProductFacts = recoverProductQueryFactsFromHistory({
     facts: recoveredAgentContext.product_facts || {},
@@ -3368,6 +3401,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     previousFacts: recoveredProductFacts,
     serviceFacts: recoveredAgentContext.facts || recoveredAgentContext.explicit_facts || {},
     message: trimmedMessage,
+    semantics: turnSemantics,
   })
   const catalogSearchText = buildPetbotSearchText(
     buildInterpretedPetbotSearchText(productConversationText, {
@@ -3397,6 +3431,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       runtimeConfig,
       customer,
       llmInterpretation,
+      turnSemantics,
       initialProductFacts,
       products,
       services,

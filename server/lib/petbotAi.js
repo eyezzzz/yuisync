@@ -13,6 +13,33 @@ const AGES = new Set(['filhote', 'adulto', 'castrado', 'senior'])
 const SIZES = new Set(['pequeno', 'medio', 'grande'])
 const SERVICE_TRANSPORT_MODES = new Set(['cliente_leva', 'motodog'])
 const VETERINARY_RISKS = new Set(['none', 'urgent', 'emergency'])
+const DIALOGUE_ACTS = new Set([
+  'inform',
+  'select',
+  'affirm',
+  'deny',
+  'correct',
+  'cancel',
+  'request_human',
+  'ask',
+  'other',
+])
+const REPLY_TARGETS = new Set([
+  'final_confirmation',
+  'fulfillment',
+  'payment',
+  'service_transport',
+  'service_notes',
+  'appointment_date',
+  'appointment_time',
+  'product_option',
+  'package_preference',
+  'quantity',
+  'pet_identity',
+  'other',
+])
+const HANDOFF_TARGETS = new Set(['atendente', 'veterinaria'])
+const SEMANTIC_CONFIDENCE_THRESHOLD = 0.72
 
 function clean(value = '') {
   return String(value ?? '').trim()
@@ -27,6 +54,7 @@ function norm(value = '') {
 }
 
 function clampNumber(value, min, max) {
+  if (value === null || value === undefined || clean(value) === '') return null
   const number = Number(value)
   if (!Number.isFinite(number)) return null
   return Math.min(max, Math.max(min, number))
@@ -100,10 +128,12 @@ function compactHistory(history = []) {
 
 function compactState(state = {}) {
   const petbot = state?.petbot || state || {}
+  const agentState = state?.petbot_agent || {}
   const agentFacts = state?.petbot_agent?.facts
     || state?.petbot_agent?.explicit_facts
     || {}
   const productFacts = state?.petbot_agent?.product_facts || {}
+  const pendingOrder = agentState.pending_order?.order || null
   return {
     customer_name: petbot.customerName || '',
     intent: petbot.intent || '',
@@ -138,6 +168,14 @@ function compactState(state = {}) {
     payment: petbot.payment?.method || '',
     fulfillment: petbot.fulfillment?.type || '',
     final_summary_shown: Boolean(petbot.finalSummaryShown),
+    pending_order: pendingOrder
+      ? {
+        id: agentState.pending_order?.id || '',
+        order_type: pendingOrder.order_type || '',
+        awaiting_final_confirmation: true,
+      }
+      : null,
+    last_turn_semantics: agentState.last_turn_semantics || null,
   }
 }
 
@@ -168,7 +206,8 @@ export function normalizePetbotInterpretation(input = {}) {
       packageKg,
     ),
     package_kg: packageKg,
-    quantity: clampNumber(data.quantity, 1, 99),
+    quantity: clampNumber(data.quantity, 0.01, 999),
+    option_index: clampNumber(data.option_index || data.optionIndex, 1, 99),
     service_type: pickString(data.service_type || data.serviceType, 80),
     service_grooming_detail: pickString(data.service_grooming_detail || data.serviceGroomingDetail, 120),
     service_notes: pickString(data.service_notes || data.serviceNotes, 160),
@@ -187,10 +226,78 @@ export function normalizePetbotInterpretation(input = {}) {
     wants_human: Boolean(data.wants_human || data.wantsHuman),
     wants_discount: Boolean(data.wants_discount || data.wantsDiscount),
     wants_image: Boolean(data.wants_image || data.wantsImage),
+    dialogue_act: pickEnum(data.dialogue_act || data.dialogueAct, DIALOGUE_ACTS) || 'other',
+    reply_target: pickEnum(data.reply_target || data.replyTarget, REPLY_TARGETS),
+    handoff_target: pickEnum(data.handoff_target || data.handoffTarget, HANDOFF_TARGETS),
     confirmation: Boolean(data.confirmation),
     negation: Boolean(data.negation),
     confidence: clampNumber(data.confidence, 0, 1) ?? 0,
     raw_summary: pickString(data.raw_summary || data.rawSummary, 240),
+  }
+}
+
+export function resolvePetbotTurnSemantics({
+  interpretation = {},
+  hasPendingOrder = false,
+} = {}) {
+  const data = normalizePetbotInterpretation(interpretation)
+  const confidence = Number(data.confidence || 0)
+  const confident = confidence >= SEMANTIC_CONFIDENCE_THRESHOLD
+  let action = data.dialogue_act
+  if (data.negation && !['correct', 'cancel'].includes(action)) action = 'deny'
+  if (data.wants_human) action = 'request_human'
+  if (data.confirmation && !data.negation && !['correct', 'cancel'].includes(action)) action = 'affirm'
+
+  const target = data.reply_target
+    || (hasPendingOrder && (data.confirmation || action === 'affirm') ? 'final_confirmation' : '')
+  const acceptsSlotUpdates = Boolean(
+    confident
+    && !data.negation
+    && ['inform', 'select', 'affirm', 'correct', 'other'].includes(action),
+  )
+  const acceptsTarget = (...targets) => Boolean(
+    acceptsSlotUpdates
+    && (!target || target === 'other' || targets.includes(target)),
+  )
+  const slot = (value, ...targets) => acceptsTarget(...targets) ? value : ''
+
+  return {
+    version: 1,
+    source: 'llm_semantic',
+    action,
+    target,
+    confidence,
+    confident,
+    negated: Boolean(data.negation || action === 'deny'),
+    confirmation_decision_made: Boolean(
+      confident
+      && ['affirm', 'deny', 'correct', 'cancel'].includes(action),
+    ),
+    confirms_pending_order: Boolean(
+      hasPendingOrder
+      && confident
+      && action === 'affirm'
+      && target === 'final_confirmation'
+      && !data.negation,
+    ),
+    cancels_pending_order: Boolean(
+      hasPendingOrder
+      && confident
+      && ['deny', 'cancel', 'correct'].includes(action),
+    ),
+    requests_human: Boolean(
+      confident
+      && data.wants_human
+      && action === 'request_human',
+    ),
+    handoff_target: confident ? data.handoff_target : '',
+    fulfillment_type: slot(data.fulfillment_type, 'fulfillment'),
+    payment_method: slot(data.payment_method, 'payment'),
+    service_transport_mode: slot(data.service_transport_mode, 'service_transport'),
+    package_preference: slot(data.package_preference, 'package_preference'),
+    package_kg: acceptsTarget('package_preference') ? data.package_kg : null,
+    quantity: acceptsTarget('quantity', 'product_option') ? data.quantity : null,
+    option_index: acceptsTarget('product_option') ? data.option_index : null,
   }
 }
 
@@ -243,6 +350,16 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Sua tarefa e extrair fatos estruturados da conversa. Nao responda o cliente.',
         'Nao invente preco, estoque, horario ou produto. Extraia somente sinais da fala, historico e estado.',
         'Pode normalizar grafias comuns e entender contexto de petshop, mas nao invente atributos que o cliente nao informou.',
+        'Interprete a intencao da mensagem atual pelo significado, inclusive com abreviacoes, variacoes coloquiais e erros ortograficos. Nao dependa de uma lista literal de palavras.',
+        'Classifique dialogue_act como inform, select, affirm, deny, correct, cancel, request_human, ask ou other.',
+        'Use reply_target para indicar a etapa respondida: final_confirmation, fulfillment, payment, service_transport, service_notes, appointment_date, appointment_time, product_option, package_preference, quantity, pet_identity ou other.',
+        'Use apenas a mensagem atual para decidir dialogue_act e os novos valores. Historico e estado servem para entender a que pergunta a mensagem responde, nunca para repetir como nova uma escolha antiga.',
+        'confirmation=true e reply_target="final_confirmation" somente quando o cliente estiver aprovando o resumo final de um pedido ou agendamento pendente. Um "sim", "pode ser", "fechado" ou equivalente em outra etapa nao confirma uma transacao.',
+        'Se a mensagem corrigir uma informacao anterior, use dialogue_act="correct" e extraia o novo valor. Se negar, cancelar ou pedir espera, nao preserve como nova escolha um valor negado.',
+        'Ao escolher uma opcao numerada ou ordinal, informe option_index com base 1. Entenda formas naturais como primeira, a do meio ou a ultima quando o contexto permitir uma unica posicao.',
+        'Quando pedir uma pessoa, use dialogue_act="request_human", wants_human=true e handoff_target atendente ou veterinaria.',
+        'request_human exige que o cliente queira conversar com uma pessoa, atendente, equipe ou profissional. Nunca use request_human para um pedido de enviar, mandar, levar ou trazer uma mercadoria ao cliente.',
+        'Quando o cliente responder à escolha entre entrega e retirada pedindo que a mercadoria seja enviada, levada ou trazida ao seu endereço, use dialogue_act="select", reply_target="fulfillment" e fulfillment_type="entrega", mesmo com linguagem informal ou erros de grafia.',
         'Quando o produto escolhido ou contexto for granel e o cliente disser "2kg", "2 kg", "dois quilos" ou responder "uns 2" à pergunta de quantidade, extraia quantity como 2. Isso é quantidade do produto, nunca weight_kg do pet.',
         'Para agendamento, extraia service_date como o texto que o cliente disse ("hoje", "amanha", "20/05", "sexta") e service_time_preference/service_preferred_time como "manha", "tarde", "qualquer horario" ou "14h". Nao invente horario.',
         'Para tosa, se o cliente disser maquina 1/3/5/7, lamina, pente, acabamento ou foto de referencia, extraia service_grooming_detail.',
@@ -263,7 +380,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Se o cliente disser "Robertao, quero uma racao", extraia customer_name "Robertao" e intent "produto".',
         'Interjeicoes como "ue", "uai", "oxe", "opa" nao sao nome.',
         'Retorne apenas JSON valido, sem markdown.',
-        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, service_type, service_grooming_detail, service_notes, service_transport_mode, service_date, service_time_preference, service_preferred_time, symptom, veterinary_risk, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, confirmation, negation, confidence, raw_summary.',
+        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, option_index, service_type, service_grooming_detail, service_notes, service_transport_mode, service_date, service_time_preference, service_preferred_time, symptom, veterinary_risk, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, dialogue_act, reply_target, handoff_target, confirmation, negation, confidence, raw_summary.',
         'Enums: intent produto|banho_tosa|veterinaria|multi; species dog|cat; size pequeno|medio|grande; age_category filhote|adulto|castrado|senior; product_kind food|flea|litter|specific; payment_method pix|dinheiro|cartao; fulfillment_type entrega|retirada.',
         clean(customInstructions) ? `Instrucoes de atendimento publicadas para este tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
       ].join('\n'),
@@ -304,6 +421,7 @@ const PETBOT_INTERPRETATION_SCHEMA = {
       package_preference: { type: ['string', 'null'] },
       package_kg: { type: ['number', 'null'] },
       quantity: { type: ['number', 'null'] },
+      option_index: { type: ['number', 'null'] },
       service_type: { type: ['string', 'null'] },
       service_grooming_detail: { type: ['string', 'null'] },
       service_notes: { type: ['string', 'null'] },
@@ -322,6 +440,19 @@ const PETBOT_INTERPRETATION_SCHEMA = {
       wants_human: { type: 'boolean' },
       wants_discount: { type: 'boolean' },
       wants_image: { type: 'boolean' },
+      dialogue_act: {
+        type: 'string',
+        enum: ['inform', 'select', 'affirm', 'deny', 'correct', 'cancel', 'request_human', 'ask', 'other'],
+      },
+      reply_target: {
+        type: ['string', 'null'],
+        enum: [
+          'final_confirmation', 'fulfillment', 'payment', 'service_transport', 'service_notes',
+          'appointment_date', 'appointment_time', 'product_option', 'package_preference',
+          'quantity', 'pet_identity', 'other', null,
+        ],
+      },
+      handoff_target: { type: ['string', 'null'], enum: ['atendente', 'veterinaria', null] },
       confirmation: { type: 'boolean' },
       negation: { type: 'boolean' },
       confidence: { type: 'number' },
@@ -330,15 +461,15 @@ const PETBOT_INTERPRETATION_SCHEMA = {
     required: [
       'customer_name', 'intent', 'pet_name', 'species', 'breed', 'size', 'weight_kg', 'weight_label',
       'weight_estimated', 'coat_type', 'age_category', 'product_kind', 'brand', 'package_preference',
-      'package_kg', 'quantity', 'service_type', 'service_grooming_detail', 'service_notes', 'service_transport_mode', 'service_date',
+      'package_kg', 'quantity', 'option_index', 'service_type', 'service_grooming_detail', 'service_notes', 'service_transport_mode', 'service_date',
       'service_time_preference', 'service_preferred_time', 'symptom', 'veterinary_risk', 'payment_method', 'fulfillment_type',
       'delivery_address', 'neighborhood', 'city', 'reference', 'wants_human', 'wants_discount', 'wants_image',
-      'confirmation', 'negation', 'confidence', 'raw_summary',
+      'dialogue_act', 'reply_target', 'handoff_target', 'confirmation', 'negation', 'confidence', 'raw_summary',
     ],
   },
 }
 
-async function callChatJson({ apiKey, model, temperature, timeoutMs, messages, maxTokens = 350 }) {
+async function callChatJson({ apiKey, model, temperature, timeoutMs, messages, maxTokens = 450 }) {
   if (!apiKey) return null
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(), timeoutMs || DEFAULT_TIMEOUT_MS)
