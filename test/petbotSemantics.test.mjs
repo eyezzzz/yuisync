@@ -11,6 +11,8 @@ import {
   detectExplicitProductPaymentMethod,
   detectExplicitProductQuantity,
   mergeProductQueryFacts,
+  buildVerifiedStoreQuestionReply,
+  shouldAnswerVerifiedStoreQuestion,
 } from '../server/lib/petbotGrounding.js'
 
 function semantics(interpretation, hasPendingOrder = false) {
@@ -272,4 +274,58 @@ test('normalização preserva a taxonomia semântica e quantidade fracionada', (
   assert.equal(empty.quantity, null)
   assert.equal(empty.option_index, null)
   assert.equal(empty.weight_kg, null)
+})
+
+
+test('memória de serviço preserva fatos quando peso chega depois de outras mensagens', () => {
+  let facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { pet_name: 'Thor', species: 'dog', breed: 'Shih Tzu' },
+    previousFacts: {},
+  })
+  facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_date: '2026-07-25', service_preferred_time: '10:00' },
+    previousFacts: facts,
+  })
+  facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_transport_mode: 'cliente_leva' },
+    previousFacts: facts,
+  })
+  facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_notes: 'sem perfume', service_notes_resolved: true },
+    previousFacts: facts,
+  })
+  facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { weight_kg: 8, weight_label: '8 kg' },
+    previousFacts: facts,
+  })
+
+  assert.equal(facts.pet_name, 'Thor')
+  assert.equal(facts.breed, 'Shih Tzu')
+  assert.equal(facts.weight_kg, 8)
+  assert.equal(facts.service_date, '2026-07-25')
+  assert.equal(facts.service_preferred_time, '10:00')
+  assert.equal(facts.service_transport_mode, 'cliente_leva')
+  assert.equal(facts.service_notes, 'sem perfume')
+  assert.equal(facts.service_notes_resolved, true)
+})
+
+test('pergunta sobre conteúdo do banho usa mensagem aprovada sem virar troca de serviço', () => {
+  const storeInformation = {
+    service_knowledge: {
+      small_bath_service: 'Banho inclui corte de unhas, limpeza de ouvidos e tosa higiênica.',
+    },
+  }
+
+  assert.equal(shouldAnswerVerifiedStoreQuestion({
+    message: 'o banho inclui tosa higiênica?',
+    detectedIntent: 'duvida',
+    interpretedIntent: 'banho_tosa',
+    serviceOrderType: 'banho_tosa',
+    hasPendingOrder: false,
+  }), true)
+
+  assert.match(buildVerifiedStoreQuestionReply({
+    message: 'o banho inclui tosa higiênica?',
+    storeInformation,
+  }), /inclui corte de unhas.*tosa higiênica/i)
 })

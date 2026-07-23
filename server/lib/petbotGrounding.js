@@ -678,6 +678,7 @@ export function buildPetbotAgentV3Prompt({
     '- Nunca diga que está transferindo ou chamando uma pessoa sem executar handoff_to_human no mesmo turno.',
     '- Em compras de produtos, faça venda consultiva com no máximo uma sugestão complementar relevante e aceite a recusa sem insistência. Essa regra não se aplica a agendamentos.',
     '- Para dúvidas sobre a loja, responda somente com as Informações verificadas da loja abaixo. Use a mensagem aprovada correspondente quando existir.',
+    '- Perguntas sobre o que um banho ou uma tosa inclui são informativas: responda pela base service_knowledge e preserve o serviço e todos os fatos já coletados. Não transforme a pergunta em troca de serviço nem transfira por isso.',
     '- Se a resposta não estiver nas informações verificadas, diga claramente que precisa confirmar com a equipe e ofereça falar com um atendente. Não invente nem transfira antes de o cliente aceitar.',
     '',
     'Estado confiável da conversa:',
@@ -1009,6 +1010,34 @@ export function resolveRecentProductCandidate(message = '', candidates = []) {
   return candidates[index] || null
 }
 
+export function isPetshopServiceKnowledgeQuestion(message = '') {
+  const normalized = normalizeCatalogText(message)
+  const asksContent = /\b(?:inclui|incluso|inclusa|contem|vem com|faz parte|o que tem|o que inclui|como funciona)\b/.test(normalized)
+  const mentionsService = /\b(?:banho|tosa|higienica|higienico|unha|unhas|ouvido|ouvidos|escovacao dental|consulta veterinaria)\b/.test(normalized)
+  return Boolean(mentionsService && (asksContent || String(message).includes('?')))
+}
+
+function serviceKnowledgeEntries(storeInformation = {}) {
+  const knowledge = storeInformation?.service_knowledge
+  return knowledge && typeof knowledge === 'object' ? knowledge : {}
+}
+
+function selectServiceKnowledge(message = '', storeInformation = {}) {
+  const normalized = normalizeCatalogText(message)
+  const entries = serviceKnowledgeEntries(storeInformation)
+  const preferred = []
+  if (/consulta|veterin/.test(normalized)) preferred.push('veterinary_consultation')
+  if (/escovacao|dental|dente/.test(normalized)) preferred.push('dental_brushing')
+  if (/tesoura/.test(normalized)) preferred.push('small_scissor_grooming')
+  if (/maquina/.test(normalized)) preferred.push('small_machine_grooming')
+  if (/tosa total|tosa do corpinho|banho e tosa/.test(normalized)) preferred.push('medium_full_grooming', 'small_machine_grooming', 'small_scissor_grooming')
+  if (/banho|higien/.test(normalized)) preferred.push('small_bath_service', 'medium_double_coat_bath', 'medium_coat_bath')
+  for (const key of preferred) {
+    if (clean(entries[key])) return clean(entries[key])
+  }
+  return ''
+}
+
 export function buildVerifiedStoreQuestionReply({ message = '', storeInformation = {} } = {}) {
   const normalized = normalizeCatalogText(message)
   const lines = []
@@ -1040,6 +1069,10 @@ export function buildVerifiedStoreQuestionReply({ message = '', storeInformation
     if (methods.length) lines.push(`Para produtos, aceitamos ${methods.join(', ')}.`)
     if (clean(storeInformation?.service_payment_policy)) lines.push(clean(storeInformation.service_payment_policy))
   }
+  if (isPetshopServiceKnowledgeQuestion(message)) {
+    const serviceAnswer = selectServiceKnowledge(message, storeInformation)
+    if (serviceAnswer) lines.push(serviceAnswer)
+  }
 
   return lines.join('\n')
 }
@@ -1062,8 +1095,11 @@ export function shouldAnswerVerifiedStoreQuestion({
   serviceOrderType = '',
   hasPendingOrder = false,
 } = {}) {
-  if (clean(detectedIntent).toLowerCase() !== 'duvida' || hasPendingOrder || clean(serviceOrderType)) return false
-  if (['produto', 'banho_tosa', 'veterinaria', 'multi'].includes(clean(interpretedIntent).toLowerCase())) return false
+  if (hasPendingOrder) return false
+  const serviceKnowledgeQuestion = isPetshopServiceKnowledgeQuestion(message)
+  if (!serviceKnowledgeQuestion && clean(detectedIntent).toLowerCase() !== 'duvida') return false
+  if (!serviceKnowledgeQuestion && clean(serviceOrderType)) return false
+  if (!serviceKnowledgeQuestion && ['produto', 'banho_tosa', 'veterinaria', 'multi'].includes(clean(interpretedIntent).toLowerCase())) return false
 
   const normalized = normalizeCatalogText(message)
   return String(message).includes('?')

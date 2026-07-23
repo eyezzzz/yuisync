@@ -1549,6 +1549,24 @@ function buildVerifiedStoreInformation(settings = {}) {
       .map(([key, value]) => [key, cleanText(value).slice(0, 1600)]),
   )
 
+  const serviceKnowledgeKeys = [
+    'veterinary_consultation',
+    'monthly_plan',
+    'small_bath_service',
+    'small_machine_grooming',
+    'small_scissor_grooming',
+    'medium_double_coat_bath',
+    'medium_coat_bath',
+    'medium_full_grooming',
+    'dental_brushing',
+  ]
+  const serviceKnowledge = Object.fromEntries(
+    serviceKnowledgeKeys
+      .map((key) => [key, cleanText(settings.messageTemplates?.[key])])
+      .filter(([, value]) => value)
+      .map(([key, value]) => [key, value.slice(0, 2200)]),
+  )
+
   return {
     address: [settings.storeAddress, settings.storeNeighborhood, settings.storeCity].filter(Boolean).join(' - ') || null,
     phone: cleanText(settings.storePhone) || null,
@@ -1556,6 +1574,7 @@ function buildVerifiedStoreInformation(settings = {}) {
     product_payment_methods: ['Pix', 'dinheiro', 'cartão'],
     service_payment_policy: 'Pagamento após a conclusão do serviço.',
     approved_messages: approvedMessages,
+    service_knowledge: serviceKnowledge,
   }
 }
 
