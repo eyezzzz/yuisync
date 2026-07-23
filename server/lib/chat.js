@@ -265,7 +265,7 @@ function isExplicitNoServiceNotesAnswer(message = '', history = []) {
   return /\b(?:observacao|observacoes|recado|alergia|perfume|cuidado especial)\b/.test(previousText)
 }
 
-function inferExplicitPetTransportMode(message = '', history = []) {
+export function inferExplicitPetTransportMode(message = '', history = []) {
   const answer = normalizeSearchText(message)
     .replace(/[^a-z0-9\s]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -280,6 +280,13 @@ function inferExplicitPetTransportMode(message = '', history = []) {
   if (/\b(?:buscar e levar|busca e leva|buscar e trazer|ida e volta|levar e buscar)\b/.test(answer)) return 'buscar_e_levar'
   if (/\b(?:somente buscar|so buscar|apenas buscar|buscar apenas|vir buscar)\b/.test(answer)) return 'somente_buscar'
   if (/\b(?:somente levar|so levar|apenas levar|levar apenas|levar de volta|trazer de volta)\b/.test(answer)) return 'somente_levar'
+
+  const genericPickupQuestion = (
+    /\b(?:consegue|conseguem|pode|podem|tem como|voces|vcs)\b.*\b(?:buscar|pegar|recolher)\b/.test(answer)
+    || /^(?:buscam|busca|buscar|pegar|vir buscar)(?: aqui| em casa| no endereco| no meu endereco)?$/.test(answer)
+  )
+  if (!selectingMotodogOption && genericPickupQuestion) return 'motodog'
+
   if (selectingMotodogOption && /^(?:1|primeira|primeiro|primeira opcao|opcao 1)$/.test(answer)) return 'buscar_e_levar'
   if (selectingMotodogOption && /^(?:2|segunda|segundo|segunda opcao|opcao 2|buscar)$/.test(answer)) return 'somente_buscar'
   if (selectingMotodogOption && /^(?:3|terceira|terceiro|terceira opcao|opcao 3|levar)$/.test(answer)) return 'somente_levar'
@@ -406,9 +413,11 @@ function buildPetbotTransportQualificationReply({ facts = {}, settings = {} } = 
       return 'O MotoDog ainda não está configurado para esta loja. Você consegue levar o pet até a unidade?'
     }
     return [
-      'Perfeito! Qual modalidade do MotoDog você prefere?',
+      'Claro! Temos estas opções de MotoDog:',
       '',
       ...options.map(formatOption),
+      '',
+      'Qual delas você prefere?',
     ].join('\n')
   }
 
@@ -2078,11 +2087,14 @@ async function respondWithPetbotAgent({
     cleanText(previousProductFacts.product_kind)
     && !['banho_tosa', 'veterinaria'].includes(currentTurnIntent),
   )
+  const explicitTransportMode = productConversationAtTurnStart
+    ? ''
+    : inferExplicitPetTransportMode(trimmedMessage, history)
   const inferredTransportMode = productConversationAtTurnStart
     ? ''
     : (
-      cleanText(turnSemantics?.service_transport_mode)
-      || inferExplicitPetTransportMode(trimmedMessage, history)
+      explicitTransportMode
+      || cleanText(turnSemantics?.service_transport_mode)
     )
   const productBulkQuantityMessage = Boolean(
     cleanText(previousProductFacts.package_preference) === 'granel'
