@@ -11,7 +11,6 @@ import {
   interpretPetbotMessageWithLlm,
 } from './petbotAi.js'
 import {
-  buildRationPackagePreferenceReply,
   detectCatalogRequest,
   rankCatalogProducts,
 } from './petbotCatalog.js'
@@ -38,9 +37,13 @@ import {
 import {
   analyzeProductDifferentiation,
   buildPetbotAgentV3Prompt,
+  buildRationQualificationReply,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
+  enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
+  productFactsSignature,
+  resolveRecentProductCandidate,
   shouldAnswerVerifiedStoreQuestion,
   validatePetbotConversationReply,
   validatePetbotOperationalReply,
@@ -1750,7 +1753,7 @@ async function respondWithPetbotAgent({
     previousFacts: previousAgentContext.facts || previousAgentContext.explicit_facts || {},
   })
   const productConversationText = buildCatalogSearchText(history, trimmedMessage)
-  const productFacts = mergeProductQueryFacts({
+  let productFacts = mergeProductQueryFacts({
     interpretation: llmInterpretation || {},
     previousFacts: initialProductFacts || previousAgentContext.product_facts || {},
     serviceFacts,
@@ -1767,6 +1770,8 @@ async function respondWithPetbotAgent({
   let liveServices = Array.isArray(services) ? services : []
   let liveAppointments = Array.isArray(appointments) ? appointments : []
   let liveSubscriptionBenefits = []
+  let lastProductCandidates = []
+  let selectedRecentProductCandidate = null
   const previousResolvedServiceState = previousAgentContext.resolved_service && typeof previousAgentContext.resolved_service === 'object'
     ? previousAgentContext.resolved_service
     : null
@@ -1872,6 +1877,76 @@ async function respondWithPetbotAgent({
   ])
   liveSubscriptionBenefits = subscriptionBenefits
 
+  const profilePet = activeCustomer?.client?.details?.pet_name
+    ? [{
+      name: cleanText(activeCustomer.client.details.pet_name),
+      species: cleanText(activeCustomer.client.details.species),
+      breed: cleanText(activeCustomer.client.details.breed),
+      size: cleanText(activeCustomer.client.details.size),
+    }]
+    : []
+  productFacts = enrichProductQueryFactsFromSavedPet({
+    facts: productFacts,
+    savedPets: [...savedPets, ...profilePet],
+  })
+  const currentProductFactsSignature = productFactsSignature(productFacts)
+  const previousCandidateState = previousAgentContext.last_product_candidates
+    && typeof previousAgentContext.last_product_candidates === 'object'
+    ? previousAgentContext.last_product_candidates
+    : null
+  const previousCandidates = Array.isArray(previousCandidateState?.products)
+    ? previousCandidateState.products
+    : []
+  const rejectsPreviousProductCandidate = /\b(?:nao quero (?:essa|esse|ele|ela)|outra opcao|outro produto|trocar (?:a|o) produto)\b/.test(
+    normalizeSearchText(trimmedMessage),
+  )
+  if (
+    previousCandidateState?.fact_signature === currentProductFactsSignature
+    && previousCandidates.length
+  ) {
+    try {
+      const refreshedCandidates = await loadProductsByIds(
+        supabase,
+        moduleId,
+        session.tenant_id,
+        previousCandidates.map((candidate) => candidate.id),
+      )
+      const refreshedById = new Map(refreshedCandidates.map((product) => [cleanText(product.id), product]))
+      lastProductCandidates = previousCandidates
+        .map((candidate) => {
+          const product = refreshedById.get(cleanText(candidate.id))
+          if (!product) return null
+          return {
+            id: product.id,
+            name: product.name,
+            category: product.category || null,
+            species_target: product.species_target || null,
+            price: Number(product.price || 0),
+            stock_quantity: Number(product.stock_quantity || 0),
+            active: product.active !== false,
+            image_available: Boolean(cleanText(product.image_url)),
+          }
+        })
+        .filter(Boolean)
+      liveProducts = mergeProductsById(refreshedCandidates, liveProducts)
+      const explicitlySelectedCandidate = resolveRecentProductCandidate(
+        trimmedMessage,
+        lastProductCandidates,
+      )
+      const persistedSelectedCandidate = lastProductCandidates.find((candidate) => (
+        cleanText(candidate.id) === cleanText(previousCandidateState.selected_product_id)
+      ))
+      selectedRecentProductCandidate = explicitlySelectedCandidate
+        || (rejectsPreviousProductCandidate ? null : persistedSelectedCandidate)
+    } catch (error) {
+      logger.warn('PetBot previous product candidate refresh failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      })
+      lastProductCandidates = []
+    }
+  }
+
   const requestedHandoffTarget = cleanText(llmInterpretation?.veterinary_risk) === 'emergency'
     ? 'veterinaria'
     : (explicitPetbotHandoffTarget(trimmedMessage, llmInterpretation || {})
@@ -1908,6 +1983,7 @@ async function respondWithPetbotAgent({
     if (preflight.resolvedService) resolvedServiceThisTurn = preflight.resolvedService
   }
 
+  const isProductConversation = !serviceOrderType && Boolean(cleanText(productFacts.product_kind))
   const verifiedStoreInformation = buildVerifiedStoreInformation(storeSettings)
   const systemPrompt = buildPetbotAgentV3Prompt({
     storeName: storeSettings.storeName,
@@ -1934,10 +2010,10 @@ async function respondWithPetbotAgent({
     },
     facts: {
       customer_name: cleanText(llmInterpretation?.customer_name) || cleanText(updatedCustomerName) || null,
-      pet_name: serviceFacts.pet_name,
-      species: serviceFacts.species,
-      breed: serviceFacts.breed,
-      size: serviceFacts.size,
+      pet_name: isProductConversation ? (productFacts.pet_name || serviceFacts.pet_name) : serviceFacts.pet_name,
+      species: isProductConversation ? productFacts.species : serviceFacts.species,
+      breed: isProductConversation ? productFacts.breed : serviceFacts.breed,
+      size: isProductConversation ? productFacts.size : serviceFacts.size,
       symptom: serviceFacts.symptom,
       veterinary_risk: cleanText(llmInterpretation?.veterinary_risk) || 'none',
       weight_kg: serviceFacts.weight_kg,
@@ -1969,6 +2045,9 @@ async function respondWithPetbotAgent({
       brand: cleanText(productFacts.brand) || null,
       package_preference: cleanText(productFacts.package_preference) || null,
       package_kg: Number(productFacts.package_kg || 0) || null,
+      quantity: Number(productFacts.quantity || 0) || null,
+      recent_product_candidates: lastProductCandidates,
+      selected_product_candidate: selectedRecentProductCandidate,
     },
     pendingOrder: pendingAtTurnStart,
     operationalContext,
@@ -1981,6 +2060,55 @@ async function respondWithPetbotAgent({
     const args = parseAgentToolArguments(toolCall)
 
     if (name === 'search_petshop_products') {
+      const requestedQuantity = Number(productFacts.quantity || llmInterpretation?.quantity || 0) || null
+      if (selectedRecentProductCandidate) {
+        const selectedProduct = liveProducts.find((product) => (
+          cleanText(product.id) === cleanText(selectedRecentProductCandidate.id)
+        ))
+        const selectedPayload = selectedProduct
+          ? {
+            id: selectedProduct.id,
+            name: selectedProduct.name,
+            category: selectedProduct.category || null,
+            species_target: selectedProduct.species_target || null,
+            price: Number(selectedProduct.price || 0),
+            stock_quantity: Number(selectedProduct.stock_quantity || 0),
+            active: selectedProduct.active !== false,
+            image_available: Boolean(cleanText(selectedProduct.image_url)),
+          }
+          : {
+            ...selectedRecentProductCandidate,
+            active: false,
+            stock_quantity: 0,
+          }
+        lastProductCandidates = [selectedPayload]
+        const available = Boolean(
+          selectedProduct
+          && selectedProduct.active !== false
+          && Number(selectedProduct.price || 0) > 0
+          && Number(selectedProduct.stock_quantity || 0) > 0
+        )
+        const sufficient = available && (
+          !requestedQuantity
+          || Number(selectedProduct.stock_quantity || 0) >= requestedQuantity
+        )
+        return {
+          ok: true,
+          checked: true,
+          action: name,
+          source: 'products',
+          status: !available ? 'selected_unavailable' : (sufficient ? 'resolved' : 'insufficient_stock'),
+          requested_quantity: requestedQuantity,
+          selected_candidate: {
+            ...selectedPayload,
+            available,
+            sufficient_stock: sufficient,
+          },
+          differentiators: [],
+          products: available ? [selectedPayload] : [],
+        }
+      }
+
       const known = mergeProductQueryFacts({
         interpretation: {
           product_kind: productFacts.product_kind || llmInterpretation?.product_kind,
@@ -1990,7 +2118,10 @@ async function respondWithPetbotAgent({
           size: productFacts.size || args.size,
           brand: productFacts.brand || args.brand,
           package_preference: productFacts.package_preference,
-          package_kg: productFacts.package_kg || args.package_kg,
+          package_kg: productFacts.package_preference === 'granel'
+            ? null
+            : (productFacts.package_kg || args.package_kg),
+          quantity: productFacts.quantity,
         },
         previousFacts: productFacts,
         serviceFacts,
@@ -2021,22 +2152,26 @@ async function respondWithPetbotAgent({
         query,
       ).map((item) => item.product)
       liveProducts = mergeProductsById(liveProducts, found)
+      lastProductCandidates = found.slice(0, 12).map((product) => ({
+        id: product.id,
+        name: product.name,
+        category: product.category || null,
+        species_target: product.species_target || null,
+        price: Number(product.price || 0),
+        stock_quantity: Number(product.stock_quantity || 0),
+        active: product.active !== false,
+        image_available: Boolean(cleanText(product.image_url)),
+      }))
       const differentiation = analyzeProductDifferentiation(found.slice(0, 12), known)
       return {
-        ok: found.length > 0,
+        ok: true,
+        checked: true,
         action: name,
         source: 'products',
         status: differentiation.status,
         differentiators: differentiation.differentiators,
-        products: found.slice(0, 12).map((product) => ({
-          id: product.id,
-          name: product.name,
-          category: product.category || null,
-          species_target: product.species_target || null,
-          price: Number(product.price || 0),
-          stock_quantity: Number(product.stock_quantity || 0),
-          image_available: Boolean(cleanText(product.image_url)),
-        })),
+        requested_quantity: requestedQuantity,
+        products: lastProductCandidates,
       }
     }
 
@@ -2211,7 +2346,7 @@ async function respondWithPetbotAgent({
           .map((item) => cleanText(item.product_id))
           .filter(Boolean)
         const freshProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
-        liveProducts = mergeProductsById(liveProducts, freshProducts)
+        liveProducts = mergeProductsById(freshProducts, liveProducts)
       } else {
         await refreshServiceCatalog({ required: true })
         const appointmentRefresh = await refreshAppointmentContext()
@@ -2293,7 +2428,7 @@ async function respondWithPetbotAgent({
           .map((item) => cleanText(item.product_id))
           .filter(Boolean)
         refreshedProducts = await loadProductsByIds(supabase, moduleId, session.tenant_id, productIds)
-        liveProducts = mergeProductsById(liveProducts, refreshedProducts)
+        liveProducts = mergeProductsById(refreshedProducts, liveProducts)
       } else {
         refreshedServices = await refreshServiceCatalog({ required: true })
         const appointmentRefresh = await refreshAppointmentContext()
@@ -2436,8 +2571,11 @@ async function respondWithPetbotAgent({
       storeInformation: verifiedStoreInformation,
     }) || buildUnknownStoreQuestionReply({ storeInformation: verifiedStoreInformation })
     : ''
-  const rationPackageReply = !pendingAtTurnStart && !serviceOrderType
-    ? buildRationPackagePreferenceReply(trimmedMessage, productFacts)
+  const rationQualificationReply = !pendingAtTurnStart && !serviceOrderType
+    ? buildRationQualificationReply({
+      message: trimmedMessage,
+      facts: productFacts,
+    })
     : ''
   const shouldForceServicePreparation = !pendingAtTurnStart && shouldForcePetbotServicePreparation({
     orderType: serviceOrderType,
@@ -2448,7 +2586,9 @@ async function respondWithPetbotAgent({
   })
   const initialToolChoice = shouldForceServicePreparation
     ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
-    : 'auto'
+    : selectedRecentProductCandidate
+      ? { type: 'function', function: { name: 'search_petshop_products' } }
+      : 'auto'
 
   let agentResult
   if (requestedHandoffTarget) {
@@ -2523,9 +2663,9 @@ async function respondWithPetbotAgent({
       terminal: true,
       durationMs: 0,
     }
-  } else if (rationPackageReply) {
+  } else if (rationQualificationReply) {
     agentResult = {
-      reply: rationPackageReply,
+      reply: rationQualificationReply,
       toolRuns: preloadedToolRuns,
       tokensUsed: 0,
       messages: [],
@@ -2677,6 +2817,13 @@ async function respondWithPetbotAgent({
       pending_order: pendingOrder,
       facts: serviceFacts,
       product_facts: productFacts,
+      last_product_candidates: orderResult
+        ? null
+        : {
+          fact_signature: currentProductFactsSignature,
+          selected_product_id: selectedRecentProductCandidate?.id || null,
+          products: lastProductCandidates,
+        },
       resolved_service: resolvedServiceThisTurn
         ? {
           fact_signature: petbotServiceFactsSignature(serviceFacts),

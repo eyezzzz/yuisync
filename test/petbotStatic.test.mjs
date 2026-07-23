@@ -54,6 +54,18 @@ test('resposta do PetBot so e salva depois do estado autonomo persistir', () => 
   assert.doesNotMatch(webhook, /runPetbotGuard/)
 })
 
+test('opções de produto são persistidas e revalidadas por id no turno seguinte', () => {
+  const localChat = read('server/lib/chat.js')
+  assert.match(localChat, /last_product_candidates/)
+  assert.match(localChat, /previousCandidateState\?\.fact_signature === currentProductFactsSignature/)
+  assert.match(localChat, /previousCandidates\.map\(\(candidate\) => candidate\.id\)/)
+  assert.match(localChat, /resolveRecentProductCandidate/)
+  assert.match(localChat, /selected_product_id: selectedRecentProductCandidate\?\.id/)
+  assert.match(localChat, /mergeProductsById\(refreshedCandidates, liveProducts\)/)
+  assert.match(localChat, /mergeProductsById\(freshProducts, liveProducts\)/)
+  assert.match(localChat, /selected_candidate:[\s\S]*sufficient_stock/)
+})
+
 test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {
   const env = read('.env.example')
   assert.match(env, /WHATSAPP_REPLY_DEBOUNCE_MS=1000/)

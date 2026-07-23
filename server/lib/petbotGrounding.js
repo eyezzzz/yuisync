@@ -1,9 +1,12 @@
 import { DateTime } from 'luxon'
 import { classifyCommonPetBreed } from '../../shared/petbotBreedCatalog.js'
 import {
+  buildRationPackagePreferenceReply,
   classifyProduct,
+  detectCatalogAgeCategory,
   detectCatalogPetSize,
   detectCatalogRequest,
+  detectCatalogSpecies,
   normalizeCatalogText,
   normalizeRationPackagePreference,
   rationPackagePreferenceForProduct,
@@ -190,6 +193,15 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   const claimsStock = /\b(?:em estoque|estoque disponivel|estoque indisponivel|sem estoque)\b/.test(normalizedReply)
   if (claimsStock && !capabilities.has('product_catalog') && !capabilities.has('prepared_order')) {
     problems.push('situação de estoque sem consulta ao catálogo')
+  }
+  const selectedCandidateAvailable = (toolRuns || []).some((run) => (
+    run?.name === 'search_petshop_products'
+    && run?.result?.selected_candidate?.available === true
+    && run?.result?.selected_candidate?.sufficient_stock === true
+  ))
+  const claimsSelectedProductUnavailable = /\b(?:nao temos|nao esta disponivel|indisponivel|sem estoque|acabou)\b/.test(normalizedReply)
+  if (selectedCandidateAvailable && claimsSelectedProductUnavailable) {
+    problems.push('produto escolhido foi revalidado com estoque suficiente; não o apresente como indisponível')
   }
 
   const claimsSchedule = (
@@ -400,7 +412,10 @@ export function buildPetbotAgentV3Prompt({
     '- Nunca afirme preço, estoque, serviço exato, duração, data ou horário sem um resultado de ferramenta no turno atual ou um pedido pendente validado.',
     '- Para produtos, pesquise o catálogo. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções.',
     '- Para toda compra de ração, antes de listar produtos descubra o formato: granel, pacote pequeno de 1 ou 2 kg, ou saco maior de 7, 10, 15, 20 ou 25 kg. Se o cliente já informou o formato ou o peso da embalagem, não pergunte novamente.',
+    '- Antes de oferecer ração, confirme também a espécie, a raça ou porte quando for cachorro, e a fase de vida: filhote, adulto, sênior ou castrado. Quando uma raça cadastrada estiver informada, o servidor já deriva o porte; nunca pergunte o porte novamente.',
     '- Quando o cliente informar uma raça, considere tanto produtos específicos daquela raça quanto produtos gerais do porte correspondente. Nunca ofereça produto específico de outra raça nem ração de outro porte.',
+    '- Em ração a granel, valores em kg pedidos depois da escolha são quantidade da venda, não tamanho de embalagem. Preserve package_preference="granel" e use quantity com os kg solicitados.',
+    '- Se selected_product_candidate estiver preenchido, o cliente escolheu uma opção apresentada anteriormente. Use exatamente o ID desse candidato e o estoque revalidado; não substitua por uma nova busca aproximada nem diga que acabou quando sufficient_stock=true.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
@@ -462,6 +477,7 @@ export function normalizeProductQueryFacts(interpretation = {}, serviceFacts = {
   const packageKg = Number(interpretation.package_kg || 0) || null
   return {
     product_kind: clean(interpretation.product_kind),
+    pet_name: clean(interpretation.pet_name || serviceFacts.pet_name),
     species: clean(interpretation.species || serviceFacts.species || breedClassification?.species),
     breed: clean(breedClassification?.canonical || interpretation.breed || serviceFacts.breed),
     age_category: clean(interpretation.age_category),
@@ -477,6 +493,7 @@ export function normalizeProductQueryFacts(interpretation = {}, serviceFacts = {
       packageKg,
     ),
     package_kg: packageKg,
+    quantity: Number(interpretation.quantity || 0) || null,
   }
 }
 
@@ -490,12 +507,30 @@ export function mergeProductQueryFacts({
   const previous = normalizeProductQueryFacts(previousFacts, serviceFacts)
   const messageBreed = classifyCommonPetBreed(message)
   const messageSize = detectCatalogPetSize(message)
+  const messageSpecies = detectCatalogSpecies(message)
+  const messageAge = detectCatalogAgeCategory(message)
+  const normalizedMessage = normalizeCatalogText(message)
+  const explicitMessageFormat = /\b(?:granel|pacote|embalagem|saco|sacaria)\b/.test(normalizedMessage)
+    ? normalizeRationPackagePreference(message)
+    : ''
+  const petChanged = Boolean(
+    current.pet_name
+    && previous.pet_name
+    && normalizeCatalogText(current.pet_name) !== normalizeCatalogText(previous.pet_name),
+  )
   const currentRequest = detectCatalogRequest(message, {
     productKind: current.product_kind || previous.product_kind,
     packagePreference: current.package_preference,
     packageKg: current.package_kg,
   })
-  const currentPackagePreference = current.package_preference || currentRequest.packagePreference
+  const bulkQuantityContinuation = Boolean(
+    previous.package_preference === 'granel'
+    && !explicitMessageFormat
+    && (current.quantity || current.package_kg || currentRequest.packageKg),
+  )
+  const currentPackagePreference = bulkQuantityContinuation
+    ? 'granel'
+    : (explicitMessageFormat || current.package_preference || currentRequest.packagePreference)
   const changedPackageFormat = Boolean(
     currentPackagePreference
     && previous.package_preference
@@ -503,15 +538,33 @@ export function mergeProductQueryFacts({
   )
   const merged = {
     product_kind: current.product_kind || previous.product_kind,
-    species: current.species || previous.species || clean(messageBreed?.species),
-    breed: current.breed || previous.breed || clean(messageBreed?.canonical),
-    age_category: current.age_category || previous.age_category,
-    size: current.size || previous.size || clean(messageBreed?.size) || messageSize,
+    pet_name: current.pet_name || previous.pet_name,
+    species: current.species
+      || messageSpecies
+      || clean(messageBreed?.species)
+      || (petChanged ? '' : previous.species),
+    breed: current.breed
+      || clean(messageBreed?.canonical)
+      || (petChanged ? '' : previous.breed),
+    age_category: current.age_category
+      || messageAge
+      || (petChanged ? '' : previous.age_category),
+    size: current.size
+      || clean(messageBreed?.size)
+      || messageSize
+      || (petChanged ? '' : previous.size),
     brand: current.brand || previous.brand,
     package_preference: currentPackagePreference || previous.package_preference,
-    package_kg: current.package_kg
-      || currentRequest.packageKg
-      || (changedPackageFormat ? null : previous.package_kg),
+    package_kg: bulkQuantityContinuation
+      ? null
+      : (
+        current.package_kg
+        || currentRequest.packageKg
+        || (changedPackageFormat ? null : previous.package_kg)
+      ),
+    quantity: current.quantity
+      || (bulkQuantityContinuation ? Number(current.package_kg || currentRequest.packageKg || 0) || null : null)
+      || (changedPackageFormat ? null : previous.quantity),
   }
   const request = detectCatalogRequest(message, {
     productKind: merged.product_kind,
@@ -526,8 +579,85 @@ export function mergeProductQueryFacts({
     ...merged,
     product_kind: merged.product_kind || (['racao', 'granel'].includes(request.type) ? 'food' : ''),
     package_preference: request.packagePreference || merged.package_preference,
-    package_kg: request.packageKg || merged.package_kg,
+    package_kg: merged.package_preference === 'granel'
+      ? null
+      : (request.packageKg || merged.package_kg),
   }
+}
+
+export function enrichProductQueryFactsFromSavedPet({
+  facts = {},
+  savedPets = [],
+} = {}) {
+  const petName = normalizeCatalogText(facts.pet_name)
+  if (!petName) return facts
+  const matches = (savedPets || []).filter((pet) => normalizeCatalogText(pet?.name || pet?.pet_name) === petName)
+  if (matches.length !== 1) return facts
+
+  const savedPet = matches[0]
+  return mergeProductQueryFacts({
+    interpretation: {
+      ...facts,
+      pet_name: facts.pet_name || savedPet.name || savedPet.pet_name,
+      species: facts.species || savedPet.species,
+      breed: facts.breed || savedPet.breed,
+      size: facts.size || savedPet.size,
+    },
+    previousFacts: facts,
+    message: '',
+  })
+}
+
+export function buildRationQualificationReply({ message = '', facts = {} } = {}) {
+  const request = detectCatalogRequest(message, facts)
+  if (!['racao', 'granel'].includes(request.type)) return ''
+
+  const packageReply = buildRationPackagePreferenceReply(message, facts)
+  if (packageReply) return packageReply
+
+  const petName = clean(facts.pet_name)
+  if (!clean(facts.species)) {
+    return petName
+      ? `${petName} é cachorro ou gato?`
+      : 'A ração é para cachorro ou gato?'
+  }
+  if (clean(facts.species) === 'dog' && !clean(facts.size)) {
+    return clean(facts.breed)
+      ? `Qual é o porte do ${petName || 'seu cachorro'}?`
+      : `Qual é a raça ou o porte do ${petName || 'seu cachorro'}?`
+  }
+  if (['dog', 'cat'].includes(clean(facts.species)) && !clean(facts.age_category)) {
+    return `${petName || 'O pet'} é filhote, adulto, sênior ou castrado?`
+  }
+  return ''
+}
+
+export function productFactsSignature(facts = {}) {
+  return JSON.stringify({
+    product_kind: clean(facts.product_kind),
+    species: clean(facts.species),
+    breed: normalizeCatalogText(facts.breed),
+    size: clean(facts.size),
+    age_category: clean(facts.age_category),
+    brand: normalizeCatalogText(facts.brand),
+    package_preference: clean(facts.package_preference),
+    package_kg: Number(facts.package_kg || 0) || null,
+  })
+}
+
+export function resolveRecentProductCandidate(message = '', candidates = []) {
+  const normalized = normalizeCatalogText(message)
+  if (!normalized || !(candidates || []).length) return null
+  const directNumber = normalized.match(/^\s*([1-9]\d?)\s*(?:mesmo)?\s*$/)
+  const numberMatch = directNumber || normalized.match(
+    /\b(?:opcao|numero|quero|prefiro|escolho|vou levar|a|da)\s*(?:a\s*)?([1-9]\d?)\b(?!\s*(?:kg|g|ml|un)\b)/,
+  )
+  let index = numberMatch ? Number(numberMatch[1]) - 1 : -1
+  if (/\b(?:primeir[oa]|a primeira|o primeiro)\b/.test(normalized)) index = 0
+  if (/\b(?:segund[oa]|a segunda|o segundo)\b/.test(normalized)) index = 1
+  if (/\b(?:terceir[oa]|a terceira|o terceiro)\b/.test(normalized)) index = 2
+  if (index < 0 || index >= candidates.length) return null
+  return candidates[index] || null
 }
 
 export function buildVerifiedStoreQuestionReply({ message = '', storeInformation = {} } = {}) {

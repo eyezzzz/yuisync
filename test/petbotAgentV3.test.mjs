@@ -194,6 +194,29 @@ test('grounding bloqueia preco, agenda, estoque e confirmacao inventados', () =>
   assert.equal(valid.ok, true)
 })
 
+test('grounding impede dizer que opção escolhida acabou após revalidação positiva', () => {
+  const validation = validatePetbotOperationalReply({
+    reply: 'Parece que não temos essa ração disponível no momento.',
+    toolRuns: [{
+      name: 'search_petshop_products',
+      ok: true,
+      result: {
+        checked: true,
+        status: 'resolved',
+        selected_candidate: {
+          id: 'premier-adulto',
+          available: true,
+          sufficient_stock: true,
+          stock_quantity: 17,
+        },
+      },
+    }],
+  })
+
+  assert.equal(validation.ok, false)
+  assert.ok(validation.problems.some((problem) => /estoque suficiente/.test(problem)))
+})
+
 test('diferenciacao de produto pergunta somente atributos que realmente variam', () => {
   const result = analyzeProductDifferentiation([
     { id: '1', name: 'Ração X Cães Adultos 10 kg', category: 'Ração', species_target: 'dog', bot_metadata: { age: 'adulto', brand: 'x', package_kg: 10 } },

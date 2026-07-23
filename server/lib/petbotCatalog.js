@@ -144,7 +144,7 @@ function detectBreed(text = '') {
   return { label: '', size: '' }
 }
 
-function detectAge(text = '') {
+export function detectCatalogAgeCategory(text = '') {
   const normalized = normalizeCatalogText(text)
   if (/filhote|puppy|junior/.test(normalized)) return 'filhote'
   if (/castrad/.test(normalized)) return 'castrado'
@@ -153,7 +153,7 @@ function detectAge(text = '') {
   return ''
 }
 
-function detectSpecies(text = '') {
+export function detectCatalogSpecies(text = '') {
   const normalized = normalizeCatalogText(text)
   if (/\b(gato|gatos|gata|gatas|felino|felinos|cat)\b/.test(normalized) || /whiskas|kitekat/.test(normalized)) return 'cat'
   if (/\b(cao|caes|cachorro|cachorra|canino|caninos|dog)\b/.test(normalized) || detectBreed(normalized).label || /special dog|pedigree/.test(normalized)) return 'dog'
@@ -238,8 +238,8 @@ export function classifyProduct(product = {}) {
   const breed = metadataBreed
     ? { label: normalizeCatalogText(metadataBreed), normalized: normalizeCatalogText(metadataBreed) }
     : detectBreed(text)
-  const age = normalizeCatalogText(metadata.age_category || metadata.age) || detectAge(text)
-  const species = normalizeCatalogText(metadata.species || product.species_target) || detectSpecies(text)
+  const age = normalizeCatalogText(metadata.age_category || metadata.age) || detectCatalogAgeCategory(text)
+  const species = normalizeCatalogText(metadata.species || product.species_target) || detectCatalogSpecies(text)
   const size = normalizeCatalogText(metadata.size || metadata.pet_size) || detectCatalogPetSize(text)
   const metadataPackageKg = Number(metadata.package_kg || metadata.packageKg || 0)
   const packageKg = isBulk ? null : (metadataPackageKg > 0 ? metadataPackageKg : extractPackageKg(text))
@@ -356,6 +356,7 @@ function scoreMetadata(metadata, state = {}, message = '') {
   if (request.type && !allowedTypeForRequest(request.type, metadata)) return -999
   if (!allowedPackageForPreference(request.packagePreference, metadata)) return -999
   if (rationRequest && state.species && metadata.species && metadata.species !== state.species) return -999
+  if (rationRequest && requestedAge && metadata.age && metadata.age !== requestedAge) return -999
   if (
     rationRequest
     && requestedBreed
@@ -399,13 +400,13 @@ export function rankCatalogProducts(products = [], state = {}, message = '') {
     && Number(product?.price || 0) >= 0
   ))
   const request = detectCatalogRequest(message, state)
-  const requestedQuantity = Number(state.pendingQuantity || state.selectedProduct?.quantity || 0)
+  const requestedQuantity = Number(state.pendingQuantity || state.quantity || state.selectedProduct?.quantity || 0)
 
   return available
     .map((product) => {
       const metadata = classifyProduct(product)
       let score = scoreMetadata(metadata, state, message)
-      if (requestedQuantity > 0 && metadata.isBulk && Number(product.stock_quantity || 0) < requestedQuantity) score = -999
+      if (requestedQuantity > 0 && Number(product.stock_quantity || 0) < requestedQuantity) score = -999
       return { product, metadata, score }
     })
     .filter((item) => item.score > -999)
