@@ -82,6 +82,15 @@ test('Luna se apresenta e responde a saudação somente no início da conversa',
     }),
     'Vamos continuar.',
   )
+  assert.equal(
+    prependPetbotConversationOpening({
+      reply: 'Bom dia! Que ótimo que você quer agendar um banho.',
+      message: 'bom dia, quero agendar um banho',
+      history: [],
+      customerName: 'Ray',
+    }),
+    'Bom dia, Ray! Eu sou a Luna, assistente virtual da Quatro Patas! 😊\n\nQue ótimo que você quer agendar um banho.',
+  )
 })
 
 test('prompt v3 recebe perfil e pets salvos sem transformar isso em roteiro fixo', () => {

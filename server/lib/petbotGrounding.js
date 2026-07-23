@@ -223,6 +223,13 @@ export function buildPetbotConversationOpening({
   return `${greeting}${name ? `, ${name}` : ''}! Eu sou a Luna, assistente virtual da Quatro Patas! 😊`
 }
 
+function stripLeadingPetbotGreeting(reply = '') {
+  return clean(reply).replace(
+    /^(?:ol[áa]|bom\s+dia|boa\s+tarde|boa\s+noite)(?:\s*,\s*[^!?.\n]{1,60})?\s*[!?.:,;–—-]*\s*(?:😊|🙂|🐾)?\s*/iu,
+    '',
+  ).trim()
+}
+
 export function prependPetbotConversationOpening({
   reply = '',
   message = '',
@@ -232,7 +239,8 @@ export function prependPetbotConversationOpening({
   const opening = buildPetbotConversationOpening({ message, history, customerName })
   const body = clean(reply)
   if (!opening) return body
-  return body ? `${opening}\n\n${body}` : opening
+  const bodyWithoutDuplicateGreeting = stripLeadingPetbotGreeting(body)
+  return bodyWithoutDuplicateGreeting ? `${opening}\n\n${bodyWithoutDuplicateGreeting}` : opening
 }
 
 function unique(values = []) {
