@@ -225,6 +225,18 @@ test('validador não deixa compra pedir nome do pet nem pagamento na retirada', 
   })
   assert.equal(asksPickupPayment.ok, false)
   assert.ok(asksPickupPayment.problems.some((problem) => /pagamento é a combinar/.test(problem)))
+
+  const repeatsDeliveryPayment = validatePetbotConversationReply({
+    reply: 'Você mencionou que seria no cartão, certo? Confirma essa forma de pagamento?',
+    facts: {
+      product_kind: 'food',
+      fulfillment_type: 'entrega',
+      payment_method: 'cartao',
+    },
+    productContext: true,
+  })
+  assert.equal(repeatsDeliveryPayment.ok, false)
+  assert.ok(repeatsDeliveryPayment.problems.some((problem) => /já registrada/.test(problem)))
 })
 
 test('grounding bloqueia preco, agenda, estoque e confirmacao inventados', () => {

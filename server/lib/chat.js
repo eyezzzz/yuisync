@@ -46,6 +46,7 @@ import {
   mergeProductQueryFacts,
   prependPetbotConversationOpening,
   productFactsSignature,
+  recoverProductQueryFactsFromHistory,
   resolveRecentProductCandidate,
   shouldAnswerVerifiedStoreQuestion,
   validatePetbotConversationReply,
@@ -1748,16 +1749,52 @@ async function respondWithPetbotAgent({
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
-  const inferredTransportMode = inferExplicitPetTransportMode(trimmedMessage, history)
   const previousProductFacts = initialProductFacts || previousAgentContext.product_facts || {}
+  const currentTurnIntent = cleanText(llmInterpretation?.intent || intent)
+  const productConversationAtTurnStart = Boolean(
+    cleanText(previousProductFacts.product_kind)
+    && !['banho_tosa', 'veterinaria'].includes(currentTurnIntent),
+  )
+  const inferredTransportMode = productConversationAtTurnStart
+    ? ''
+    : inferExplicitPetTransportMode(trimmedMessage, history)
   const productBulkQuantityMessage = Boolean(
     cleanText(previousProductFacts.package_preference) === 'granel'
     && Number(detectExplicitProductQuantity(trimmedMessage, 'granel') || 0) > 0,
   )
+  const previousServiceFacts = previousAgentContext.facts || previousAgentContext.explicit_facts || {}
+  const serviceFactsBeforeTurn = productConversationAtTurnStart
+    ? {
+      ...previousServiceFacts,
+      weight_kg: null,
+      weight_label: null,
+      weight_estimated: false,
+      service_type: null,
+      service_date: null,
+      service_time_preference: null,
+      service_preferred_time: null,
+      service_notes: null,
+      service_notes_resolved: false,
+      service_transport_mode: null,
+      symptom: null,
+    }
+    : previousServiceFacts
   const interpretationForFacts = {
     ...(llmInterpretation || {}),
-    ...(productBulkQuantityMessage
-      ? { weight_kg: null, weight_label: null, weight_estimated: false }
+    ...(productConversationAtTurnStart || productBulkQuantityMessage
+      ? {
+        weight_kg: null,
+        weight_label: null,
+        weight_estimated: false,
+        service_type: null,
+        service_date: null,
+        service_time_preference: null,
+        service_preferred_time: null,
+        service_notes: null,
+        service_notes_resolved: false,
+        service_transport_mode: null,
+        symptom: null,
+      }
       : {}),
     ...(isExplicitNoServiceNotesAnswer(trimmedMessage, history)
       ? { service_notes: null, service_notes_resolved: true }
@@ -1766,7 +1803,7 @@ async function respondWithPetbotAgent({
   }
   let serviceFacts = mergeInterpretedPetbotServiceFacts({
     interpretation: interpretationForFacts,
-    previousFacts: previousAgentContext.facts || previousAgentContext.explicit_facts || {},
+    previousFacts: serviceFactsBeforeTurn,
   })
   const productConversationText = buildCatalogSearchText(history, trimmedMessage)
   let productFacts = mergeProductQueryFacts({
@@ -1857,9 +1894,11 @@ async function respondWithPetbotAgent({
       : (Number(serviceFacts.weight_kg || 0) || null),
     coat_type: cleanText(serviceFacts.coat_type),
     symptom: cleanText(serviceFacts.symptom),
-    address: cleanText(llmInterpretation?.delivery_address),
-    neighborhood: cleanText(llmInterpretation?.neighborhood),
-    city: cleanText(llmInterpretation?.city),
+    address: cleanText(productFacts.delivery_address || llmInterpretation?.delivery_address),
+    neighborhood: cleanText(
+      productFacts.delivery_neighborhood || llmInterpretation?.neighborhood,
+    ),
+    city: cleanText(productFacts.delivery_city || llmInterpretation?.city),
   }
   if (Object.values(interpretedProfilePatch).some(Boolean)) {
     try {
@@ -1956,10 +1995,7 @@ async function respondWithPetbotAgent({
       ))
       const quantitySelectedSoleCandidate = (
         lastProductCandidates.length === 1
-        && Number(detectExplicitProductQuantity(
-          trimmedMessage,
-          productFacts.package_preference,
-        ) || 0) > 0
+        && Number(productFacts.quantity || 0) > 0
       )
         ? lastProductCandidates[0]
         : null
@@ -2076,6 +2112,10 @@ async function respondWithPetbotAgent({
       quantity: Number(productFacts.quantity || 0) || null,
       payment_method: cleanText(productFacts.payment_method) || null,
       fulfillment_type: cleanText(productFacts.fulfillment_type) || null,
+      delivery_address: cleanText(productFacts.delivery_address) || null,
+      delivery_neighborhood: cleanText(productFacts.delivery_neighborhood) || null,
+      delivery_city: cleanText(productFacts.delivery_city) || null,
+      delivery_reference: cleanText(productFacts.delivery_reference) || null,
       recent_product_candidates: lastProductCandidates,
       selected_product_candidate: selectedRecentProductCandidate,
     },
@@ -2386,6 +2426,10 @@ async function respondWithPetbotAgent({
             : {}),
           payment_method: cleanText(productFacts.payment_method) || null,
           fulfillment_type: cleanText(productFacts.fulfillment_type) || null,
+          delivery_address: cleanText(productFacts.delivery_address) || null,
+          delivery_neighborhood: cleanText(productFacts.delivery_neighborhood) || null,
+          delivery_city: cleanText(productFacts.delivery_city) || null,
+          delivery_reference: cleanText(productFacts.delivery_reference) || null,
         } : {
           items: [],
           payment_method: null,
@@ -2789,7 +2833,10 @@ async function respondWithPetbotAgent({
       timezone: storeSettings.petbotTimezone,
     }),
     resolveTerminalReply: ({ toolName, result }) => {
-      if (toolName === 'prepare_petshop_service_booking' && cleanText(result?.status) === 'prepared') {
+      if (
+        ['prepare_petshop_product_order', 'prepare_petshop_service_booking'].includes(toolName)
+        && cleanText(result?.status) === 'prepared'
+      ) {
         return cleanText(result?.summary)
       }
       if (toolName !== 'create_confirmed_petshop_order') return ''
@@ -3306,9 +3353,14 @@ export async function respondToChatMessage(supabase, sessionId, message, options
   })
   const recoveredAgentContext = parseJsonObject(recoveredContext)?.petbot_agent || {}
   const productConversationText = buildCatalogSearchText(history, trimmedMessage)
+  const recoveredProductFacts = recoverProductQueryFactsFromHistory({
+    facts: recoveredAgentContext.product_facts || {},
+    history,
+    serviceFacts: recoveredAgentContext.facts || recoveredAgentContext.explicit_facts || {},
+  })
   const initialProductFacts = mergeProductQueryFacts({
     interpretation: llmInterpretation || {},
-    previousFacts: recoveredAgentContext.product_facts || {},
+    previousFacts: recoveredProductFacts,
     serviceFacts: recoveredAgentContext.facts || recoveredAgentContext.explicit_facts || {},
     message: trimmedMessage,
   })

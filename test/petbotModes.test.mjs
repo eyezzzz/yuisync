@@ -15,12 +15,14 @@ import {
   buildRationQualificationReply,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
+  detectExplicitProductDeliveryDetails,
   detectExplicitProductFulfillmentType,
   detectExplicitProductPaymentMethod,
   detectExplicitProductQuantity,
   enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
   productFactsSignature,
+  recoverProductQueryFactsFromHistory,
   resolveRecentProductCandidate,
   shouldAnswerVerifiedStoreQuestion,
   validatePetbotOperationalReply,
@@ -274,9 +276,9 @@ test('checkout pergunta pagamento somente na entrega e usa a combinar na retirad
   })
   assert.equal(deliveryPaid.fulfillment_type, 'entrega')
   assert.equal(deliveryPaid.payment_method, 'pix')
-  assert.equal(
+  assert.match(
     buildProductCheckoutQualificationReply({ facts: deliveryPaid, selectedProduct: product }),
-    '',
+    /endereço da entrega/i,
   )
 
   const pickup = mergeProductQueryFacts({
@@ -297,6 +299,7 @@ test('detecção estrutural de checkout diferencia escolha, dúvida e peso do pe
   assert.equal(detectExplicitProductPaymentMethod('quero entrega e vou pagar no cartão'), 'cartao')
   assert.equal(detectExplicitProductFulfillmentType('vocês fazem entrega?'), '')
   assert.equal(detectExplicitProductQuantity('pode ser 3kg', 'granel'), 3)
+  assert.equal(detectExplicitProductQuantity('pode ser uns 3', 'granel'), 3)
   assert.equal(detectExplicitProductQuantity('me vê três quilos', 'granel'), 3)
   assert.equal(detectExplicitProductQuantity('quero 500g', 'granel'), 0.5)
   assert.equal(detectExplicitProductQuantity('meu cachorro pesa 3kg', 'granel'), null)
@@ -316,6 +319,93 @@ test('detecção estrutural de checkout diferencia escolha, dúvida e peso do pe
   assert.equal(petWeight.package_preference, 'granel')
   assert.equal(petWeight.package_kg, null)
   assert.equal(petWeight.quantity, null)
+})
+
+test('checkout recupera quantidade, cartão e endereço completo sem repetir perguntas', () => {
+  const selectedProduct = { id: 'premier', name: 'Premier Adultos Granel' }
+  const base = {
+    product_kind: 'food',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    size: 'pequeno',
+    age_category: 'adulto',
+    brand: 'premier',
+    package_preference: 'granel',
+  }
+  const quantity = mergeProductQueryFacts({
+    interpretation: { quantity: 3, weight_kg: 3 },
+    previousFacts: base,
+    message: 'pode ser uns 3',
+  })
+  assert.equal(quantity.quantity, 3)
+  assert.match(
+    buildProductCheckoutQualificationReply({ facts: quantity, selectedProduct }),
+    /retirar na loja ou receber por entrega/i,
+  )
+
+  const delivery = mergeProductQueryFacts({
+    interpretation: {},
+    previousFacts: quantity,
+    message: 'entrega',
+  })
+  assert.match(
+    buildProductCheckoutQualificationReply({ facts: delivery, selectedProduct }),
+    /Pix, dinheiro ou cartão/i,
+  )
+
+  const completed = mergeProductQueryFacts({
+    interpretation: {
+      payment_method: 'cartao',
+      delivery_address: 'av. das rabanadas, 300',
+    },
+    previousFacts: delivery,
+    message: 'vai ser no cartao\nav. das rabanadas, 300, centro, ao lado do mercado',
+  })
+  assert.equal(completed.payment_method, 'cartao')
+  assert.equal(completed.delivery_address, 'av. das rabanadas, 300')
+  assert.equal(completed.delivery_neighborhood, 'centro')
+  assert.equal(completed.delivery_reference, 'ao lado do mercado')
+  assert.equal(
+    buildProductCheckoutQualificationReply({ facts: completed, selectedProduct }),
+    '',
+  )
+
+  const recovered = recoverProductQueryFactsFromHistory({
+    facts: { ...base, fulfillment_type: 'entrega' },
+    history: [
+      { role: 'user', content: 'pode ser uns 3' },
+      { role: 'user', content: 'entrega' },
+      {
+        role: 'user',
+        content: 'vai ser no cartao\nav. das rabanadas, 300, centro, ao lado do mercado',
+      },
+      { role: 'user', content: 'sim' },
+    ],
+  })
+  assert.equal(recovered.quantity, 3)
+  assert.equal(recovered.fulfillment_type, 'entrega')
+  assert.equal(recovered.payment_method, 'cartao')
+  assert.equal(recovered.delivery_address, 'av. das rabanadas, 300')
+  assert.equal(recovered.delivery_neighborhood, 'centro')
+  assert.equal(recovered.delivery_reference, 'ao lado do mercado')
+})
+
+test('endereço parcial preserva rua e completa bairro e referência no turno seguinte', () => {
+  const first = detectExplicitProductDeliveryDetails({
+    message: 'Rua das Flores, 10',
+    fulfillmentType: 'entrega',
+  })
+  assert.equal(first.delivery_address, 'Rua das Flores, 10')
+  assert.equal(first.delivery_neighborhood, '')
+
+  const completed = detectExplicitProductDeliveryDetails({
+    message: 'Centro, em frente ao mercado',
+    previousFacts: first,
+    fulfillmentType: 'entrega',
+  })
+  assert.equal(completed.delivery_address, 'Rua das Flores, 10')
+  assert.equal(completed.delivery_neighborhood, 'Centro')
+  assert.equal(completed.delivery_reference, 'em frente ao mercado')
 })
 
 test('troca explícita de granel para pacote continua permitida', () => {

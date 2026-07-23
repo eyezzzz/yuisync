@@ -25,6 +25,8 @@ export function detectExplicitProductPaymentMethod(message = '') {
 
   const selectsPayment = /^(?:pix|dinheiro|cartao|credito|debito)$/.test(normalized)
     || /\b(?:vou pagar|quero pagar|prefiro pagar|pode ser|pagamento (?:vai ser|sera|no|em)|pago (?:no|em|com))\b/.test(normalized)
+    || /\b(?:vai ser|sera|seria|fica)(?: no| em| por)? (?:pix|dinheiro|cartao|credito|debito)\b/.test(normalized)
+    || /\b(?:no|em|por) (?:pix|dinheiro|cartao|credito|debito)\b/.test(normalized)
   if (!selectsPayment) return ''
   if (/\bpix\b/.test(normalized)) return 'pix'
   if (/\b(?:dinheiro|especie)\b/.test(normalized)) return 'dinheiro'
@@ -88,8 +90,116 @@ export function detectExplicitProductQuantity(message = '', packagePreference = 
     }
   }
 
-  const plain = normalized.match(/\b(?:quero|levo|vou levar|me ve|pode ser)\s+(\d{1,3}(?:\.\d{1,3})?)\b/)
-  return plain ? Number(plain[1]) || null : null
+  const plain = normalized.match(/\b(?:quero|levo|vou levar|me ve|pode ser)\s+(?:uns?\s+|umas?\s+)?(\d{1,3}(?:\.\d{1,3})?)\b/)
+  if (plain) return Number(plain[1]) || null
+
+  if (clean(packagePreference) === 'granel') {
+    const approximate = normalized.match(/^(?:uns?|umas?)\s+(\d{1,3}(?:\.\d{1,3})?)(?:\s*(?:kg|quilos?))?$/)
+    if (approximate) return Number(approximate[1]) || null
+  }
+  return null
+}
+
+function messageContainsNormalizedValue(message = '', value = '') {
+  const normalizedValue = normalizeCatalogText(value)
+  return Boolean(normalizedValue && normalizeCatalogText(message).includes(normalizedValue))
+}
+
+export function detectExplicitProductDeliveryDetails({
+  message = '',
+  interpretation = {},
+  previousFacts = {},
+  fulfillmentType = '',
+} = {}) {
+  const previous = normalizeProductQueryFacts(previousFacts)
+  if (clean(fulfillmentType || previous.fulfillment_type) !== 'entrega') {
+    return {
+      delivery_address: previous.delivery_address,
+      delivery_neighborhood: previous.delivery_neighborhood,
+      delivery_city: previous.delivery_city,
+      delivery_reference: previous.delivery_reference,
+    }
+  }
+
+  const raw = clean(message)
+  const segments = raw.split(/[\n,;]+/).map((part) => clean(part)).filter(Boolean)
+  const normalizedSegments = segments.map((part) => normalizeCatalogText(part))
+  const streetPattern = /\b(?:rua|r|avenida|av|travessa|tv|alameda|rodovia|estrada|praca|largo)\b/
+  const referencePattern = /\b(?:ao lado|em frente|perto|proximo|referencia|esquina|fundos)\b/
+  const complementPattern = /\b(?:apt|apto|apartamento|bloco|casa|sala|loja|fundos|complemento)\b/
+  const neighborhoodPattern = /\bbairro\s+(.+)$/
+
+  let address = clean(previous.delivery_address)
+  let neighborhood = clean(previous.delivery_neighborhood)
+  let city = clean(previous.delivery_city)
+  let reference = clean(previous.delivery_reference)
+  const streetIndex = normalizedSegments.findIndex((part) => streetPattern.test(part))
+  let consumedThrough = -1
+
+  if (streetIndex >= 0) {
+    const addressParts = [segments[streetIndex]]
+    consumedThrough = streetIndex
+    if (!/\d/.test(segments[streetIndex]) && /^\d+[a-z0-9\s./-]*$/i.test(segments[streetIndex + 1] || '')) {
+      addressParts.push(segments[streetIndex + 1])
+      consumedThrough = streetIndex + 1
+    }
+    if (complementPattern.test(normalizedSegments[consumedThrough + 1] || '')) {
+      addressParts.push(segments[consumedThrough + 1])
+      consumedThrough += 1
+    }
+    if (addressParts.some((part) => /\d/.test(part))) address = addressParts.join(', ')
+  }
+
+  for (let index = 0; index < segments.length; index += 1) {
+    const part = segments[index]
+    const normalizedPart = normalizedSegments[index]
+    const neighborhoodMatch = normalizedPart.match(neighborhoodPattern)
+    if (neighborhoodMatch) neighborhood = clean(part.replace(/^.*?\bbairro\s+/i, ''))
+    if (referencePattern.test(normalizedPart)) reference = part
+  }
+
+  if (streetIndex >= 0) {
+    const remaining = segments.slice(consumedThrough + 1)
+    const remainingNormalized = normalizedSegments.slice(consumedThrough + 1)
+    const neighborhoodIndex = remainingNormalized.findIndex((part) => (
+      !referencePattern.test(part)
+      && !complementPattern.test(part)
+      && !/^\d/.test(part)
+    ))
+    if (!neighborhood && neighborhoodIndex >= 0) neighborhood = remaining[neighborhoodIndex]
+  } else if (address && segments.length) {
+    const firstNonReference = normalizedSegments.findIndex((part) => !referencePattern.test(part))
+    if (!neighborhood && firstNonReference >= 0 && !/\d/.test(segments[firstNonReference])) {
+      neighborhood = segments[firstNonReference].replace(/^.*?\bbairro\s+/i, '')
+    }
+  }
+
+  const interpretedAddress = clean(interpretation.delivery_address)
+  const interpretedNeighborhood = clean(
+    interpretation.delivery_neighborhood || interpretation.neighborhood,
+  )
+  const interpretedCity = clean(interpretation.delivery_city || interpretation.city)
+  const interpretedReference = clean(
+    interpretation.delivery_reference || interpretation.reference,
+  )
+  const hasAddressEvidence = streetIndex >= 0 && segments.some((part) => /\d/.test(part))
+  if (!address && hasAddressEvidence && messageContainsNormalizedValue(raw, interpretedAddress)) {
+    address = interpretedAddress
+  }
+  if (!neighborhood && messageContainsNormalizedValue(raw, interpretedNeighborhood)) {
+    neighborhood = interpretedNeighborhood
+  }
+  if (!city && messageContainsNormalizedValue(raw, interpretedCity)) city = interpretedCity
+  if (!reference && messageContainsNormalizedValue(raw, interpretedReference)) {
+    reference = interpretedReference
+  }
+
+  return {
+    delivery_address: address,
+    delivery_neighborhood: neighborhood,
+    delivery_city: city,
+    delivery_reference: reference,
+  }
 }
 
 export function buildPetbotConversationOpening({
@@ -368,6 +478,8 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   )
   const asksPaymentMethod = /(?:qual|como|prefere|sera|vai ser).{0,45}(?:forma de pagamento|pagamento|pix|dinheiro|cartao)/.test(normalized)
     || /(?:pix|dinheiro).{0,20}(?:ou).{0,20}(?:cartao)/.test(normalized)
+  const asksPaymentConfirmation = /(?:confirma|confirmar).{0,45}(?:forma de pagamento|pagamento|pix|dinheiro|cartao)/.test(normalized)
+    || /(?:forma de pagamento|pagamento|pix|dinheiro|cartao).{0,45}(?:confirma|confirmar|certo)/.test(normalized)
   const asksChange = /\btroco\b/.test(normalized)
   const asksProductFulfillment = /(?:entrega ou retirada|retirada na loja|servico de entrega|entregar ou retirar|vai retirar|prefere retirada)/.test(normalized)
   const asksServiceNotes = /(?:alguma|tem|possui|precisa de|gostaria de adicionar).{0,45}(?:observacao|observacoes|recado|cuidado especial)/.test(normalized)
@@ -433,6 +545,9 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   }
   if (productContext && clean(facts.fulfillment_type) === 'retirada' && asksPaymentMethod) {
     problems.push('na retirada o pagamento é a combinar; não pergunte forma de pagamento')
+  }
+  if (productContext && clean(facts.payment_method) && (asksPaymentMethod || asksPaymentConfirmation)) {
+    problems.push('forma de pagamento já registrada; não peça confirmação novamente')
   }
   if (isBathConversation && transportResolved && asksPetTransport) {
     problems.push('chegada do pet já foi respondida; não pergunte novamente se o cliente vai levar ou usar MotoDog')
@@ -535,6 +650,7 @@ export function buildPetbotAgentV3Prompt({
     '- Se selected_product_candidate estiver preenchido, o cliente escolheu uma opção apresentada anteriormente. Use exatamente o ID desse candidato e o estoque revalidado; não substitua por uma nova busca aproximada nem diga que acabou quando sufficient_stock=true.',
     '- Em compras de produto, o nome do pet não é obrigatório. Nunca peça o nome do animal apenas para concluir uma venda.',
     '- Nunca suponha retirada, entrega ou forma de pagamento. Depois que produto e quantidade estiverem definidos, confirme retirada na loja ou entrega. Para entrega, pergunte Pix, dinheiro ou cartão. Para retirada, use pagamento "a combinar" e não pergunte a forma de pagamento. Use somente fulfillment_type e payment_method presentes no Estado confiável.',
+    '- Para entrega, use o endereço, bairro e referência já presentes no Estado confiável. Pergunte somente os campos de entrega que ainda estiverem ausentes e nunca peça confirmação de um pagamento já registrado.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
@@ -619,6 +735,14 @@ export function normalizeProductQueryFacts(interpretation = {}, serviceFacts = {
     fulfillment_type: ['entrega', 'retirada'].includes(clean(interpretation.fulfillment_type))
       ? clean(interpretation.fulfillment_type)
       : '',
+    delivery_address: clean(interpretation.delivery_address),
+    delivery_neighborhood: clean(
+      interpretation.delivery_neighborhood || interpretation.neighborhood,
+    ),
+    delivery_city: clean(interpretation.delivery_city || interpretation.city),
+    delivery_reference: clean(
+      interpretation.delivery_reference || interpretation.reference,
+    ),
   }
 }
 
@@ -687,6 +811,12 @@ export function mergeProductQueryFacts({
     : fulfillmentType === 'entrega'
       ? (messagePaymentMethod || (previous.payment_method === 'a_combinar' ? '' : previous.payment_method))
       : ''
+  const deliveryDetails = detectExplicitProductDeliveryDetails({
+    message,
+    interpretation,
+    previousFacts: previous,
+    fulfillmentType,
+  })
   const merged = {
     product_kind: current.product_kind || previous.product_kind,
     pet_name: current.pet_name || previous.pet_name,
@@ -717,6 +847,7 @@ export function mergeProductQueryFacts({
       || (changedPackageFormat ? null : previous.quantity),
     payment_method: paymentMethod,
     fulfillment_type: fulfillmentType,
+    ...deliveryDetails,
   }
   const request = detectCatalogRequest(message, {
     productKind: merged.product_kind,
@@ -735,6 +866,21 @@ export function mergeProductQueryFacts({
       ? null
       : (request.packageKg || merged.package_kg),
   }
+}
+
+export function recoverProductQueryFactsFromHistory({
+  facts = {},
+  history = [],
+  serviceFacts = {},
+} = {}) {
+  return (history || [])
+    .filter((entry) => entry?.role === 'user' && clean(entry?.content))
+    .reduce((recovered, entry) => mergeProductQueryFacts({
+      interpretation: {},
+      previousFacts: recovered,
+      serviceFacts,
+      message: entry.content,
+    }), normalizeProductQueryFacts(facts, serviceFacts))
 }
 
 export function enrichProductQueryFactsFromSavedPet({
@@ -794,6 +940,22 @@ export function buildProductCheckoutQualificationReply({
   }
   if (clean(facts.fulfillment_type) === 'entrega' && !clean(facts.payment_method)) {
     return 'Certo! Para a entrega, como você prefere pagar: Pix, dinheiro ou cartão?'
+  }
+  if (clean(facts.fulfillment_type) === 'entrega') {
+    const missingAddress = !clean(facts.delivery_address) || !/\d/.test(clean(facts.delivery_address))
+    const missingNeighborhood = !clean(facts.delivery_neighborhood)
+    const missingReference = !clean(facts.delivery_reference)
+    if (missingAddress && missingNeighborhood && missingReference) {
+      return 'Perfeito! Agora me informe o endereço da entrega: rua e número, bairro e um ponto de referência.'
+    }
+    const missing = [
+      ...(missingAddress ? ['rua e número'] : []),
+      ...(missingNeighborhood ? ['bairro'] : []),
+      ...(missingReference ? ['ponto de referência'] : []),
+    ]
+    if (missing.length) {
+      return `Só falta informar ${missing.join(' e ')} para a entrega.`
+    }
   }
   return ''
 }
