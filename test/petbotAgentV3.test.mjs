@@ -20,7 +20,9 @@ import {
 } from '../server/lib/petbotAgent.js'
 import {
   analyzeProductDifferentiation,
+  buildPetbotConversationOpening,
   buildPetbotAgentV3Prompt,
+  prependPetbotConversationOpening,
   validatePetbotConversationReply,
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
@@ -48,8 +50,38 @@ test('prompt v3 entrega autonomia conversacional sem despejar catalogo ou frase 
 
   assert.match(prompt, /Você decide como conduzir a conversa e quais ferramentas chamar/)
   assert.match(prompt, /servidor é a fonte de verdade/)
+  assert.match(prompt, /Você é a Luna, assistente virtual da Quatro Patas/)
+  assert.match(prompt, /acolhedora, simpática e natural/)
   assert.doesNotMatch(prompt, /PRECO:|QTD:|ID:/)
   assert.doesNotMatch(prompt, /Qual é o peso exato|Não vou deduzir|Bom dia! Claro/)
+})
+
+test('Luna se apresenta e responde a saudação somente no início da conversa', () => {
+  assert.equal(
+    buildPetbotConversationOpening({
+      message: 'Olá, bom dia, queria pedir uma ração',
+      customerName: 'Vanessa',
+      history: [],
+    }),
+    'Bom dia, Vanessa! Eu sou a Luna, assistente virtual da Quatro Patas! 😊',
+  )
+  assert.equal(
+    prependPetbotConversationOpening({
+      reply: 'Como posso ajudar?',
+      message: 'boa tarde',
+      history: [],
+    }),
+    'Boa tarde! Eu sou a Luna, assistente virtual da Quatro Patas! 😊\n\nComo posso ajudar?',
+  )
+  assert.equal(
+    prependPetbotConversationOpening({
+      reply: 'Vamos continuar.',
+      message: 'boa noite',
+      history: [{ role: 'assistant', content: 'Resposta anterior' }],
+      customerName: 'Vanessa',
+    }),
+    'Vamos continuar.',
+  )
 })
 
 test('prompt v3 recebe perfil e pets salvos sem transformar isso em roteiro fixo', () => {

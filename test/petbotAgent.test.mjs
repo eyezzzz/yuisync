@@ -41,7 +41,13 @@ test('separa identidade do tutor e nome do pet pelo contexto da fala', () => {
 test('detecta confirmação explícita sem aceitar texto ambíguo', () => {
   assert.equal(isExplicitPetbotConfirmation('sim'), true)
   assert.equal(isExplicitPetbotConfirmation('Pode finalizar'), true)
+  assert.equal(isExplicitPetbotConfirmation('sim, obrigada'), true)
+  assert.equal(isExplicitPetbotConfirmation('sim obrigado!'), true)
+  assert.equal(isExplicitPetbotConfirmation('sim, pode separar por favor'), true)
+  assert.equal(isExplicitPetbotConfirmation('confirmo o pedido, obrigada'), true)
   assert.equal(isExplicitPetbotConfirmation('sim, mas troca para entrega'), false)
+  assert.equal(isExplicitPetbotConfirmation('não confirmo'), false)
+  assert.equal(isExplicitPetbotConfirmation('pode esperar'), false)
   assert.equal(isExplicitPetbotConfirmation('talvez'), false)
 })
 

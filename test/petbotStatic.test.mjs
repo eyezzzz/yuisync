@@ -54,6 +54,14 @@ test('resposta do PetBot so e salva depois do estado autonomo persistir', () => 
   assert.doesNotMatch(webhook, /runPetbotGuard/)
 })
 
+test('primeira resposta do PetBot recebe a apresentação determinística da Luna', () => {
+  const localChat = read('server/lib/chat.js')
+  const grounding = read('server/lib/petbotGrounding.js')
+  assert.match(localChat, /prependPetbotConversationOpening\(\{[\s\S]*message: trimmedMessage,[\s\S]*history/)
+  assert.match(grounding, /Eu sou a Luna, assistente virtual da Quatro Patas/)
+  assert.match(grounding, /alreadyIntroduced = \(history \|\| \[\]\)\.some/)
+})
+
 test('opções de produto são persistidas e revalidadas por id no turno seguinte', () => {
   const localChat = read('server/lib/chat.js')
   assert.match(localChat, /last_product_candidates/)

@@ -44,11 +44,15 @@ test('reset de estoque preserva itens e vendas historicas', async () => {
 
 test('PetBot aplica a RPC transacional de estoque e agenda na cadeia de migracoes', async () => {
   const migration = await read('supabase/migrations/20260720007000_petbot_transaction_rpc.sql')
+  const pendingOrders = await read('supabase/migrations/20260723001000_petbot_product_orders_start_pending.sql')
   assert.match(migration, /create or replace function public\.create_petbot_order_transaction/)
   assert.match(migration, /from public\.products[\s\S]*?for update/)
   assert.match(migration, /from public\.appointments[\s\S]*?for update/)
   assert.match(migration, /update public\.products set stock_quantity = stock_quantity - v_quantity/)
   assert.match(migration, /status = 'agendado'/)
+  assert.match(pendingOrders, /pg_get_functiondef\('public\.create_petbot_order_transaction\(jsonb\)'::regprocedure\)/)
+  assert.match(pendingOrders, /then ''pendente'' else ''agendado''/)
+  assert.match(pendingOrders, /grant execute on function public\.create_petbot_order_transaction\(jsonb\) to service_role/)
 })
 
 test('smoke test do PetBot valida operacoes reais e sempre descarta os dados', async () => {

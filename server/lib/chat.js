@@ -42,6 +42,7 @@ import {
   buildVerifiedStoreQuestionReply,
   enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
+  prependPetbotConversationOpening,
   productFactsSignature,
   resolveRecentProductCandidate,
   shouldAnswerVerifiedStoreQuestion,
@@ -2747,8 +2748,14 @@ async function respondWithPetbotAgent({
     },
   })
 
-  const reply = cleanText(agentResult.reply)
-  if (!reply) throw new HttpError(502, 'The PetBot agent response came back empty.')
+  const rawReply = cleanText(agentResult.reply)
+  if (!rawReply) throw new HttpError(502, 'The PetBot agent response came back empty.')
+  const reply = prependPetbotConversationOpening({
+    reply: rawReply,
+    message: trimmedMessage,
+    history,
+    customerName: trustedCustomerName(),
+  })
 
   // Tool calls may extract a customer fact that the lightweight interpreter
   // omitted. Persist the final structured state after the autonomous loop, but
@@ -2958,11 +2965,20 @@ async function respondWithPetbotRecoverableFailure({
   intent,
   options,
   error,
+  message = '',
+  history = [],
+  customerName = '',
 }) {
   const serviceConversation = isPetbotServiceConversation(intent)
-  const reply = serviceConversation
+  const rawReply = serviceConversation
     ? 'Desculpe, não consegui concluir a consulta dos serviços e da agenda agora. As informações que você enviou continuam na conversa; posso tentar novamente sem você repetir os dados.'
     : 'Desculpe, não consegui concluir a consulta agora. As informações que você enviou continuam na conversa; posso tentar novamente sem você repetir os dados.'
+  const reply = prependPetbotConversationOpening({
+    reply: rawReply,
+    message,
+    history,
+    customerName,
+  })
   const botSentAt = new Date().toISOString()
   const existingContext = parseJsonObject(session.context)
   const previousAgentState = existingContext.petbot_agent && typeof existingContext.petbot_agent === 'object'
@@ -3247,6 +3263,9 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       intent,
       options,
       error,
+      message: trimmedMessage,
+      history,
+      customerName: cleanText(customer?.client?.name) || cleanText(sessionForAgent.customer_name),
     })
   }
 }

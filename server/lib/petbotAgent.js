@@ -1397,10 +1397,47 @@ export const PETBOT_AGENT_TOOLS = [
 ]
 
 export function isExplicitPetbotConfirmation(message = '') {
-  const text = normalize(message).replace(/[.!?]+$/g, '').trim()
+  const text = normalize(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
   if (!text) return false
-  if (/^(sim|s|sm|confirmo|confirmado|pode|pode sim|pode finalizar|pode fechar|fecha|finaliza|ok|certo|correto|isso)$/.test(text)) return true
-  return /\b(confirmo|pode finalizar|pode fechar|pode separar|confirma o agendamento|esta correto|tudo certo)\b/.test(text)
+  if (/\b(?:nao|nunca|talvez|mas|porem|so que|cancela|cancelar|espera|aguarde|troca|trocar|altera|alterar|muda|mudar)\b/.test(text)) {
+    return false
+  }
+
+  const confirmation = [
+    'sim',
+    's',
+    'sm',
+    'sim confirmo',
+    'sim pode',
+    'sim pode finalizar',
+    'sim pode fechar',
+    'sim pode separar',
+    'confirmo',
+    'confirmado',
+    'confirmo o pedido',
+    'confirmo a compra',
+    'confirmo o agendamento',
+    'pode',
+    'pode sim',
+    'pode confirmar',
+    'pode finalizar',
+    'pode fechar',
+    'pode separar',
+    'confirma o agendamento',
+    'fecha',
+    'finaliza',
+    'ok',
+    'certo',
+    'correto',
+    'isso',
+    'esta correto',
+    'tudo certo',
+  ].includes(text.replace(/\s+(?:muito\s+)?(?:obrigado|obrigada|por favor|valeu|agradeco)$/g, '').trim())
+
+  return confirmation
 }
 
 export function explicitPetbotHandoffTarget(message = '', interpretation = {}) {

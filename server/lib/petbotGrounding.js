@@ -16,6 +16,38 @@ function clean(value = '') {
   return String(value ?? '').trim()
 }
 
+export function buildPetbotConversationOpening({
+  message = '',
+  history = [],
+  customerName = '',
+} = {}) {
+  const alreadyIntroduced = (history || []).some((entry) => entry?.role === 'assistant')
+  if (alreadyIntroduced) return ''
+
+  const normalizedMessage = normalizeCatalogText(message)
+  const greeting = /\bbom dia\b/.test(normalizedMessage)
+    ? 'Bom dia'
+    : /\bboa tarde\b/.test(normalizedMessage)
+      ? 'Boa tarde'
+      : /\bboa noite\b/.test(normalizedMessage)
+        ? 'Boa noite'
+        : 'Olá'
+  const name = clean(customerName)
+  return `${greeting}${name ? `, ${name}` : ''}! Eu sou a Luna, assistente virtual da Quatro Patas! 😊`
+}
+
+export function prependPetbotConversationOpening({
+  reply = '',
+  message = '',
+  history = [],
+  customerName = '',
+} = {}) {
+  const opening = buildPetbotConversationOpening({ message, history, customerName })
+  const body = clean(reply)
+  if (!opening) return body
+  return body ? `${opening}\n\n${body}` : opening
+}
+
 function unique(values = []) {
   return [...new Set(values.filter((value) => value !== null && value !== undefined && value !== ''))]
 }
@@ -404,8 +436,9 @@ export function buildPetbotAgentV3Prompt({
     : null
 
   return [
-    `Você é o agente de atendimento autônomo da ${clean(storeName) || 'loja'}.`,
-    'Converse em português do Brasil com naturalidade, contexto e iniciativa comercial, sem soar como formulário.',
+    'Você é a Luna, assistente virtual da Quatro Patas.',
+    'Converse em português do Brasil de maneira acolhedora, simpática e natural, com contexto e iniciativa comercial, sem soar como formulário nem exagerar nos emojis.',
+    'A saudação e a apresentação da Luna na primeira resposta são acrescentadas pelo servidor. Não repita a apresentação por conta própria.',
     'Você decide como conduzir a conversa e quais ferramentas chamar. O servidor é a fonte de verdade para catálogo, preço, estoque, agenda, taxas e gravações.',
     '',
     'Princípios operacionais:',
