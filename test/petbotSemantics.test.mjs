@@ -329,3 +329,31 @@ test('pergunta sobre conteúdo do banho usa mensagem aprovada sem virar troca de
     storeInformation,
   }), /inclui corte de unhas.*tosa higiênica/i)
 })
+
+test('MotoDog distingue modalidade generica das tres opcoes reais e preserva endereco', () => {
+  assert.equal(normalizePetbotInterpretation({ service_transport_mode: 'motodog' }).service_transport_mode, 'motodog')
+  assert.equal(normalizePetbotInterpretation({ service_transport_mode: 'buscar e levar' }).service_transport_mode, 'buscar_e_levar')
+  assert.equal(normalizePetbotInterpretation({ service_transport_mode: 'somente buscar' }).service_transport_mode, 'somente_buscar')
+  assert.equal(normalizePetbotInterpretation({ service_transport_mode: 'somente levar' }).service_transport_mode, 'somente_levar')
+
+  let facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_transport_mode: 'buscar_e_levar' },
+    previousFacts: { pet_name: 'Thor', breed: 'Shih Tzu', weight_kg: 8 },
+  })
+  facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: {
+      service_transport_address: 'Rua das Flores, 120',
+      service_transport_neighborhood: 'Centro',
+      service_transport_city: 'Muriaé',
+      service_transport_reference: 'portão azul',
+    },
+    previousFacts: facts,
+  })
+
+  assert.equal(facts.service_transport_mode, 'buscar_e_levar')
+  assert.equal(facts.service_transport_address, 'Rua das Flores, 120')
+  assert.equal(facts.service_transport_neighborhood, 'Centro')
+  assert.equal(facts.service_transport_city, 'Muriaé')
+  assert.equal(facts.service_transport_reference, 'portão azul')
+  assert.equal(facts.weight_kg, 8)
+})

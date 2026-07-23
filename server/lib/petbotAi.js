@@ -11,7 +11,7 @@ const PAYMENTS = new Set(['pix', 'dinheiro', 'cartao'])
 const FULFILLMENTS = new Set(['entrega', 'retirada'])
 const AGES = new Set(['filhote', 'adulto', 'castrado', 'senior'])
 const SIZES = new Set(['pequeno', 'medio', 'grande'])
-const SERVICE_TRANSPORT_MODES = new Set(['cliente_leva', 'motodog'])
+const SERVICE_TRANSPORT_MODES = new Set(['cliente_leva', 'motodog', 'buscar_e_levar', 'somente_buscar', 'somente_levar'])
 const VETERINARY_RISKS = new Set(['none', 'urgent', 'emergency'])
 const DIALOGUE_ACTS = new Set([
   'inform',
@@ -90,7 +90,10 @@ function normalizeServiceTransportMode(value) {
   const normalized = norm(value).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
   if (SERVICE_TRANSPORT_MODES.has(normalized)) return normalized
   if (/^(?:vou_levar|eu_levo|eu_vou_levar|vou_trazer|eu_trago|cliente_leva|tutor_leva)$/.test(normalized)) return 'cliente_leva'
-  if (/(?:motodog|moto_dog|buscar|busca_e_leva)/.test(normalized)) return 'motodog'
+  if (/(?:buscar_e_levar|busca_e_leva|buscar_e_trazer|ida_e_volta|levar_e_buscar)/.test(normalized)) return 'buscar_e_levar'
+  if (/(?:somente_buscar|so_buscar|apenas_buscar|buscar_apenas|vir_buscar|busca_apenas)/.test(normalized)) return 'somente_buscar'
+  if (/(?:somente_levar|so_levar|apenas_levar|levar_apenas|levar_de_volta|trazer_de_volta)/.test(normalized)) return 'somente_levar'
+  if (/(?:motodog|moto_dog)/.test(normalized)) return 'motodog'
   return ''
 }
 
@@ -163,6 +166,11 @@ function compactState(state = {}) {
     service_notes: agentFacts.service_notes || '',
     service_notes_resolved: Boolean(agentFacts.service_notes_resolved),
     service_transport_mode: agentFacts.service_transport_mode || '',
+    service_transport_label: agentFacts.service_transport_label || '',
+    service_transport_address: agentFacts.service_transport_address || '',
+    service_transport_neighborhood: agentFacts.service_transport_neighborhood || '',
+    service_transport_city: agentFacts.service_transport_city || '',
+    service_transport_reference: agentFacts.service_transport_reference || '',
     selected_product: petbot.selectedProduct?.name || '',
     selected_slot: petbot.selectedSlot?.label || petbot.selectedSlot?.scheduled_at || '',
     payment: petbot.payment?.method || '',
@@ -212,6 +220,11 @@ export function normalizePetbotInterpretation(input = {}) {
     service_grooming_detail: pickString(data.service_grooming_detail || data.serviceGroomingDetail, 120),
     service_notes: pickString(data.service_notes || data.serviceNotes, 160),
     service_transport_mode: normalizeServiceTransportMode(data.service_transport_mode || data.serviceTransportMode),
+    service_transport_label: pickString(data.service_transport_label || data.serviceTransportLabel, 100),
+    service_transport_address: pickString(data.service_transport_address || data.serviceTransportAddress, 200),
+    service_transport_neighborhood: pickString(data.service_transport_neighborhood || data.serviceTransportNeighborhood, 100),
+    service_transport_city: pickString(data.service_transport_city || data.serviceTransportCity, 100),
+    service_transport_reference: pickString(data.service_transport_reference || data.serviceTransportReference, 160),
     service_date: pickString(data.service_date || data.serviceDate || data.appointment_date || data.appointmentDate || data.preferred_date || data.preferredDate, 40),
     service_time_preference: pickString(data.service_time_preference || data.serviceTimePreference || data.time_preference || data.timePreference, 40),
     service_preferred_time: pickString(data.service_preferred_time || data.servicePreferredTime || data.preferred_time || data.preferredTime, 40),
@@ -366,7 +379,8 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Para agendamento, extraia service_date como o texto que o cliente disse ("hoje", "amanha", "20/05", "sexta") e service_time_preference/service_preferred_time como "manha", "tarde", "qualquer horario" ou "14h". Nao invente horario.',
         'Para tosa, se o cliente disser maquina 1/3/5/7, lamina, pente, acabamento ou foto de referencia, extraia service_grooming_detail.',
         'Quando a pergunta anterior for sobre observacoes do servico, extraia qualquer cuidado informado em service_notes. Se o cliente responder apenas que nao ha observacoes, use service_notes="sem observacao".',
-        'Para banho/tosa, quando o cliente disser que ele mesmo vai levar ou trazer o pet, extraia service_transport_mode="cliente_leva". Quando escolher o MotoDog, use service_transport_mode="motodog".',
+        'Para banho/tosa, quando o cliente disser que ele mesmo vai levar ou trazer o pet, extraia service_transport_mode="cliente_leva". Quando disser apenas MotoDog sem modalidade, use service_transport_mode="motodog". Quando escolher uma modalidade, normalize como buscar_e_levar, somente_buscar ou somente_levar.',
+        'Quando o cliente informar o endereço do MotoDog, extraia service_transport_address com rua e número, service_transport_neighborhood, service_transport_city e service_transport_reference. Não use os campos de entrega de produto para esse endereço.',
         'Para banho/tosa, interprete a raca e o peso aproximado quando estiverem presentes na fala, no historico recente ou no estado atual. Nunca deduza peso pela raca.',
         'Separe rigorosamente cliente e pet: "me chamo Ana" informa customer_name; "ele/ela se chama Afonso", "meu cachorro se chama Afonso" ou "o pet se chama Afonso" informa somente pet_name. Nunca copie o nome do pet para customer_name.',
         'Se o cliente disser um valor aproximado, mantenha weight_kg com o valor informado, weight_label com a forma natural e weight_estimated=true.',
@@ -382,7 +396,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Se o cliente disser "Robertao, quero uma racao", extraia customer_name "Robertao" e intent "produto".',
         'Interjeicoes como "ue", "uai", "oxe", "opa" nao sao nome.',
         'Retorne apenas JSON valido, sem markdown.',
-        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, option_index, service_type, service_grooming_detail, service_notes, service_transport_mode, service_date, service_time_preference, service_preferred_time, symptom, veterinary_risk, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, dialogue_act, reply_target, handoff_target, confirmation, negation, confidence, raw_summary.',
+        'Campos permitidos: customer_name, intent, pet_name, species, breed, size, weight_kg, weight_label, weight_estimated, coat_type, age_category, product_kind, brand, package_preference, package_kg, quantity, option_index, service_type, service_grooming_detail, service_notes, service_transport_mode, service_transport_label, service_transport_address, service_transport_neighborhood, service_transport_city, service_transport_reference, service_date, service_time_preference, service_preferred_time, symptom, veterinary_risk, payment_method, fulfillment_type, delivery_address, neighborhood, city, reference, wants_human, wants_discount, wants_image, dialogue_act, reply_target, handoff_target, confirmation, negation, confidence, raw_summary.',
         'Enums: intent produto|banho_tosa|veterinaria|multi; species dog|cat; size pequeno|medio|grande; age_category filhote|adulto|castrado|senior; product_kind food|flea|litter|specific; payment_method pix|dinheiro|cartao; fulfillment_type entrega|retirada.',
         clean(customInstructions) ? `Instrucoes de atendimento publicadas para este tenant:\n${clean(customInstructions).slice(0, 4000)}` : '',
       ].join('\n'),
@@ -427,7 +441,12 @@ const PETBOT_INTERPRETATION_SCHEMA = {
       service_type: { type: ['string', 'null'] },
       service_grooming_detail: { type: ['string', 'null'] },
       service_notes: { type: ['string', 'null'] },
-      service_transport_mode: { type: ['string', 'null'], enum: ['cliente_leva', 'motodog', null] },
+      service_transport_mode: { type: ['string', 'null'], enum: ['cliente_leva', 'motodog', 'buscar_e_levar', 'somente_buscar', 'somente_levar', null] },
+      service_transport_label: { type: ['string', 'null'] },
+      service_transport_address: { type: ['string', 'null'] },
+      service_transport_neighborhood: { type: ['string', 'null'] },
+      service_transport_city: { type: ['string', 'null'] },
+      service_transport_reference: { type: ['string', 'null'] },
       service_date: { type: ['string', 'null'] },
       service_time_preference: { type: ['string', 'null'] },
       service_preferred_time: { type: ['string', 'null'] },
@@ -463,7 +482,7 @@ const PETBOT_INTERPRETATION_SCHEMA = {
     required: [
       'customer_name', 'intent', 'pet_name', 'species', 'breed', 'size', 'weight_kg', 'weight_label',
       'weight_estimated', 'coat_type', 'age_category', 'product_kind', 'brand', 'package_preference',
-      'package_kg', 'quantity', 'option_index', 'service_type', 'service_grooming_detail', 'service_notes', 'service_transport_mode', 'service_date',
+      'package_kg', 'quantity', 'option_index', 'service_type', 'service_grooming_detail', 'service_notes', 'service_transport_mode', 'service_transport_label', 'service_transport_address', 'service_transport_neighborhood', 'service_transport_city', 'service_transport_reference', 'service_date',
       'service_time_preference', 'service_preferred_time', 'symptom', 'veterinary_risk', 'payment_method', 'fulfillment_type',
       'delivery_address', 'neighborhood', 'city', 'reference', 'wants_human', 'wants_discount', 'wants_image',
       'dialogue_act', 'reply_target', 'handoff_target', 'confirmation', 'negation', 'confidence', 'raw_summary',

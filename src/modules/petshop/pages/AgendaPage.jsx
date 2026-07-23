@@ -4,7 +4,7 @@ import {
   Calendar, Plus, Search, ChevronLeft, ChevronRight,
   Clock, X, Check, AlertCircle, RefreshCw, Trash2, Edit2, Receipt,
   Scissors, Droplets, Stethoscope, Syringe, PawPrint, ClipboardList,
-  CheckCircle, Zap, PartyPopper, XCircle, Play
+  CheckCircle, Zap, PartyPopper, XCircle, Play, MapPin, Bike
 } from 'lucide-react'
 import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { useClients }         from '../../../shared/hooks/useClients'
@@ -63,6 +63,33 @@ const fmtAppointmentInterval = (appt) => {
   const end = new Date(start.getTime() + duration * 60 * 1000)
   const f = (d) => d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })
   return `${f(start)} - ${f(end)}`
+}
+
+const motodogAddressText = (appt) => [
+  appt?.motodog?.address,
+  appt?.motodog?.neighborhood,
+  appt?.motodog?.city,
+].filter(Boolean).join(' - ')
+
+function MotodogAgendaInfo({ appt, compact = false }) {
+  if (!appt?.motodog?.mode) return null
+  const address = motodogAddressText(appt)
+  return (
+    <div className={`${compact ? 'mt-1 text-[10px]' : 'rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-2 text-[11px]'} text-emerald-300`}>
+      <p className="flex items-center gap-1 font-bold">
+        <Bike size={compact ? 10 : 12}/> MotoDog: {appt.motodog.label || appt.motodog.mode}
+      </p>
+      {address && (
+        <p className="mt-1 flex items-start gap-1 text-muted">
+          <MapPin size={compact ? 9 : 11} className="mt-0.5 shrink-0"/>
+          <span>{address}</span>
+        </p>
+      )}
+      {appt.motodog.reference && (
+        <p className="mt-1 text-muted">Referência: {appt.motodog.reference}</p>
+      )}
+    </div>
+  )
 }
 
 const agendaCardTone = (status) => ({
@@ -180,6 +207,13 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
             <div class="label">ENDEREÇO (MOTODOG)</div>
             <div class="val">${p.owner_address.toUpperCase()}</div>
             <div class="val">${p.owner_neighborhood?.toUpperCase() || ''}</div>
+          ` : ''}
+
+          ${appt.motodog?.mode ? `
+            <div class="label">MOTODOG</div>
+            <div class="val">${String(appt.motodog.label || appt.motodog.mode).toUpperCase()}</div>
+            <div class="val">${motodogAddressText(appt).toUpperCase()}</div>
+            <div class="val">${appt.motodog.reference ? `REFERÊNCIA: ${String(appt.motodog.reference).toUpperCase()}` : ''}</div>
           ` : ''}
 
           <div class="label">NOTAS</div>
@@ -756,6 +790,7 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
           </p>
         </div>
       </div>
+      <MotodogAgendaInfo appt={appt}/>
       <div className="flex items-center justify-between">
         <span className={`badge ${sb.cls} text-[10px]`}>{sb.label}</span>
         <span className="text-xs font-semibold text-emerald-400">{fmtCurrency(appt.price)}</span>
@@ -927,6 +962,7 @@ function AgendaTimelineView({
                                 <span className="truncate">{serviceLabel(appt)}</span>
                                 <span className="font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
                               </div>
+                              <MotodogAgendaInfo appt={appt} compact/>
                               <p className={`mt-1 truncate text-[10px] ${assigned ? 'text-muted' : 'text-amber-300'}`}>
                                 {assigned ? `Resp.: ${assigned.full_name || assigned.email}` : 'Sem responsavel'}
                               </p>
@@ -1191,7 +1227,10 @@ export default function AgendaPage() {
                         <p className="text-sm">{a.pets?.owner_name || '—'}</p>
                         <p className="text-xs text-muted">{a.pets?.phone}</p>
                       </td>
-                      <td className="text-xs">{serviceLabel(a)}</td>
+                      <td className="text-xs">
+                        <span>{serviceLabel(a)}</span>
+                        <MotodogAgendaInfo appt={a} compact/>
+                      </td>
                       <td className="text-xs">
                         {staffById.get(a.groomer_id)?.full_name || (
                           <span className={a.status === 'concluido' ? 'text-amber-400 font-semibold' : 'text-muted'}>Sem responsavel</span>

@@ -11,6 +11,71 @@ const APPOINTMENT_BASE_FIELDS = `
 const APPOINTMENT_SELECT = `${APPOINTMENT_BASE_FIELDS},
   clients ( id, name, document, phone, email, address, neighborhood, city, details )
 `
+const SERVICE_TRANSPORT_SELECT = `
+  id, client_id, sale_id, scheduled_for, delivery_address, delivery_neighborhood,
+  delivery_city, delivery_reference, transport_mode, transport_label
+`
+
+function transportScheduleKey(clientId, value) {
+  if (!clientId || !value) return ''
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ''
+  date.setUTCSeconds(0, 0)
+  return `${clientId}|${date.toISOString()}`
+}
+
+async function loadAppointmentTransportMap(moduleId, tenantId, appointments = []) {
+  if (moduleId !== 'petshop' || !tenantId || !appointments.length) return new Map()
+  const scheduledValues = appointments
+    .map((appointment) => new Date(appointment?.scheduled_at || '').getTime())
+    .filter(Number.isFinite)
+  if (!scheduledValues.length) return new Map()
+
+  const minScheduled = new Date(Math.min(...scheduledValues) - 60 * 1000).toISOString()
+  const maxScheduled = new Date(Math.max(...scheduledValues) + 60 * 1000).toISOString()
+  const response = await runWithTenantFallback(tenantId, async (includeTenant) => {
+    let query = supabase
+      .from('service_delivery_orders')
+      .select(SERVICE_TRANSPORT_SELECT)
+      .eq('module_id', moduleId)
+      .eq('order_type', 'servico')
+      .not('transport_mode', 'is', null)
+      .gte('scheduled_for', minScheduled)
+      .lte('scheduled_for', maxScheduled)
+
+    query = applyTenantFilter(query, tenantId, includeTenant)
+    return query
+  })
+
+  if (response.error) {
+    console.warn('Falha ao carregar dados do MotoDog para a agenda:', response.error.message)
+    return new Map()
+  }
+
+  return new Map((response.data || [])
+    .map((order) => [transportScheduleKey(order.client_id, order.scheduled_for), order])
+    .filter(([key]) => key))
+}
+
+async function enrichAppointmentsWithTransport(moduleId, tenantId, appointments = []) {
+  const transportMap = await loadAppointmentTransportMap(moduleId, tenantId, appointments)
+  if (!transportMap.size) return appointments
+  return appointments.map((appointment) => {
+    const transport = transportMap.get(transportScheduleKey(appointment.client_id, appointment.scheduled_at))
+    if (!transport) return appointment
+    return {
+      ...appointment,
+      motodog: {
+        mode: transport.transport_mode || null,
+        label: transport.transport_label || null,
+        address: transport.delivery_address || null,
+        neighborhood: transport.delivery_neighborhood || null,
+        city: transport.delivery_city || null,
+        reference: transport.delivery_reference || null,
+      },
+    }
+  })
+}
 
 function isClientRelationError(error) {
   const message = String(error?.message || '').toLowerCase()
@@ -238,14 +303,16 @@ export function useAppointments() {
       if (response.error) throw response.error
 
       const clientMap = await loadClientsMap(activeModuleId, activeTenantId, [response.data?.client_id])
-      return mapAppointmentRow({
+      const mapped = mapAppointmentRow({
         ...response.data,
         clients: clientMap.get(response.data?.client_id) || null,
       })
+      return (await enrichAppointmentsWithTransport(activeModuleId, activeTenantId, [mapped]))[0] || mapped
     }
 
     if (response.error) throw response.error
-    return mapAppointmentRow(response.data)
+    const mapped = mapAppointmentRow(response.data)
+    return (await enrichAppointmentsWithTransport(activeModuleId, activeTenantId, [mapped]))[0] || mapped
   }, [activeModuleId, activeTenantId])
 
   const load = useCallback(async (filters = {}) => {
@@ -317,12 +384,13 @@ export function useAppointments() {
           ...item,
           clients: clientMap.get(item.client_id) || null,
         }))
-        setAppointments(rows)
+        setAppointments(await enrichAppointmentsWithTransport(activeModuleId, activeTenantId, rows))
         return
       }
 
       if (response.error) throw response.error
-      setAppointments((response.data || []).map(mapAppointmentRow))
+      const rows = (response.data || []).map(mapAppointmentRow)
+      setAppointments(await enrichAppointmentsWithTransport(activeModuleId, activeTenantId, rows))
     } catch (e) {
       setError(e.message)
     } finally {

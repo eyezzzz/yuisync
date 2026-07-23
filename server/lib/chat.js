@@ -271,18 +271,194 @@ function inferExplicitPetTransportMode(message = '', history = []) {
     .replace(/\s+/g, ' ')
     .trim()
   if (!answer) return ''
-  if (/\b(?:motodog|moto dog|buscar|busca e leva)\b/.test(answer)) return 'motodog'
-  if (/\b(?:vou levar|eu levo|eu vou levar|vou trazer|eu trago|levo ele|levo ela|por conta propria)\b/.test(answer)) {
-    return 'cliente_leva'
-  }
-
   const previousAssistant = [...(history || [])]
     .reverse()
     .find((entry) => ['assistant', 'human_agent'].includes(entry?.role))
   const previousText = normalizeSearchText(previousAssistant?.content)
+  const selectingMotodogOption = /(?:qual modalidade|buscar e levar).*(?:somente buscar).*(?:somente levar)/.test(previousText)
+
+  if (/\b(?:buscar e levar|busca e leva|buscar e trazer|ida e volta|levar e buscar)\b/.test(answer)) return 'buscar_e_levar'
+  if (/\b(?:somente buscar|so buscar|apenas buscar|buscar apenas|vir buscar)\b/.test(answer)) return 'somente_buscar'
+  if (/\b(?:somente levar|so levar|apenas levar|levar apenas|levar de volta|trazer de volta)\b/.test(answer)) return 'somente_levar'
+  if (selectingMotodogOption && /^(?:1|primeira|primeiro|primeira opcao|opcao 1)$/.test(answer)) return 'buscar_e_levar'
+  if (selectingMotodogOption && /^(?:2|segunda|segundo|segunda opcao|opcao 2|buscar)$/.test(answer)) return 'somente_buscar'
+  if (selectingMotodogOption && /^(?:3|terceira|terceiro|terceira opcao|opcao 3|levar)$/.test(answer)) return 'somente_levar'
+  if (/\b(?:motodog|moto dog)\b/.test(answer)) return 'motodog'
+  if (/\b(?:vou levar|eu levo|eu vou levar|vou trazer|eu trago|levo ele|levo ela|por conta propria)\b/.test(answer)) {
+    return 'cliente_leva'
+  }
+
   if (/^(?:vou|eu|sim|isso)$/.test(answer) && /\b(?:levar|trazer)\b/.test(previousText)) {
     return 'cliente_leva'
   }
+  return ''
+}
+
+function isPetbotCustomerBringsMode(value = '') {
+  return /^(?:cliente_leva|cliente leva|sem_transporte|sem transporte|tutor_leva|tutor leva)$/.test(normalizeSearchText(value))
+}
+
+function hasPetbotStreetNumber(value = '') {
+  return Boolean(cleanText(value) && /\d/.test(cleanText(value)))
+}
+
+function enrichPetbotMotodogAddressFromCustomer(facts = {}, customer = null) {
+  const mode = cleanText(facts.service_transport_mode)
+  if (
+    !mode
+    || mode === 'motodog'
+    || isPetbotCustomerBringsMode(mode)
+    || facts.service_transport_address_profile_rejected
+  ) return facts
+
+  const alreadyHasAddress = [
+    facts.service_transport_address,
+    facts.service_transport_neighborhood,
+    facts.service_transport_city,
+    facts.service_transport_reference,
+  ].some((value) => cleanText(value))
+  if (alreadyHasAddress) return facts
+
+  const client = customer?.client || {}
+  const details = parseJsonObject(client.details)
+  const profileAddress = cleanText(client.address)
+  const profileNeighborhood = cleanText(client.neighborhood)
+  const profileCity = cleanText(client.city)
+  const profileReference = cleanText(details.address_reference)
+  if (![profileAddress, profileNeighborhood, profileCity, profileReference].some(Boolean)) return facts
+
+  return {
+    ...facts,
+    service_transport_address: profileAddress || null,
+    service_transport_neighborhood: profileNeighborhood || null,
+    service_transport_city: profileCity || null,
+    service_transport_reference: profileReference || null,
+    service_transport_address_confirmed: false,
+    service_transport_address_from_profile: true,
+  }
+}
+
+function inferPetbotTransportAddress(message = '', history = []) {
+  const previousAssistant = [...(history || [])]
+    .reverse()
+    .find((entry) => ['assistant', 'human_agent'].includes(entry?.role))
+  const previousText = normalizeSearchText(previousAssistant?.content)
+  if (!/(?:motodog|endereco|rua e numero|bairro|cidade|referencia)/.test(previousText)) return {}
+
+  const raw = cleanText(message)
+  if (!raw || raw.length < 6) return {}
+  const referenceMatch = raw.match(/(?:referencia|referência|ponto de referencia|ponto de referência)\s*[:\-]?\s*(.+)$/i)
+  const reference = cleanText(referenceMatch?.[1])
+  const withoutReference = referenceMatch ? raw.slice(0, referenceMatch.index).replace(/[,;\s-]+$/, '') : raw
+  const labeledAddress = withoutReference.match(/(?:rua|avenida|av\.?|travessa|estrada)\s+(.+?)\s*(?:,|\-|numero|número|nº)\s*(\d+[a-zA-Z-]*)/i)
+  const neighborhoodMatch = withoutReference.match(/(?:bairro)\s*[:\-]?\s*([^,;]+)/i)
+  const cityMatch = withoutReference.match(/(?:cidade)\s*[:\-]?\s*([^,;]+)/i)
+  const inferred = {}
+
+  if (labeledAddress) {
+    const streetPrefix = withoutReference.match(/\b(rua|avenida|av\.?|travessa|estrada)\b/i)?.[1] || 'Rua'
+    inferred.service_transport_address = `${streetPrefix} ${cleanText(labeledAddress[1])}, ${cleanText(labeledAddress[2])}`
+  }
+  if (neighborhoodMatch) inferred.service_transport_neighborhood = cleanText(neighborhoodMatch[1])
+  if (cityMatch) inferred.service_transport_city = cleanText(cityMatch[1])
+  if (reference) inferred.service_transport_reference = reference
+
+  const parts = withoutReference.split(/[,;]/).map(cleanText).filter(Boolean)
+  if (!inferred.service_transport_address) {
+    if (parts.length >= 4 && /^\d+[a-zA-Z-]*$/.test(parts[1])) {
+      inferred.service_transport_address = `${parts[0]}, ${parts[1]}`
+      inferred.service_transport_neighborhood ||= parts[2]
+      inferred.service_transport_city ||= parts[3]
+    } else if (parts.length >= 3 && /\d/.test(parts[0])) {
+      inferred.service_transport_address = parts[0]
+      inferred.service_transport_neighborhood ||= parts[1]
+      inferred.service_transport_city ||= parts[2]
+    }
+  }
+
+  return inferred
+}
+
+function inferPetbotTransportAddressConfirmation(message = '', history = []) {
+  const previousAssistant = [...(history || [])]
+    .reverse()
+    .find((entry) => ['assistant', 'human_agent'].includes(entry?.role))
+  const previousText = normalizeSearchText(previousAssistant?.content)
+  if (!/(?:posso usar|confirma).*(?:endereco|motodog)/.test(previousText)) return null
+
+  const answer = normalizeSearchText(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (/^(?:sim|s|pode|pode usar|confirmo|correto|isso|esse mesmo|esta certo)$/.test(answer)) return true
+  if (/^(?:nao|n|outro|outro endereco|nao pode|esta errado|mudei)$/.test(answer)) return false
+  return null
+}
+
+function buildPetbotTransportQualificationReply({ facts = {}, settings = {} } = {}) {
+  const mode = cleanText(facts.service_transport_mode)
+  if (!mode || isPetbotCustomerBringsMode(mode)) return ''
+  const options = listPetTransportOptions(settings)
+  const formatOption = (option) => `• ${option.label} — ${formatPetbotCurrency(option.fee)}`
+
+  if (mode === 'motodog') {
+    if (!options.length) {
+      return 'O MotoDog ainda não está configurado para esta loja. Você consegue levar o pet até a unidade?'
+    }
+    return [
+      'Perfeito! Qual modalidade do MotoDog você prefere?',
+      '',
+      ...options.map(formatOption),
+    ].join('\n')
+  }
+
+  const selection = resolvePetTransportSelection({
+    args: {
+      service_transport_mode: mode,
+      service_transport_label: facts.service_transport_label,
+    },
+    settings,
+    orderType: 'banho_tosa',
+    requireDecision: true,
+  })
+  if (!selection.ok) {
+    if (!options.length) return 'Essa modalidade do MotoDog não está disponível. Você consegue levar o pet até a loja?'
+    return [
+      'Essa modalidade não está disponível. Escolha uma das opções ativas:',
+      '',
+      ...options.map(formatOption),
+    ].join('\n')
+  }
+
+  const missing = []
+  if (!hasPetbotStreetNumber(facts.service_transport_address)) missing.push('rua e número')
+  if (!cleanText(facts.service_transport_neighborhood)) missing.push('bairro')
+  if (!cleanText(facts.service_transport_city)) missing.push('cidade')
+  if (!cleanText(facts.service_transport_reference)) missing.push('ponto de referência')
+  if (missing.length) {
+    return [
+      `${selection.label} selecionado por ${formatPetbotCurrency(selection.fee)}.`,
+      `Agora me informe ${missing.join(', ')} para o MotoDog.`,
+    ].join('\n')
+  }
+
+  if (facts.service_transport_address_confirmed !== true) {
+    const address = [
+      cleanText(facts.service_transport_address),
+      cleanText(facts.service_transport_neighborhood),
+      cleanText(facts.service_transport_city),
+    ].filter(Boolean).join(' - ')
+    return [
+      `${selection.label} selecionado por ${formatPetbotCurrency(selection.fee)}.`,
+      facts.service_transport_address_from_profile
+        ? 'Encontrei este endereço no cadastro:'
+        : 'Confirme o endereço do MotoDog:',
+      address,
+      `Referência: ${cleanText(facts.service_transport_reference)}`,
+      'Posso usar este endereço para o MotoDog?',
+    ].join('\n')
+  }
+
   return ''
 }
 
@@ -1185,6 +1361,7 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
     ...(Number(patch.weight_kg) > 0 ? { weight_kg: Number(patch.weight_kg) } : {}),
     ...(cleanText(patch.coat_type) ? { coat_type: cleanText(patch.coat_type) } : {}),
     ...(cleanText(patch.symptom) ? { last_symptom: cleanText(patch.symptom) } : {}),
+    ...(cleanText(patch.address_reference) ? { address_reference: cleanText(patch.address_reference) } : {}),
     name_confirmed: hasConfirmedName,
   }
 
@@ -1731,7 +1908,7 @@ async function respondToAlreadyCommittedConfirmation({
   return { reply, savedMessage: savedReply }
 }
 
-function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedService = null, timezone = 'America/Sao_Paulo' } = {}) {
+function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedService = null, settings = {}, timezone = 'America/Sao_Paulo' } = {}) {
   const runs = Array.isArray(toolRuns) ? toolRuns : []
   const availabilityRun = [...runs].reverse().find((run) => (
     run?.name === 'check_petshop_availability'
@@ -1766,13 +1943,24 @@ function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedServ
   ))
   if (preparedRun?.result?.summary) return cleanText(preparedRun.result.summary)
 
+  const transportQualificationReply = buildPetbotTransportQualificationReply({ facts, settings })
+  if (transportQualificationReply) return transportQualificationReply
+
   if (availability?.status === 'available') {
     if (availability.requested_slot?.available) {
       const time = cleanText(availability.requested_slot.scheduled_at)
       const formatted = time
         ? DateTime.fromISO(time, { setZone: true }).setZone(timezone).toFormat('HH:mm')
         : cleanText(facts.service_preferred_time)
-      return `${formatted ? `Sim, ${formatted} está disponível.` : 'Sim, o horário solicitado está disponível.'}${petName ? ' Posso preparar o resumo do agendamento?' : ' Qual é o nome do seu pet?'}`
+      const availabilityPrefix = formatted ? `Sim, ${formatted} está disponível.` : 'Sim, o horário solicitado está disponível.'
+      if (!petName) return `${availabilityPrefix} Qual é o nome do seu pet?`
+      if (!cleanText(facts.service_transport_mode)) {
+        return `${availabilityPrefix} Você vai levar o pet ou prefere usar o MotoDog?`
+      }
+      if (!facts.service_notes_resolved) {
+        return `${availabilityPrefix} Há alguma observação para o serviço, como alergia ou preferência de perfume?`
+      }
+      return `${availabilityPrefix} Vou preparar o resumo com os dados confirmados.`
     }
     const slots = (availability.available_slots || []).slice(0, 6).map((slot) => cleanText(slot.time)).filter(Boolean)
     if (slots.length) {
@@ -1901,6 +2089,29 @@ async function respondWithPetbotAgent({
     && Number(detectExplicitProductQuantity(trimmedMessage, 'granel') || 0) > 0,
   )
   const previousServiceFacts = previousAgentContext.facts || previousAgentContext.explicit_facts || {}
+  const inferredTransportAddress = productConversationAtTurnStart
+    ? {}
+    : inferPetbotTransportAddress(trimmedMessage, history)
+  const transportAddressConfirmation = productConversationAtTurnStart
+    ? null
+    : inferPetbotTransportAddressConfirmation(trimmedMessage, history)
+  const currentTransportAddress = {
+    service_transport_address: cleanText(llmInterpretation?.service_transport_address)
+      || cleanText(inferredTransportAddress.service_transport_address)
+      || null,
+    service_transport_neighborhood: cleanText(llmInterpretation?.service_transport_neighborhood)
+      || cleanText(inferredTransportAddress.service_transport_neighborhood)
+      || null,
+    service_transport_city: cleanText(llmInterpretation?.service_transport_city)
+      || cleanText(inferredTransportAddress.service_transport_city)
+      || null,
+    service_transport_reference: cleanText(llmInterpretation?.service_transport_reference)
+      || cleanText(inferredTransportAddress.service_transport_reference)
+      || null,
+  }
+  const currentTurnProvidesTransportAddress = Object.values(currentTransportAddress).some(Boolean)
+  const resetSavedTransportAddress = transportAddressConfirmation === false
+    || (currentTurnProvidesTransportAddress && previousServiceFacts.service_transport_address_from_profile)
   const serviceFactsBeforeTurn = productConversationAtTurnStart
     ? {
       ...previousServiceFacts,
@@ -1914,6 +2125,14 @@ async function respondWithPetbotAgent({
       service_notes: null,
       service_notes_resolved: false,
       service_transport_mode: null,
+      service_transport_label: null,
+      service_transport_address: null,
+      service_transport_neighborhood: null,
+      service_transport_city: null,
+      service_transport_reference: null,
+      service_transport_address_confirmed: false,
+      service_transport_address_from_profile: false,
+      service_transport_address_profile_rejected: false,
       symptom: null,
     }
     : previousServiceFacts
@@ -1938,6 +2157,11 @@ async function respondWithPetbotAgent({
       ? { service_notes: null, service_notes_resolved: true }
       : {}),
     service_transport_mode: inferredTransportMode || null,
+    ...currentTransportAddress,
+    service_transport_address_reset: resetSavedTransportAddress,
+    service_transport_address_confirmed: transportAddressConfirmation === true || currentTurnProvidesTransportAddress,
+    service_transport_address_from_profile: currentTurnProvidesTransportAddress ? false : undefined,
+    service_transport_address_profile_rejected: resetSavedTransportAddress,
   }
   let serviceFacts = mergeInterpretedPetbotServiceFacts({
     interpretation: interpretationForFacts,
@@ -2167,6 +2391,9 @@ async function respondWithPetbotAgent({
     message: trimmedMessage,
     history,
   })
+  if (serviceOrderType === 'banho_tosa') {
+    serviceFacts = enrichPetbotMotodogAddressFromCustomer(serviceFacts, activeCustomer)
+  }
   let preloadedToolRuns = []
   let operationalContext = null
   if (serviceOrderType) {
@@ -2250,6 +2477,14 @@ async function respondWithPetbotAgent({
       service_notes: serviceFacts.service_notes,
       service_notes_resolved: Boolean(serviceFacts.service_notes_resolved),
       service_transport_mode: serviceFacts.service_transport_mode,
+      service_transport_label: serviceFacts.service_transport_label,
+      service_transport_address: serviceFacts.service_transport_address,
+      service_transport_neighborhood: serviceFacts.service_transport_neighborhood,
+      service_transport_city: serviceFacts.service_transport_city,
+      service_transport_reference: serviceFacts.service_transport_reference,
+      service_transport_address_confirmed: Boolean(serviceFacts.service_transport_address_confirmed),
+      service_transport_address_from_profile: Boolean(serviceFacts.service_transport_address_from_profile),
+      service_transport_address_profile_rejected: Boolean(serviceFacts.service_transport_address_profile_rejected),
       product_kind: cleanText(productFacts.product_kind) || null,
       age_category: cleanText(productFacts.age_category) || null,
       brand: cleanText(productFacts.brand) || null,
@@ -2807,6 +3042,10 @@ async function respondWithPetbotAgent({
     pendingAtTurnStart
     && trustedCurrentMessageConfirmation,
   )
+  const transportQualificationReply = serviceOrderType === 'banho_tosa'
+    ? buildPetbotTransportQualificationReply({ facts: serviceFacts, settings: storeSettings })
+    : ''
+
   const shouldAnswerStoreQuestion = shouldAnswerVerifiedStoreQuestion({
     message: trimmedMessage,
     detectedIntent: intent,
@@ -2926,6 +3165,17 @@ async function respondWithPetbotAgent({
       terminal: true,
       durationMs: Date.now() - confirmationStartedAt,
     }
+  } else if (transportQualificationReply) {
+    agentResult = {
+      reply: transportQualificationReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
+    }
   } else if (verifiedStoreReply) {
     agentResult = {
       reply: verifiedStoreReply,
@@ -2979,6 +3229,7 @@ async function respondWithPetbotAgent({
       facts: serviceFacts,
       toolRuns,
       resolvedService: resolvedServiceThisTurn,
+      settings: storeSettings,
       timezone: storeSettings.petbotTimezone,
     }),
     resolveTerminalReply: ({ toolName, result }) => {
@@ -3062,6 +3313,10 @@ async function respondWithPetbotAgent({
       : (Number(serviceFacts.weight_kg || 0) || null),
     coat_type: cleanText(serviceFacts.coat_type),
     symptom: cleanText(serviceFacts.symptom),
+    address: cleanText(serviceFacts.service_transport_address),
+    neighborhood: cleanText(serviceFacts.service_transport_neighborhood),
+    city: cleanText(serviceFacts.service_transport_city),
+    address_reference: cleanText(serviceFacts.service_transport_reference),
   }
   if (Object.values(finalProfilePatch).some(Boolean)) {
     try {

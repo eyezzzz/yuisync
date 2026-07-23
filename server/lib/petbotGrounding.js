@@ -495,7 +495,23 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   const asksConfirmationAgain = /(?:confirma(?:r)?|voce confirma|pode confirmar).{0,50}(?:agendamento|pedido|horario)/.test(normalized)
     || /(?:para finalizar|so preciso confirmar).{0,80}/.test(normalized)
   const transportMode = normalizeCatalogText(facts.service_transport_mode)
-  const transportResolved = Boolean(transportMode && transportMode !== 'motodog')
+  const customerBringsPet = /^(?:cliente leva|cliente_leva|sem transporte|sem_transporte|tutor leva|tutor_leva)$/.test(transportMode)
+  const exactMotodogMode = Boolean(transportMode && transportMode !== 'motodog' && !customerBringsPet)
+  const transportAddressComplete = Boolean(
+    clean(facts.service_transport_address)
+    && /\d/.test(clean(facts.service_transport_address))
+    && clean(facts.service_transport_neighborhood)
+    && clean(facts.service_transport_city)
+    && clean(facts.service_transport_reference),
+  )
+  const transportAddressConfirmed = facts.service_transport_address_confirmed === true
+  const transportResolved = Boolean(
+    customerBringsPet
+    || (exactMotodogMode && transportAddressComplete && transportAddressConfirmed),
+  )
+  const asksTransportOption = /(?:buscar e levar|somente buscar|so buscar|somente levar|so levar|qual opcao|qual modalidade)/.test(normalized)
+  const asksTransportAddress = /(?:endereco|rua|numero|bairro|cidade|ponto de referencia|referencia)/.test(normalized)
+  const offersPrematureSummary = /(?:posso|vou|quer que eu).{0,45}(?:preparar|montar).{0,30}(?:resumo|agendamento)/.test(normalized)
   const hasPreparedOrder = Boolean(pendingOrder) || (toolRuns || []).some((run) => (
     ['prepare_petshop_service_booking', 'prepare_petshop_order'].includes(clean(run?.name))
     && run?.ok !== false
@@ -549,6 +565,30 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   }
   if (productContext && clean(facts.payment_method) && (asksPaymentMethod || asksPaymentConfirmation)) {
     problems.push('forma de pagamento já registrada; não peça confirmação novamente')
+  }
+  if (isBathConversation && transportMode === 'motodog') {
+    if (offersPrematureSummary || asksConfirmationAgain) {
+      problems.push('MotoDog ainda precisa de modalidade; não apresente resumo nem peça confirmação final')
+    }
+    if (!asksTransportOption) {
+      problems.push('MotoDog genérico exige escolher uma opção real da loja com a respectiva taxa')
+    }
+  }
+  if (isBathConversation && exactMotodogMode && !transportAddressComplete) {
+    if (offersPrematureSummary || asksConfirmationAgain) {
+      problems.push('endereço do MotoDog está incompleto; não apresente resumo nem peça confirmação final')
+    }
+    if (!asksTransportAddress) {
+      problems.push('modalidade MotoDog escolhida; pergunte somente os dados de endereço ainda ausentes')
+    }
+  }
+  if (isBathConversation && exactMotodogMode && transportAddressComplete && !transportAddressConfirmed) {
+    if (offersPrematureSummary || asksConfirmationAgain) {
+      problems.push('endereço do MotoDog ainda não foi confirmado; não apresente o resumo final')
+    }
+    if (!asksTransportAddress) {
+      problems.push('confirme com o cliente o endereço completo do MotoDog antes do resumo')
+    }
   }
   if (isBathConversation && transportResolved && asksPetTransport) {
     problems.push('chegada do pet já foi respondida; não pergunte novamente se o cliente vai levar ou usar MotoDog')
@@ -656,6 +696,8 @@ export function buildPetbotAgentV3Prompt({
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
     '- Para banho/tosa, os únicos fatos de classificação que podem ser solicitados ao cliente são raça e peso aproximado. Se ambos já estiverem no estado confiável, não os pergunte nem peça confirmação novamente.',
+    '- Se o cliente disser apenas MotoDog, consulte as opções reais e peça uma única escolha entre buscar e levar, somente buscar ou somente levar, com as taxas retornadas pela loja.',
+    '- Depois da modalidade MotoDog, obtenha rua e número, bairro, cidade e ponto de referência. Nunca apresente resumo nem peça confirmação final enquanto qualquer um desses dados estiver ausente.',
     '- O nome do pet é obrigatório para concluir um serviço. Se ainda estiver ausente, pergunte o nome antes de chegada, observações ou resumo; nunca use a raça como nome do pet.',
     '- Campo ausente, serviço ambíguo ou tentativa de consultar a agenda cedo demais não são motivo para transferir o atendimento: use o retorno da ferramenta para fazer a próxima pergunta útil.',
     '- Transfira para humano somente quando o cliente pedir, houver risco veterinário ou uma falha operacional persistente impedir qualquer continuação segura.',

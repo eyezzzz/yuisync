@@ -143,6 +143,33 @@ export function mergeInterpretedPetbotServiceFacts({
   const serviceTransportMode = currentTransportMode
     || clean(inheritedPet.service_transport_mode)
     || null
+  const resetTransportAddress = current.service_transport_address_reset === true
+  const inheritedTransport = resetTransportAddress ? {} : inheritedPet
+  const serviceTransportLabel = clean(current.service_transport_label)
+    || clean(inheritedTransport.service_transport_label)
+    || null
+  const serviceTransportAddress = clean(current.service_transport_address)
+    || clean(inheritedTransport.service_transport_address)
+    || null
+  const serviceTransportNeighborhood = clean(current.service_transport_neighborhood)
+    || clean(inheritedTransport.service_transport_neighborhood)
+    || null
+  const serviceTransportCity = clean(current.service_transport_city)
+    || clean(inheritedTransport.service_transport_city)
+    || null
+  const serviceTransportReference = clean(current.service_transport_reference)
+    || clean(inheritedTransport.service_transport_reference)
+    || null
+  const serviceTransportAddressConfirmed = typeof current.service_transport_address_confirmed === 'boolean'
+    ? current.service_transport_address_confirmed
+    : Boolean(inheritedTransport.service_transport_address_confirmed)
+  const serviceTransportAddressFromProfile = typeof current.service_transport_address_from_profile === 'boolean'
+    ? current.service_transport_address_from_profile
+    : Boolean(inheritedTransport.service_transport_address_from_profile)
+  const serviceTransportAddressProfileRejected = Boolean(
+    current.service_transport_address_profile_rejected
+    || inheritedPet.service_transport_address_profile_rejected,
+  )
   const size = clean(current.size) || clean(inheritedPet.size) || null
   const symptom = clean(current.symptom) || clean(inheritedPet.symptom) || null
 
@@ -181,6 +208,14 @@ export function mergeInterpretedPetbotServiceFacts({
     service_notes_explicit: serviceNotesResolved,
     service_transport_mode: serviceTransportMode,
     service_transport_mode_explicit: Boolean(serviceTransportMode),
+    service_transport_label: serviceTransportLabel,
+    service_transport_address: serviceTransportAddress,
+    service_transport_neighborhood: serviceTransportNeighborhood,
+    service_transport_city: serviceTransportCity,
+    service_transport_reference: serviceTransportReference,
+    service_transport_address_confirmed: serviceTransportAddressConfirmed,
+    service_transport_address_from_profile: serviceTransportAddressFromProfile,
+    service_transport_address_profile_rejected: serviceTransportAddressProfileRejected,
     pet_identity_changed: petIdentityChanged,
   }
 }
@@ -228,6 +263,13 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     service_transport_mode: facts.service_transport_mode_explicit && normalizeCode(facts.service_transport_mode) !== 'motodog'
       ? clean(facts.service_transport_mode)
       : clean(args.service_transport_mode) || null,
+    service_transport_label: clean(facts.service_transport_label) || clean(args.service_transport_label) || null,
+    service_transport_address: clean(facts.service_transport_address) || clean(args.service_transport_address) || null,
+    service_transport_neighborhood: clean(facts.service_transport_neighborhood) || clean(args.service_transport_neighborhood) || null,
+    service_transport_city: clean(facts.service_transport_city) || clean(args.service_transport_city) || null,
+    service_transport_reference: clean(facts.service_transport_reference) || clean(args.service_transport_reference) || null,
+    service_transport_address_confirmed: facts.service_transport_address_confirmed === true
+      || args.service_transport_address_confirmed === true,
   }
 }
 
@@ -1138,6 +1180,8 @@ function formatOrderSummary(order, settings = {}) {
     if (order.order_type === 'banho_tosa') {
       if (Number(order.service_transport_fee || 0) > 0) {
         lines.push(`• MotoDog: ${order.service_transport_label || 'transporte do pet'} — ${money(order.service_transport_fee)}`)
+        lines.push(`• Endereço MotoDog: ${[order.service_transport_address, order.service_transport_neighborhood, order.service_transport_city].filter(Boolean).join(' - ')}`)
+        lines.push(`• Referência: ${order.service_transport_reference}`)
       } else {
         lines.push('• Chegada do pet: cliente leva à loja')
       }
@@ -1485,11 +1529,22 @@ export function shouldForcePetbotServicePreparation({
   }
 
   if (clean(orderType) !== 'banho_tosa') return false
+  const transportMode = normalizeCode(facts.service_transport_mode)
+  const customerBrings = isNoTransport(transportMode)
+  const motodogAddressComplete = Boolean(
+    clean(facts.service_transport_address)
+    && /\d/.test(clean(facts.service_transport_address))
+    && clean(facts.service_transport_neighborhood)
+    && clean(facts.service_transport_city)
+    && clean(facts.service_transport_reference)
+    && facts.service_transport_address_confirmed === true,
+  )
   return Boolean(
     clean(facts.breed)
     && Number(facts.weight_kg || 0) > 0
-    && clean(facts.service_transport_mode)
-    && normalize(facts.service_transport_mode) !== 'motodog'
+    && transportMode
+    && transportMode !== 'motodog'
+    && (customerBrings || motodogAddressComplete)
     && facts.service_notes_resolved,
   )
 }
@@ -2065,7 +2120,9 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   if (transport.ok && transport.requested) {
     if (!transportAddress || !/\d/.test(transportAddress)) missing.push('rua e número para transporte do pet')
     if (!transportNeighborhood) missing.push('bairro para transporte do pet')
+    if (!transportCity) missing.push('cidade para transporte do pet')
     if (!transportReference) missing.push('ponto de referência para transporte do pet')
+    if (args.service_transport_address_confirmed !== true) missing.push('confirmação do endereço do MotoDog')
   }
 
   if (missing.length) return { ok: false, missing: [...new Set(missing)] }

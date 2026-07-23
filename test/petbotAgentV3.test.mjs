@@ -1384,3 +1384,115 @@ test('confirmacao ja dada nao pode gerar nova pergunta de confirmacao', () => {
   assert.equal(result.ok, false)
   assert.ok(result.problems.some((problem) => /já confirmou/i.test(problem)))
 })
+
+test('MotoDog bloqueia resumo ate escolher modalidade e completar endereco', () => {
+  const baseArgs = {
+    customer_name: 'Ray', pet_name: 'Thor', species: 'dog', breed: 'Shih Tzu', weight_kg: 8,
+    weight_label: '8 kg', weight_estimated: true, coat_type: 'longo', order_type: 'banho_tosa',
+    items: [], appointment_id: null, scheduled_at: '2026-07-23T16:00:00-03:00',
+    service_code: service.code, service_type: service.code,
+  }
+  const settings = {
+    petTransportOptions: [
+      { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 20, active: true },
+      { id: 'somente_buscar', label: 'Somente buscar', fee: 15, active: true },
+      { id: 'somente_levar', label: 'Somente levar', fee: 15, active: true },
+    ],
+  }
+
+  const generic = preparePetshopOrderDraft({
+    args: { ...baseArgs, service_transport_mode: 'motodog' },
+    services: [service], appointments: [], settings,
+    now: new Date('2026-07-23T10:00:00-03:00'),
+  })
+  assert.equal(generic.ok, false)
+  assert.ok(generic.missing.includes('opção válida de transporte do pet'))
+
+  const missingAddress = preparePetshopOrderDraft({
+    args: { ...baseArgs, service_transport_mode: 'buscar_e_levar' },
+    services: [service], appointments: [], settings,
+    now: new Date('2026-07-23T10:00:00-03:00'),
+  })
+  assert.equal(missingAddress.ok, false)
+  assert.ok(missingAddress.missing.includes('rua e número para transporte do pet'))
+  assert.ok(missingAddress.missing.includes('bairro para transporte do pet'))
+  assert.ok(missingAddress.missing.includes('cidade para transporte do pet'))
+  assert.ok(missingAddress.missing.includes('ponto de referência para transporte do pet'))
+
+  const complete = preparePetshopOrderDraft({
+    args: {
+      ...baseArgs,
+      service_transport_mode: 'buscar_e_levar',
+      service_transport_address: 'Rua das Flores, 120',
+      service_transport_neighborhood: 'Centro',
+      service_transport_city: 'Muriaé',
+      service_transport_reference: 'portão azul',
+    },
+    services: [service], appointments: [], settings,
+    now: new Date('2026-07-23T10:00:00-03:00'),
+  })
+  assert.equal(complete.ok, true)
+  assert.equal(complete.order.service_transport_fee, 20)
+  assert.equal(complete.order.total, 110)
+  assert.match(complete.summary, /Buscar e levar.*R\$\s*20,00/i)
+  assert.match(complete.summary, /Rua das Flores, 120.*Centro.*Muriaé/i)
+  assert.match(complete.summary, /portão azul/i)
+})
+
+test('validador impede resumo antes de modalidade e endereco do MotoDog', () => {
+  const availableRun = [{
+    name: 'check_petshop_availability',
+    ok: true,
+    result: {
+      status: 'available',
+      requested_slot: { available: true, scheduled_at: '2026-07-23T16:00:00-03:00' },
+    },
+  }]
+  const commonFacts = {
+    pet_name: 'Thor', species: 'dog', breed: 'Shih Tzu', weight_kg: 8,
+    service_type: 'banho', service_date: '2026-07-23', service_preferred_time: '16:00',
+  }
+
+  const generic = validatePetbotConversationReply({
+    reply: 'Sim, 16:00 está disponível. Posso preparar o resumo do agendamento?',
+    facts: { ...commonFacts, service_transport_mode: 'motodog' },
+    serviceContext: true,
+    toolRuns: availableRun,
+  })
+  assert.equal(generic.ok, false)
+  assert.ok(generic.problems.some((problem) => /modalidade/i.test(problem)))
+
+  const optionPrompt = validatePetbotConversationReply({
+    reply: 'Qual modalidade você prefere: buscar e levar, somente buscar ou somente levar?',
+    facts: { ...commonFacts, service_transport_mode: 'motodog' },
+    serviceContext: true,
+    toolRuns: availableRun,
+  })
+  assert.equal(optionPrompt.ok, true)
+
+  const missingAddress = validatePetbotConversationReply({
+    reply: 'Posso preparar o resumo agora?',
+    facts: { ...commonFacts, service_transport_mode: 'buscar_e_levar' },
+    serviceContext: true,
+    toolRuns: availableRun,
+  })
+  assert.equal(missingAddress.ok, false)
+  assert.ok(missingAddress.problems.some((problem) => /endereço/i.test(problem)))
+
+  const unconfirmedProfileAddress = validatePetbotConversationReply({
+    reply: 'Posso preparar o resumo agora?',
+    facts: {
+      ...commonFacts,
+      service_transport_mode: 'buscar_e_levar',
+      service_transport_address: 'Rua das Flores, 120',
+      service_transport_neighborhood: 'Centro',
+      service_transport_city: 'Muriaé',
+      service_transport_reference: 'portão azul',
+      service_transport_address_confirmed: false,
+    },
+    serviceContext: true,
+    toolRuns: availableRun,
+  })
+  assert.equal(unconfirmedProfileAddress.ok, false)
+  assert.ok(unconfirmedProfileAddress.problems.some((problem) => /não foi confirmado/i.test(problem)))
+})
