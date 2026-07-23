@@ -27,6 +27,7 @@ import {
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
 import { buildPetbotSearchText, recoverPetbotContextFromHistory } from '../server/lib/petbotContext.js'
+import { inferExplicitPetTransportMode } from '../server/lib/chat.js'
 
 const service = {
   id: 'service-long-small',
@@ -40,6 +41,17 @@ const service = {
   coat_type: 'longo',
   species: 'dog',
 }
+
+test('pedido generico de busca apresenta opcoes do MotoDog sem escolher modalidade', () => {
+  const history = [{
+    role: 'assistant',
+    content: 'Você prefere levar a Nina até a loja ou utilizar o serviço de MotoDog?',
+  }]
+
+  assert.equal(inferExplicitPetTransportMode('consegue buscar aqui?', history), 'motodog')
+  assert.equal(inferExplicitPetTransportMode('vocês podem buscar em casa?', history), 'motodog')
+  assert.equal(inferExplicitPetTransportMode('buscar e levar', history), 'buscar_e_levar')
+})
 
 test('prompt v3 entrega autonomia conversacional sem despejar catalogo ou frase pronta', () => {
   const prompt = buildPetbotAgentV3Prompt({
