@@ -197,9 +197,21 @@ test('ordem impressa usa a largura nativa da Print iD sem forcar altura', async 
   assert.match(source, /Endereço de entrega/)
   assert.match(source, /Endereço do cliente/)
   assert.match(source, /completeClientAddress/)
+  assert.match(source, /order\.delivery_reference/)
+  assert.match(source, /client\.address/)
+  assert.match(source, /client\.neighborhood/)
+  assert.match(source, /Referência/)
   assert.match(source, /const address = completeClientAddress\(order\) \|\| orderOriginAddress\(order\)/)
   assert.match(source, /AV CONSTANTINO PINTO, 191/)
   assert.match(source, /\(32\)98520-5279/)
+})
+
+test('ordem PetBot persiste e exibe o ponto de referência da entrega', async () => {
+  const migration = await read('supabase/migrations/20260723004000_delivery_order_full_address.sql')
+  assert.match(migration, /add column if not exists delivery_reference text/)
+  assert.match(migration, /p_payload->>''delivery_reference''/)
+  assert.match(migration, /delivery_reference = excluded\.delivery_reference/)
+  assert.match(migration, /update public\.service_delivery_orders o/)
 })
 
 test('todos os comprovantes usam a largura 80mm da Print iD', async () => {

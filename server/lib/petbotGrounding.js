@@ -45,7 +45,8 @@ export function detectExplicitProductFulfillmentType(message = '') {
   }
   if (
     /^(?:entrega|delivery)$/.test(normalized)
-    || /\b(?:quero entrega|quero que entregue|prefiro entrega|pode ser entrega|pode entregar|manda pra mim|mandar pra mim|envia pra mim|receber em casa)\b/.test(normalized)
+    || /^(?:pode ser )?entrega(?: aqui| pra ca| para ca| no meu endereco| em casa)?(?: por favor)?$/.test(normalized)
+    || /\b(?:quero entrega|quero que entregue|prefiro entrega|pode ser entrega|pode entregar|consegue entregar|manda (?:aqui|pra mim|para mim)|mandar (?:aqui|pra mim|para mim)|envia (?:aqui|pra mim|para mim)|receber em casa)\b/.test(normalized)
   ) return 'entrega'
   if (
     /^(?:retirada|retirar|retirar na loja|vou retirar|vou buscar|eu busco|vou pegar|eu pego)$/.test(normalized)

@@ -296,8 +296,12 @@ test('checkout pergunta pagamento somente na entrega e usa a combinar na retirad
 
 test('detecção estrutural de checkout diferencia escolha, dúvida e peso do pet', () => {
   assert.equal(detectExplicitProductFulfillmentType('quero entrega e vou pagar no cartão'), 'entrega')
+  assert.equal(detectExplicitProductFulfillmentType('entrega aqui por favor'), 'entrega')
+  assert.equal(detectExplicitProductFulfillmentType('pode entregar aqui pra mim'), 'entrega')
+  assert.equal(detectExplicitProductFulfillmentType('manda aqui para mim'), 'entrega')
   assert.equal(detectExplicitProductPaymentMethod('quero entrega e vou pagar no cartão'), 'cartao')
   assert.equal(detectExplicitProductFulfillmentType('vocês fazem entrega?'), '')
+  assert.equal(detectExplicitProductFulfillmentType('quanto custa a entrega aqui?'), '')
   assert.equal(detectExplicitProductQuantity('pode ser 3kg', 'granel'), 3)
   assert.equal(detectExplicitProductQuantity('pode ser uns 3', 'granel'), 3)
   assert.equal(detectExplicitProductQuantity('me vê três quilos', 'granel'), 3)

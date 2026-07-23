@@ -62,6 +62,13 @@ test('primeira resposta do PetBot recebe a apresentação determinística da Lun
   assert.match(grounding, /alreadyIntroduced = \(history \|\| \[\]\)\.some/)
 })
 
+test('confirmação terminal sempre encerra com agradecimento da Luna', () => {
+  const localChat = read('server/lib/chat.js')
+  assert.match(localChat, /const PETBOT_FRIENDLY_CLOSING = 'Agradecemos pela preferência! Estamos à disposição\. Volte sempre! 😊'/)
+  assert.match(localChat, /return `\$\{committedMessage\}\\n\$\{PETBOT_FRIENDLY_CLOSING\}`/)
+  assert.equal((localChat.match(/lines\.push\(PETBOT_FRIENDLY_CLOSING\)/g) || []).length, 2)
+})
+
 test('opções de produto são persistidas e revalidadas por id no turno seguinte', () => {
   const localChat = read('server/lib/chat.js')
   assert.match(localChat, /last_product_candidates/)

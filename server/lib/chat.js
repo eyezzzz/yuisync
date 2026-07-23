@@ -1607,6 +1607,8 @@ function inferPetbotServiceOrderType({ interpretation = {}, facts = {}, message 
   return ''
 }
 
+const PETBOT_FRIENDLY_CLOSING = 'Agradecemos pela preferência! Estamos à disposição. Volte sempre! 😊'
+
 function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedService = null, timezone = 'America/Sao_Paulo' } = {}) {
   const runs = Array.isArray(toolRuns) ? toolRuns : []
   const availabilityRun = [...runs].reverse().find((run) => (
@@ -1629,9 +1631,10 @@ function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedServ
     && ['committed', 'already_committed'].includes(run?.result?.status)
   ))
   if (committedRun) {
-    return petName
+    const committedMessage = petName
       ? `Pronto! O agendamento do ${petName} foi confirmado com sucesso.`
       : 'Pronto! O agendamento foi confirmado com sucesso.'
+    return `${committedMessage}\n${PETBOT_FRIENDLY_CLOSING}`
   }
 
   const preparedRun = [...runs].reverse().find((run) => (
@@ -1711,6 +1714,7 @@ function buildPetbotCommittedReply({ pendingOrder = null, result = {}, timezone 
     }
     if (cleanText(order.notes)) lines.push(`Observação registrada: ${cleanText(order.notes)}.`)
     lines.push(`Total: ${formatPetbotCurrency(result.total ?? order.total)}. Pagamento após a conclusão do serviço.`)
+    lines.push(PETBOT_FRIENDLY_CLOSING)
     return lines.join('\n')
   }
 
@@ -1723,6 +1727,7 @@ function buildPetbotCommittedReply({ pendingOrder = null, result = {}, timezone 
   if (cleanText(result.pix_key)) {
     lines.push(`Chave Pix: ${cleanText(result.pix_key)}${cleanText(result.pix_holder_name) ? ` — ${cleanText(result.pix_holder_name)}` : ''}.`)
   }
+  lines.push(PETBOT_FRIENDLY_CLOSING)
   return lines.join('\n')
 }
 

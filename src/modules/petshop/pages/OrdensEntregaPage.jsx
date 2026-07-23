@@ -15,22 +15,27 @@ const ALL_STATUS_STEPS = [
 
 function orderAddress(order) {
   return [
-    order.delivery_address || order.client?.owner_address,
-    order.delivery_neighborhood || order.client?.owner_neighborhood,
-    order.delivery_city || order.client?.owner_city,
+    order.delivery_address || order.client?.address || order.client?.owner_address,
+    order.delivery_neighborhood || order.client?.neighborhood || order.client?.owner_neighborhood,
+    order.delivery_city || order.client?.city || order.client?.owner_city,
   ].filter(Boolean).join(' - ')
 }
 
 function completeClientAddress(order) {
   const client = order.client || {}
   const details = client.details || {}
-  const address = order.delivery_address || client.owner_address || ''
+  const address = order.delivery_address || client.address || client.owner_address || ''
   const number = order.delivery_number || client.address_number || details.address_number || ''
   const complement = order.delivery_complement || client.address_complement || details.address_complement || ''
-  const neighborhood = order.delivery_neighborhood || client.owner_neighborhood || ''
-  const city = order.delivery_city || client.owner_city || ''
+  const neighborhood = order.delivery_neighborhood || client.neighborhood || client.owner_neighborhood || ''
+  const city = order.delivery_city || client.city || client.owner_city || ''
   const zipCode = order.delivery_zip_code || client.zip_code || details.zip_code || ''
-  const reference = order.delivery_reference || client.address_reference || details.address_reference || ''
+  const reference = order.delivery_reference
+    || client.address_reference
+    || details.address_reference
+    || extractNoteValue(order.notes || order.sale?.notes, 'Referência')
+    || extractNoteValue(order.notes || order.sale?.notes, 'Referencia')
+    || ''
   const streetLine = [address, number && `Nº ${number}`, complement].filter(Boolean).join(', ')
   const locationLine = [neighborhood && `Bairro ${neighborhood}`, city, zipCode && `CEP ${zipCode}`].filter(Boolean).join(' · ')
   return [streetLine, locationLine, reference && `Referência: ${reference}`].filter(Boolean).join(' · ')
