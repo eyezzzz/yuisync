@@ -1,3 +1,5 @@
+import { classifyCommonPetBreed } from '../../shared/petbotBreedCatalog.js'
+
 const FOOD_BRANDS = new Map([
   ['premier', 'premier'],
   ['royal canin', 'royal canin'],
@@ -14,32 +16,6 @@ const FOOD_BRANDS = new Map([
   ['hills', 'hills'],
   ['hill s', 'hills'],
   ['pro plan', 'pro plan'],
-])
-
-const DOG_BREEDS = new Map([
-  ['shih tzu', { label: 'shih tzu', size: 'pequeno' }],
-  ['shi tzu', { label: 'shih tzu', size: 'pequeno' }],
-  ['shihtzu', { label: 'shih tzu', size: 'pequeno' }],
-  ['shitzu', { label: 'shih tzu', size: 'pequeno' }],
-  ['yorkshire', { label: 'yorkshire', size: 'pequeno' }],
-  ['lhasa', { label: 'lhasa', size: 'pequeno' }],
-  ['lhasa apso', { label: 'lhasa', size: 'pequeno' }],
-  ['spitz', { label: 'spitz', size: 'pequeno' }],
-  ['spitz alemao', { label: 'spitz', size: 'pequeno' }],
-  ['poodle', { label: 'poodle', size: 'pequeno' }],
-  ['pinscher', { label: 'pinscher', size: 'pequeno' }],
-  ['maltese', { label: 'maltes', size: 'pequeno' }],
-  ['maltes', { label: 'maltes', size: 'pequeno' }],
-  ['pug', { label: 'pug', size: 'pequeno' }],
-  ['bulldog frances', { label: 'bulldog frances', size: 'pequeno' }],
-  ['golden', { label: 'golden', size: 'grande' }],
-  ['labrador', { label: 'labrador', size: 'grande' }],
-  ['rottweiler', { label: 'rottweiler', size: 'grande' }],
-  ['pastor alemao', { label: 'pastor alemao', size: 'grande' }],
-  ['pitbull', { label: 'pitbull', size: 'grande' }],
-  ['border collie', { label: 'border collie', size: 'medio' }],
-  ['beagle', { label: 'beagle', size: 'medio' }],
-  ['cocker', { label: 'cocker', size: 'medio' }],
 ])
 
 const TYPE_ALIASES = {
@@ -158,8 +134,12 @@ function detectBrand(text = '') {
 
 function detectBreed(text = '') {
   const normalized = normalizeCatalogText(text)
-  for (const [needle, breed] of DOG_BREEDS.entries()) {
-    if (normalized.includes(needle)) return breed
+  const classification = classifyCommonPetBreed(normalized)
+  if (classification) {
+    return {
+      label: normalizeCatalogText(classification.canonical),
+      size: normalizeCatalogText(classification.size),
+    }
   }
   return { label: '', size: '' }
 }
@@ -180,11 +160,11 @@ function detectSpecies(text = '') {
   return ''
 }
 
-function detectSize(text = '') {
+export function detectCatalogPetSize(text = '') {
   const normalized = normalizeCatalogText(text)
-  if (/racas pequenas|raca pequena|porte pequeno|pequeno|mini|\brp\b/.test(normalized)) return 'pequeno'
-  if (/racas medias|racas media|porte medio|medio|\brm\b/.test(normalized)) return 'medio'
-  if (/racas grandes|racas grande|porte grande|grande|\brg\b/.test(normalized)) return 'grande'
+  if (/racas? pequenas?|porte pequeno|pequeno|mini|\bpeq\b|\brp\b|rac peq/.test(normalized)) return 'pequeno'
+  if (/racas? medias?|porte medio|medio|\bmed\b|\brm\b|rac med/.test(normalized)) return 'medio'
+  if (/racas? grandes?|porte grande|grande|\bgrd\b|\brg\b|rac gr/.test(normalized)) return 'grande'
   return detectBreed(normalized).size || ''
 }
 
@@ -196,6 +176,54 @@ export function extractPackageKg(text = '') {
   return Number.isFinite(value) && value > 0 ? value : null
 }
 
+export function normalizeRationPackagePreference(value = '', packageKg = null) {
+  const normalized = normalizeCatalogText(value)
+  const lastMatchIndex = (pattern) => {
+    const matches = [...normalized.matchAll(pattern)]
+    return matches.length ? matches.at(-1).index : -1
+  }
+  const explicitPreferences = [
+    { value: 'granel', index: lastMatchIndex(/\bgranel\b/g) },
+    {
+      value: 'pacote_pequeno',
+      index: Math.max(
+        lastMatchIndex(/\bpacote_pequeno\b/g),
+        lastMatchIndex(/\b(?:pacote|embalagem)\s+(?:pequen[oa]|menor)\b/g),
+      ),
+    },
+    {
+      value: 'saco_maior',
+      index: Math.max(
+        lastMatchIndex(/\bsaco_maior\b/g),
+        lastMatchIndex(/\b(?:saco|sacaria|embalagem)\s+(?:maior|grande|fechad[oa])\b/g),
+        lastMatchIndex(/\b(?:saco|sacaria)\b/g),
+      ),
+    },
+  ].filter((entry) => entry.index >= 0)
+  if (explicitPreferences.length) {
+    return explicitPreferences.sort((left, right) => right.index - left.index)[0].value
+  }
+
+  const explicitKg = Number(packageKg || extractPackageKg(normalized) || 0)
+  if (explicitKg > 0) return explicitKg >= 7 ? 'saco_maior' : 'pacote_pequeno'
+  return ''
+}
+
+export function rationPackagePreferenceForProduct(product = {}) {
+  const metadata = product?.type ? product : classifyProduct(product)
+  if (metadata.isBulk || metadata.type === 'granel') return 'granel'
+  if (Number(metadata.packageKg || 0) >= 7) return 'saco_maior'
+  if (Number(metadata.packageKg || 0) > 0) return 'pacote_pequeno'
+  return ''
+}
+
+export function buildRationPackagePreferenceReply(message = '', state = {}) {
+  const request = detectCatalogRequest(message, state)
+  if (!['racao', 'granel'].includes(request.type)) return ''
+  if (request.packagePreference || request.packageKg) return ''
+  return 'Você prefere a ração a granel, pacote pequeno de 1 ou 2 kg, ou saco maior de 7, 10, 15, 20 ou 25 kg?'
+}
+
 export function classifyProduct(product = {}) {
   product = product || {}
   const text = productText(product)
@@ -204,18 +232,23 @@ export function classifyProduct(product = {}) {
   const metadata = objectValue(product.bot_metadata)
   const isBulk = metadata.is_bulk === true || /\bgranel\b/.test(text) || /\ba granel\b/.test(text)
   const brand = normalizeCatalogText(metadata.brand) || detectBrand(text)
-  const breed = metadata.breed
-    ? { label: String(metadata.breed).trim(), normalized: normalizeCatalogText(metadata.breed) }
+  const metadataBreed = Array.isArray(metadata.breed)
+    ? (metadata.breed.length === 1 ? metadata.breed[0] : '')
+    : metadata.breed
+  const breed = metadataBreed
+    ? { label: normalizeCatalogText(metadataBreed), normalized: normalizeCatalogText(metadataBreed) }
     : detectBreed(text)
   const age = normalizeCatalogText(metadata.age_category || metadata.age) || detectAge(text)
   const species = normalizeCatalogText(metadata.species || product.species_target) || detectSpecies(text)
-  const size = normalizeCatalogText(metadata.size || metadata.pet_size) || detectSize(text)
+  const size = normalizeCatalogText(metadata.size || metadata.pet_size) || detectCatalogPetSize(text)
   const metadataPackageKg = Number(metadata.package_kg || metadata.packageKg || 0)
   const packageKg = isBulk ? null : (metadataPackageKg > 0 ? metadataPackageKg : extractPackageKg(text))
   let type = normalizeCatalogText(metadata.product_type || metadata.type) || 'outro'
 
   if (isBulk) {
     type = 'granel'
+  } else if (/\bracao\b/.test(category)) {
+    type = 'racao'
   } else if (type !== 'outro') {
     // Editable catalog metadata wins over name heuristics.
   } else if (hasAny(text, TYPE_ALIASES.antipulgas)) {
@@ -254,30 +287,38 @@ export function classifyProduct(product = {}) {
 }
 
 export function detectCatalogRequest(message = '', state = {}) {
+  const productKind = state.productKind || state.product_kind
+  const statePackagePreference = state.packagePreference || state.package_preference
+  const statePackageKg = state.packageKg || state.package_kg
+  const ageCategory = state.ageCategory || state.age_category
   const text = normalizeCatalogText([
     message,
-    state.productKind,
-    state.packagePreference,
+    productKind,
+    statePackagePreference,
     state.brand,
     state.breed,
-    state.ageCategory,
+    ageCategory,
   ].filter(Boolean).join(' '))
-  const packageKg = extractPackageKg(message) || Number(state.packageKg || 0) || null
-  const wantsBulk = /\bgranel\b/.test(text) || state.packagePreference === 'granel'
+  const packageKg = extractPackageKg(message) || Number(statePackageKg || 0) || null
+  const packagePreference = normalizeRationPackagePreference(
+    [statePackagePreference, message].filter(Boolean).join(' '),
+    packageKg,
+  )
+  const wantsBulk = packagePreference === 'granel'
   const wantsRation = /racao|alimento|comida|premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree/.test(text)
-    || state.productKind === 'food'
+    || productKind === 'food'
     || wantsBulk
     || Boolean(packageKg)
-  const wantsFlea = hasAny(text, TYPE_ALIASES.antipulgas) || state.productKind === 'flea'
-  const wantsLitter = hasAny(text, TYPE_ALIASES.areia) || state.productKind === 'litter'
+  const wantsFlea = hasAny(text, TYPE_ALIASES.antipulgas) || productKind === 'flea'
+  const wantsLitter = hasAny(text, TYPE_ALIASES.areia) || productKind === 'litter'
 
-  if (wantsFlea) return { type: 'antipulgas', packageKg, wantsBulk }
-  if (wantsLitter) return { type: 'areia', packageKg, wantsBulk }
-  if (wantsRation) return { type: wantsBulk ? 'granel' : 'racao', packageKg, wantsBulk }
-  if (hasAny(text, TYPE_ALIASES.higiene)) return { type: 'higiene', packageKg, wantsBulk }
-  if (hasAny(text, TYPE_ALIASES.petisco)) return { type: 'petisco', packageKg, wantsBulk }
-  if (hasAny(text, TYPE_ALIASES.acessorio)) return { type: 'acessorio', packageKg, wantsBulk }
-  return { type: '', packageKg, wantsBulk }
+  if (wantsFlea) return { type: 'antipulgas', packageKg, wantsBulk, packagePreference }
+  if (wantsLitter) return { type: 'areia', packageKg, wantsBulk, packagePreference }
+  if (wantsRation) return { type: wantsBulk ? 'granel' : 'racao', packageKg, wantsBulk, packagePreference }
+  if (hasAny(text, TYPE_ALIASES.higiene)) return { type: 'higiene', packageKg, wantsBulk, packagePreference }
+  if (hasAny(text, TYPE_ALIASES.petisco)) return { type: 'petisco', packageKg, wantsBulk, packagePreference }
+  if (hasAny(text, TYPE_ALIASES.acessorio)) return { type: 'acessorio', packageKg, wantsBulk, packagePreference }
+  return { type: '', packageKg, wantsBulk, packagePreference }
 }
 
 function allowedTypeForRequest(requestType, metadata) {
@@ -285,6 +326,11 @@ function allowedTypeForRequest(requestType, metadata) {
   if (requestType === 'racao') return metadata.type === 'racao' || metadata.type === 'granel'
   if (requestType === 'granel') return metadata.type === 'granel'
   return metadata.type === requestType
+}
+
+function allowedPackageForPreference(packagePreference, metadata) {
+  if (!packagePreference) return true
+  return rationPackagePreferenceForProduct(metadata) === packagePreference
 }
 
 function exactPackageScore(metadata, requestedKg) {
@@ -300,26 +346,41 @@ function exactPackageScore(metadata, requestedKg) {
 function scoreMetadata(metadata, state = {}, message = '') {
   const request = detectCatalogRequest(message, state)
   const requestText = normalizeCatalogText(message)
+  const requestedBreed = normalizeCatalogText(state.breed)
+  const productBreed = normalizeCatalogText(metadata.breed)
+  const requestedBrand = normalizeCatalogText(state.brand)
+  const requestedAge = state.ageCategory || state.age_category
+  const rationRequest = request.type === 'racao' || request.type === 'granel'
   let score = 0
 
   if (request.type && !allowedTypeForRequest(request.type, metadata)) return -999
+  if (!allowedPackageForPreference(request.packagePreference, metadata)) return -999
+  if (rationRequest && state.species && metadata.species && metadata.species !== state.species) return -999
+  if (
+    rationRequest
+    && requestedBreed
+    && productBreed
+    && !requestedBreed.includes(productBreed)
+    && !productBreed.includes(requestedBreed)
+  ) return -999
+  if (rationRequest && state.size && metadata.size && metadata.size !== state.size) return -999
   if (metadata.barcode && requestText.includes(normalizeCatalogText(metadata.barcode))) score += 100
   for (const token of catalogTokens(message)) {
     if (metadata.searchable.includes(token)) score += token.length >= 5 ? 4 : 2
   }
   if (state.species && metadata.species && metadata.species !== state.species) score -= 60
   if (state.species && metadata.species === state.species) score += 16
-  if (state.ageCategory && metadata.age === state.ageCategory) score += 14
-  if (state.ageCategory && metadata.age && metadata.age !== state.ageCategory) score -= 18
-  if (state.breed && metadata.breed && normalizeCatalogText(state.breed).includes(metadata.breed)) score += 20
+  if (requestedAge && metadata.age === requestedAge) score += 14
+  if (requestedAge && metadata.age && metadata.age !== requestedAge) score -= 18
+  if (state.breed && metadata.breed && requestedBreed.includes(productBreed)) score += 20
   if (state.breed && !metadata.breed && metadata.size && state.size === metadata.size) score += 8
-  if (state.breed && metadata.breed && !normalizeCatalogText(state.breed).includes(metadata.breed)) score -= 8
+  if (state.breed && metadata.breed && !requestedBreed.includes(productBreed)) score -= 8
   if (state.size && metadata.size === state.size) score += 10
   if (state.size && metadata.size && metadata.size !== state.size) score -= 6
-  if (state.brand && metadata.brand === normalizeCatalogText(state.brand)) score += 22
-  if (state.brand && metadata.brand && metadata.brand !== normalizeCatalogText(state.brand)) score -= 8
+  if (state.brand && metadata.brand === requestedBrand) score += 22
+  if (state.brand && metadata.brand && metadata.brand !== requestedBrand) score -= 8
 
-  if (request.type === 'granel' || state.packagePreference === 'granel') {
+  if (request.type === 'granel' || request.packagePreference === 'granel') {
     score += metadata.isBulk ? 35 : -80
   } else if (request.type === 'racao') {
     score += metadata.type === 'racao' ? 10 : 0

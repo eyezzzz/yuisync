@@ -13,6 +13,7 @@ import {
   buildPetbotAgentV3Prompt,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
+  mergeProductQueryFacts,
   shouldAnswerVerifiedStoreQuestion,
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
@@ -20,8 +21,127 @@ import {
   detectExplicitVeterinaryEmergency,
   normalizePetbotInterpretation,
 } from '../server/lib/petbotAi.js'
+import {
+  buildRationPackagePreferenceReply,
+  classifyProduct,
+  detectCatalogRequest,
+  rankCatalogProducts,
+} from '../server/lib/petbotCatalog.js'
+import {
+  COMMON_PET_BREED_CLASSIFICATIONS,
+  classifyCommonPetBreed,
+} from '../shared/petbotBreedCatalog.js'
 
 const now = new Date('2026-07-22T10:00:00-03:00')
+
+test('todas as raças cadastradas no catálogo comum possuem porte comercial', () => {
+  const missing = COMMON_PET_BREED_CLASSIFICATIONS
+    .filter((entry) => !classifyCommonPetBreed(entry.canonical)?.size)
+    .map((entry) => entry.canonical)
+
+  assert.deepEqual(missing, [])
+  assert.equal(classifyCommonPetBreed('Shih Tzu')?.size, 'pequeno')
+  assert.equal(classifyCommonPetBreed('Beagle')?.size, 'medio')
+  assert.equal(classifyCommonPetBreed('Golden Retriever')?.size, 'grande')
+  assert.equal(classifyCommonPetBreed('Poodle gigante')?.size, 'grande')
+  assert.equal(classifyCommonPetBreed('Schnauzer miniatura')?.size, 'pequeno')
+})
+
+test('interpretador deriva porte da raça sem depender da resposta do modelo', () => {
+  assert.equal(normalizePetbotInterpretation({ breed: 'Shih Tzu' }).size, 'pequeno')
+  assert.equal(normalizePetbotInterpretation({ breed: 'Border Collie' }).size, 'medio')
+  assert.equal(normalizePetbotInterpretation({ breed: 'Rottweiler' }).size, 'grande')
+})
+
+test('toda ração pergunta o formato antes de consultar produtos', () => {
+  const state = { product_kind: 'food', breed: 'Shih Tzu', size: 'pequeno' }
+  const reply = buildRationPackagePreferenceReply('quero uma ração para shih tzu', state)
+
+  assert.match(reply, /granel/i)
+  assert.match(reply, /1 ou 2 kg/i)
+  assert.match(reply, /7, 10, 15, 20 ou 25 kg/i)
+  assert.equal(buildRationPackagePreferenceReply('quero a granel', state), '')
+  assert.equal(buildRationPackagePreferenceReply('quero saco de 15 kg', state), '')
+})
+
+test('preferência de embalagem e raça sobrevivem a mensagens separadas', () => {
+  const firstTurn = mergeProductQueryFacts({
+    interpretation: { product_kind: 'food', breed: 'Shih Tzu', brand: 'Premier' },
+    message: 'quero uma ração Premier para shih tzu',
+  })
+  const secondTurn = mergeProductQueryFacts({
+    interpretation: {},
+    previousFacts: firstTurn,
+    message: 'e a granel?',
+  })
+  const thirdTurn = mergeProductQueryFacts({
+    interpretation: {},
+    previousFacts: secondTurn,
+    message: 'na verdade prefiro saco maior',
+  })
+
+  assert.equal(firstTurn.size, 'pequeno')
+  assert.equal(secondTurn.breed, 'Shih Tzu')
+  assert.equal(secondTurn.brand, 'premier')
+  assert.equal(secondTurn.package_preference, 'granel')
+  assert.equal(detectCatalogRequest('e a granel?', secondTurn).type, 'granel')
+  assert.equal(thirdTurn.package_preference, 'saco_maior')
+})
+
+test('porte escrito diretamente pelo cliente não depende da interpretação da LLM', () => {
+  assert.equal(mergeProductQueryFacts({
+    interpretation: {},
+    message: 'quero ração para raças pequenas',
+  }).size, 'pequeno')
+  assert.equal(mergeProductQueryFacts({
+    interpretation: {},
+    message: 'quero ração para porte médio',
+  }).size, 'medio')
+  assert.equal(mergeProductQueryFacts({
+    interpretation: {},
+    message: 'quero ração para raças grandes',
+  }).size, 'grande')
+})
+
+test('busca por raça inclui o porte geral e elimina outra raça e outro porte', () => {
+  const products = [
+    { id: 'shih-1kg', name: 'Premier Shih Tzu 1 KG', category: 'Ração', price: 62.5, stock_quantity: 2, active: true },
+    { id: 'lhasa-1kg', name: 'Premier Lhasa Apso 1 KG', category: 'Ração', price: 59.9, stock_quantity: 2, active: true },
+    { id: 'small-bulk', name: 'GRANEL BIONATURAL ADULTO RAÇAS PEQUENAS KG', category: 'Ração', price: 18, stock_quantity: 20, active: true },
+    { id: 'large-bulk', name: 'GRANEL BIONATURAL ADULTO RAÇAS GRANDES KG', category: 'Ração', price: 17, stock_quantity: 20, active: true },
+  ]
+  const ranked = rankCatalogProducts(products, {
+    product_kind: 'food',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    size: 'pequeno',
+    brand: 'premier',
+    package_preference: 'granel',
+  }, 'e a granel?')
+
+  assert.deepEqual(ranked.map((item) => item.product.id), ['small-bulk'])
+})
+
+test('formatos pequeno e saco maior não se misturam', () => {
+  const products = [
+    { id: 'small', name: 'Ração Cães Pequenos 2 KG', category: 'Ração', price: 45, stock_quantity: 2, active: true },
+    { id: 'large', name: 'Ração Cães Pequenos 15 KG', category: 'Ração', price: 190, stock_quantity: 2, active: true },
+    { id: 'bulk', name: 'GRANEL RAÇAS PEQUENAS KG', category: 'Ração', price: 16, stock_quantity: 20, active: true },
+  ]
+
+  assert.deepEqual(
+    rankCatalogProducts(products, { product_kind: 'food', size: 'pequeno', package_preference: 'pacote_pequeno' }, 'ração')
+      .map((item) => item.product.id),
+    ['small'],
+  )
+  assert.deepEqual(
+    rankCatalogProducts(products, { product_kind: 'food', size: 'pequeno', package_preference: 'saco_maior' }, 'ração')
+      .map((item) => item.product.id),
+    ['large'],
+  )
+  assert.equal(classifyProduct(products[2]).type, 'granel')
+})
+
 const veterinaryService = {
   id: 'vet-consultation',
   code: 'consulta_veterinaria',

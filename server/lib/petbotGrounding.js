@@ -1,5 +1,13 @@
 import { DateTime } from 'luxon'
-import { classifyProduct, normalizeCatalogText } from './petbotCatalog.js'
+import { classifyCommonPetBreed } from '../../shared/petbotBreedCatalog.js'
+import {
+  classifyProduct,
+  detectCatalogPetSize,
+  detectCatalogRequest,
+  normalizeCatalogText,
+  normalizeRationPackagePreference,
+  rationPackagePreferenceForProduct,
+} from './petbotCatalog.js'
 
 function clean(value = '') {
   return String(value ?? '').trim()
@@ -327,6 +335,7 @@ function productDimension(product = {}) {
     age_category: clean(metadata.age),
     size: clean(metadata.size),
     brand: clean(metadata.brand),
+    package_preference: rationPackagePreferenceForProduct(metadata),
     package_kg: metadata.packageKg || null,
     category: clean(product.category),
     type: clean(metadata.type),
@@ -334,6 +343,7 @@ function productDimension(product = {}) {
 }
 
 const PRODUCT_DIMENSIONS = [
+  ['package_preference', 'formato da ração'],
   ['species', 'espécie'],
   ['age_category', 'fase de vida'],
   ['size', 'porte'],
@@ -389,6 +399,8 @@ export function buildPetbotAgentV3Prompt({
     'Princípios operacionais:',
     '- Nunca afirme preço, estoque, serviço exato, duração, data ou horário sem um resultado de ferramenta no turno atual ou um pedido pendente validado.',
     '- Para produtos, pesquise o catálogo. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções.',
+    '- Para toda compra de ração, antes de listar produtos descubra o formato: granel, pacote pequeno de 1 ou 2 kg, ou saco maior de 7, 10, 15, 20 ou 25 kg. Se o cliente já informou o formato ou o peso da embalagem, não pergunte novamente.',
+    '- Quando o cliente informar uma raça, considere tanto produtos específicos daquela raça quanto produtos gerais do porte correspondente. Nunca ofereça produto específico de outra raça nem ração de outro porte.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
@@ -444,12 +456,77 @@ export function buildPetbotAgentV3Prompt({
 }
 
 export function normalizeProductQueryFacts(interpretation = {}, serviceFacts = {}) {
+  const breedClassification = classifyCommonPetBreed(
+    interpretation.breed || serviceFacts.breed,
+  )
+  const packageKg = Number(interpretation.package_kg || 0) || null
   return {
-    species: clean(interpretation.species || serviceFacts.species),
+    product_kind: clean(interpretation.product_kind),
+    species: clean(interpretation.species || serviceFacts.species || breedClassification?.species),
+    breed: clean(breedClassification?.canonical || interpretation.breed || serviceFacts.breed),
     age_category: clean(interpretation.age_category),
-    size: clean(interpretation.size),
+    size: clean(
+      interpretation.size
+      || serviceFacts.size
+      || breedClassification?.size
+      || detectCatalogPetSize(interpretation.breed || serviceFacts.breed),
+    ),
     brand: normalizeCatalogText(interpretation.brand),
-    package_kg: Number(interpretation.package_kg || 0) || null,
+    package_preference: normalizeRationPackagePreference(
+      interpretation.package_preference,
+      packageKg,
+    ),
+    package_kg: packageKg,
+  }
+}
+
+export function mergeProductQueryFacts({
+  interpretation = {},
+  previousFacts = {},
+  serviceFacts = {},
+  message = '',
+} = {}) {
+  const current = normalizeProductQueryFacts(interpretation, serviceFacts)
+  const previous = normalizeProductQueryFacts(previousFacts, serviceFacts)
+  const messageBreed = classifyCommonPetBreed(message)
+  const messageSize = detectCatalogPetSize(message)
+  const currentRequest = detectCatalogRequest(message, {
+    productKind: current.product_kind || previous.product_kind,
+    packagePreference: current.package_preference,
+    packageKg: current.package_kg,
+  })
+  const currentPackagePreference = current.package_preference || currentRequest.packagePreference
+  const changedPackageFormat = Boolean(
+    currentPackagePreference
+    && previous.package_preference
+    && currentPackagePreference !== previous.package_preference,
+  )
+  const merged = {
+    product_kind: current.product_kind || previous.product_kind,
+    species: current.species || previous.species || clean(messageBreed?.species),
+    breed: current.breed || previous.breed || clean(messageBreed?.canonical),
+    age_category: current.age_category || previous.age_category,
+    size: current.size || previous.size || clean(messageBreed?.size) || messageSize,
+    brand: current.brand || previous.brand,
+    package_preference: currentPackagePreference || previous.package_preference,
+    package_kg: current.package_kg
+      || currentRequest.packageKg
+      || (changedPackageFormat ? null : previous.package_kg),
+  }
+  const request = detectCatalogRequest(message, {
+    productKind: merged.product_kind,
+    packagePreference: merged.package_preference,
+    packageKg: merged.package_kg,
+    brand: merged.brand,
+    breed: merged.breed,
+    ageCategory: merged.age_category,
+  })
+
+  return {
+    ...merged,
+    product_kind: merged.product_kind || (['racao', 'granel'].includes(request.type) ? 'food' : ''),
+    package_preference: request.packagePreference || merged.package_preference,
+    package_kg: request.packageKg || merged.package_kg,
   }
 }
 

@@ -103,6 +103,114 @@ export const COMMON_PET_BREED_CLASSIFICATIONS = Object.freeze([
   { canonical: 'Rhodesian Ridgeback', species: 'dog', coat_type: 'curto', aliases: ['rhodesian ridgeback', 'ridgeback'] },
 ])
 
+// Commercial size class used to match food for a specific breed with food for
+// its general size (for example, Shih Tzu -> "raças pequenas"). Explicit size
+// variants below take precedence for breeds whose name covers multiple sizes.
+export const PETBOT_BREED_SIZE_GROUPS = Object.freeze({
+  pequeno: Object.freeze([
+    'spitz alemao',
+    'shih tzu',
+    'yorkshire terrier',
+    'lhasa apso',
+    'maltes',
+    'pequines',
+    'cavalier king charles spaniel',
+    'papillon',
+    'havanes',
+    'biewer terrier',
+    'poodle',
+    'bichon frise',
+    'west highland white terrier',
+    'scottish terrier',
+    'fox terrier',
+    'bulldog frances',
+    'pug',
+    'pinscher miniatura',
+    'boston terrier',
+    'terrier brasileiro',
+    'jack russell terrier',
+    'chihuahua',
+    'dachshund',
+  ]),
+  medio: Object.freeze([
+    'border collie',
+    'shiba inu',
+    'pastor australiano',
+    'pastor de shetland',
+    'welsh corgi',
+    'boiadeiro australiano',
+    'keeshond',
+    'retriever da nova escocia',
+    'cocker spaniel ingles',
+    'cocker spaniel americano',
+    'schnauzer',
+    'cao de agua portugues',
+    'lagotto romagnolo',
+    'labradoodle',
+    'goldendoodle',
+    'bulldog ingles',
+    'american pit bull terrier',
+    'american staffordshire terrier',
+    'staffordshire bull terrier',
+    'american bully',
+    'beagle',
+    'basset hound',
+    'shar pei',
+    'bull terrier',
+    'whippet',
+  ]),
+  grande: Object.freeze([
+    'golden retriever',
+    'labrador retriever',
+    'pastor alemao',
+    'husky siberiano',
+    'chow chow',
+    'akita',
+    'samoieda',
+    'collie de pelo longo',
+    'boiadeiro bernes',
+    'terra nova',
+    'sao bernardo',
+    'malamute do alasca',
+    'galgo afegao',
+    'setter irlandes',
+    'setter ingles',
+    'boxer',
+    'doberman',
+    'rottweiler',
+    'cane corso',
+    'dogo argentino',
+    'dogue alemao',
+    'fila brasileiro',
+    'dalmata',
+    'weimaraner',
+    'vizsla',
+    'greyhound',
+    'rhodesian ridgeback',
+  ]),
+})
+
+const breedSizeByCanonical = new Map(
+  Object.entries(PETBOT_BREED_SIZE_GROUPS)
+    .flatMap(([size, breeds]) => breeds.map((breed) => [normalizePetbotBreedText(breed), size])),
+)
+
+function explicitBreedSize(normalizedBreed = '') {
+  if (/\bpoodle (?:toy|miniatura)\b/.test(normalizedBreed)) return 'pequeno'
+  if (/\bpoodle (?:medio|standard)\b/.test(normalizedBreed)) return 'medio'
+  if (/\bpoodle gigante\b/.test(normalizedBreed)) return 'grande'
+  if (/\bschnauzer miniatura\b/.test(normalizedBreed)) return 'pequeno'
+  if (/\bschnauzer standard\b/.test(normalizedBreed)) return 'medio'
+  if (/\bschnauzer gigante\b/.test(normalizedBreed)) return 'grande'
+  return ''
+}
+
+function sizeForBreedEntry(entry, normalizedBreed = '') {
+  return explicitBreedSize(normalizedBreed)
+    || breedSizeByCanonical.get(normalizePetbotBreedText(entry?.canonical))
+    || ''
+}
+
 const AMBIGUOUS_BREEDS = Object.freeze([
   { canonical: 'SRD', species: 'dog', aliases: ['srd', 'sem raça definida', 'sem raca definida', 'vira lata', 'vira-lata', 'mestiço', 'mestico'], reason: 'A pelagem varia entre indivíduos.' },
 ])
@@ -146,6 +254,7 @@ function matchesAlias(normalizedBreed, alias) {
   return normalizedBreed === alias
     || normalizedBreed.startsWith(`${alias} `)
     || normalizedBreed.endsWith(` ${alias}`)
+    || normalizedBreed.includes(` ${alias} `)
 }
 
 export function classifyCommonPetBreed(value = '') {
@@ -157,6 +266,7 @@ export function classifyCommonPetBreed(value = '') {
     return {
       canonical: explicitVariant.entry.canonical,
       species: explicitVariant.entry.species,
+      size: sizeForBreedEntry(explicitVariant.entry, normalized),
       coat_type: explicitVariant.entry.coat_type,
       ambiguous: false,
       explicit_coat: true,
@@ -169,6 +279,7 @@ export function classifyCommonPetBreed(value = '') {
     return {
       canonical: exact.entry.canonical,
       species: exact.entry.species,
+      size: sizeForBreedEntry(exact.entry, normalized),
       coat_type: exact.entry.coat_type,
       ambiguous: false,
       classification_version: CLASSIFICATION_VERSION,
@@ -180,6 +291,7 @@ export function classifyCommonPetBreed(value = '') {
     return {
       canonical: ambiguous.entry.canonical,
       species: ambiguous.entry.species,
+      size: null,
       coat_type: null,
       ambiguous: true,
       reason: ambiguous.entry.reason,

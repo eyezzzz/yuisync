@@ -1,4 +1,5 @@
 import { classifyCommonPetBreed } from '../../shared/petbotBreedCatalog.js'
+import { normalizeRationPackagePreference } from './petbotCatalog.js'
 
 const DEFAULT_TEMPERATURE = 0.5
 const DEFAULT_TIMEOUT_MS = 12_000
@@ -102,21 +103,22 @@ function compactState(state = {}) {
   const agentFacts = state?.petbot_agent?.facts
     || state?.petbot_agent?.explicit_facts
     || {}
+  const productFacts = state?.petbot_agent?.product_facts || {}
   return {
     customer_name: petbot.customerName || '',
     intent: petbot.intent || '',
     awaiting: petbot.awaiting || '',
     pet_name: petbot.petName || agentFacts.pet_name || '',
-    species: petbot.species || agentFacts.species || '',
-    breed: petbot.breed || agentFacts.breed || '',
-    size: petbot.size || '',
+    species: petbot.species || agentFacts.species || productFacts.species || '',
+    breed: petbot.breed || agentFacts.breed || productFacts.breed || '',
+    size: petbot.size || agentFacts.size || productFacts.size || '',
     weight_kg: petbot.weightKg || petbot.weight_kg || agentFacts.weight_kg || '',
     weight_label: agentFacts.weight_label || '',
     weight_estimated: Boolean(agentFacts.weight_estimated),
     coat_type: petbot.coatType || petbot.coat_type || agentFacts.coat_type || '',
-    age_category: petbot.ageCategory || '',
-    brand: petbot.brand || '',
-    package_preference: petbot.packagePreference || '',
+    age_category: petbot.ageCategory || productFacts.age_category || '',
+    brand: petbot.brand || productFacts.brand || '',
+    package_preference: petbot.packagePreference || productFacts.package_preference || '',
     service_date: petbot.serviceDate || agentFacts.service_date || '',
     service_time_preference: petbot.serviceTimePreference || agentFacts.service_time_preference || '',
     service_preferred_time: petbot.servicePreferredTime || agentFacts.service_preferred_time || '',
@@ -137,6 +139,8 @@ export function normalizePetbotInterpretation(input = {}) {
   const species = normalizeSpecies(data.species)
   const payment = normalizePayment(data.payment_method || data.payment)
   const breed = normalizeBreed(data.breed || data.pet_breed)
+  const breedClassification = classifyCommonPetBreed(breed)
+  const packageKg = clampNumber(data.package_kg ?? data.packageKg, 0.1, 50)
 
   return {
     customer_name: pickString(data.customer_name || data.customerName, 60),
@@ -144,7 +148,7 @@ export function normalizePetbotInterpretation(input = {}) {
     pet_name: pickString(data.pet_name || data.petName, 60),
     species,
     breed,
-    size: pickEnum(data.size, SIZES),
+    size: pickEnum(data.size, SIZES) || pickEnum(breedClassification?.size, SIZES),
     weight_kg: clampNumber(data.weight_kg ?? data.weightKg, 0.1, 200),
     weight_label: pickString(data.weight_label || data.weightLabel, 60),
     weight_estimated: Boolean(data.weight_estimated || data.weightEstimated),
@@ -152,8 +156,11 @@ export function normalizePetbotInterpretation(input = {}) {
     age_category: pickEnum(data.age_category || data.ageCategory, AGES),
     product_kind: pickEnum(data.product_kind || data.productKind, PRODUCT_KINDS),
     brand: pickString(data.brand, 60),
-    package_preference: pickString(data.package_preference || data.packagePreference, 40),
-    package_kg: clampNumber(data.package_kg ?? data.packageKg, 0.1, 50),
+    package_preference: normalizeRationPackagePreference(
+      data.package_preference || data.packagePreference,
+      packageKg,
+    ),
+    package_kg: packageKg,
     quantity: clampNumber(data.quantity, 1, 99),
     service_type: pickString(data.service_type || data.serviceType, 80),
     service_grooming_detail: pickString(data.service_grooming_detail || data.serviceGroomingDetail, 120),
@@ -239,6 +246,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Se o cliente disser um valor aproximado, mantenha weight_kg com o valor informado, weight_label com a forma natural e weight_estimated=true.',
         'Se disser uma faixa suficiente para o catalogo, como "ate 10 kg" ou "mais de 10 kg", use um valor operacional compativel em weight_kg, preserve a frase em weight_label e marque weight_estimated=true.',
         'Extraia coat_type somente quando o cliente disser a pelagem. A classificacao de pelagem por raca sera resolvida pelo catalogo do sistema, nao por esta camada.',
+        'Para racao, normalize package_preference como granel, pacote_pequeno ou saco_maior. Use pacote_pequeno para embalagens menores que 7 kg e saco_maior para embalagens de 7 kg ou mais.',
         'Para banho/tosa e veterinaria, pagamento nao e obrigatorio no chat; extraia payment_method somente quando o cliente falar pagamento espontaneamente.',
         'Classifique veterinary_risk="emergency" quando houver dificuldade para respirar, sangramento intenso, convulsao, desmaio/inconsciencia, envenenamento, atropelamento ou outro risco imediato. Use "urgent" para sintomas preocupantes sem risco imediato e "none" nos demais casos.',
         'Se o cliente disser "Robertao, quero uma racao", extraia customer_name "Robertao" e intent "produto".',

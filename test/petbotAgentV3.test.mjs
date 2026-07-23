@@ -345,6 +345,14 @@ test('mercadoria de banho e pacote nao entram no catalogo de agendamento', () =>
   }
 })
 
+test('ração continua produto quando metadado legado marcou serviço por engano', () => {
+  assert.equal(isServiceCatalogProduct({
+    name: 'GRANEL BIONATURAL ADULTO RAÇAS PEQUENAS KG',
+    category: 'Ração',
+    bot_metadata: { product_type: 'servico' },
+  }), false)
+})
+
 test('banho de gato continua selecionando somente o catalogo felino', () => {
   const result = resolvePetshopService({
     serviceQuery: 'banho',

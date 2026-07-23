@@ -10,7 +10,11 @@ import {
   buildInterpretedPetbotSearchText,
   interpretPetbotMessageWithLlm,
 } from './petbotAi.js'
-import { detectCatalogRequest, rankCatalogProducts } from './petbotCatalog.js'
+import {
+  buildRationPackagePreferenceReply,
+  detectCatalogRequest,
+  rankCatalogProducts,
+} from './petbotCatalog.js'
 import {
   PETBOT_AGENT_TOOLS,
   acceptedPetbotHandoffOffer,
@@ -36,7 +40,7 @@ import {
   buildPetbotAgentV3Prompt,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
-  normalizeProductQueryFacts,
+  mergeProductQueryFacts,
   shouldAnswerVerifiedStoreQuestion,
   validatePetbotConversationReply,
   validatePetbotOperationalReply,
@@ -552,15 +556,15 @@ function rankProduct(product, terms) {
   return score
 }
 
-function selectRelevantProducts(products, message) {
+function selectRelevantProducts(products, message, state = {}) {
   const available = (products || []).filter(isSellableProduct)
   const searchTerms = buildSearchTerms(message)
   const intent = detectIntent(message)
 
   if (!available.length) return []
 
-  const catalogRequest = detectCatalogRequest(message)
-  const catalogMatched = rankCatalogProducts(available, {}, message)
+  const catalogRequest = detectCatalogRequest(message, state)
+  const catalogMatched = rankCatalogProducts(available, state, message)
     .filter((item) => item.score > 0)
     .map((item) => item.product)
   if (catalogMatched.length) return catalogMatched.slice(0, PRODUCT_CONTEXT_LIMIT)
@@ -887,7 +891,7 @@ async function loadProductsByIds(supabase, moduleId, tenantId, productIds = []) 
   return data || []
 }
 
-async function loadProducts(supabase, moduleId, tenantId, message) {
+async function loadProducts(supabase, moduleId, tenantId, message, state = {}) {
   const selectColumns = 'id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active, bot_metadata'
   const loadCatalog = () => cachedLoad(productCatalogCache, scopeCacheKey(moduleId, tenantId), PRODUCT_CATALOG_CACHE_MS, async () => {
     let query = supabase
@@ -919,17 +923,25 @@ async function loadProducts(supabase, moduleId, tenantId, message) {
       searchProductsByTerms(supabase, moduleId, tenantId, terms, selectColumns),
       loadUpsellProducts(supabase, moduleId, tenantId, selectColumns),
     ])
-    const selected = selectRelevantProducts(searchedProducts, message)
-    if (selected.length > 0) return mergeProductsById(selected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
+    const selected = selectRelevantProducts(searchedProducts, message, state)
+    const request = detectCatalogRequest(message, state)
+    if (selected.length > 0 && !['racao', 'granel'].includes(request.type)) {
+      return mergeProductsById(selected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
+    }
     const catalog = await loadCatalog()
-    const fallbackSelected = selectRelevantProducts(catalog || [], message)
-    if (fallbackSelected.length > 0) return mergeProductsById(fallbackSelected.slice(0, PRODUCT_CONTEXT_LIMIT), upsellProducts)
+    const fallbackSelected = selectRelevantProducts(catalog || [], message, state)
+    const combined = rankCatalogProducts(
+      mergeProductsById(selected, fallbackSelected),
+      state,
+      message,
+    ).map((item) => item.product).slice(0, PRODUCT_CONTEXT_LIMIT)
+    if (combined.length > 0) return mergeProductsById(combined, upsellProducts)
     return []
   }
 
   const catalog = await loadCatalog()
 
-  const selected = selectRelevantProducts(catalog || [], message)
+  const selected = selectRelevantProducts(catalog || [], message, state)
   if (selected.length > 0) return selected.slice(0, PRODUCT_CONTEXT_LIMIT)
   return (catalog || []).slice(0, PRODUCT_CONTEXT_LIMIT)
 }
@@ -1717,6 +1729,7 @@ async function respondWithPetbotAgent({
   runtimeConfig,
   customer,
   llmInterpretation,
+  initialProductFacts,
   products,
   services,
   appointments,
@@ -1735,6 +1748,13 @@ async function respondWithPetbotAgent({
   let serviceFacts = mergeInterpretedPetbotServiceFacts({
     interpretation: interpretationForFacts,
     previousFacts: previousAgentContext.facts || previousAgentContext.explicit_facts || {},
+  })
+  const productConversationText = buildCatalogSearchText(history, trimmedMessage)
+  const productFacts = mergeProductQueryFacts({
+    interpretation: llmInterpretation || {},
+    previousFacts: initialProductFacts || previousAgentContext.product_facts || {},
+    serviceFacts,
+    message: trimmedMessage,
   })
   let pendingOrder = pendingAtTurnStart
   let orderResult = null
@@ -1944,10 +1964,11 @@ async function respondWithPetbotAgent({
       service_notes: serviceFacts.service_notes,
       service_notes_resolved: Boolean(serviceFacts.service_notes_resolved),
       service_transport_mode: serviceFacts.service_transport_mode,
-      product_kind: cleanText(llmInterpretation?.product_kind) || null,
-      age_category: cleanText(llmInterpretation?.age_category) || null,
-      brand: cleanText(llmInterpretation?.brand) || null,
-      package_kg: Number(llmInterpretation?.package_kg || 0) || null,
+      product_kind: cleanText(productFacts.product_kind) || null,
+      age_category: cleanText(productFacts.age_category) || null,
+      brand: cleanText(productFacts.brand) || null,
+      package_preference: cleanText(productFacts.package_preference) || null,
+      package_kg: Number(productFacts.package_kg || 0) || null,
     },
     pendingOrder: pendingAtTurnStart,
     operationalContext,
@@ -1960,16 +1981,33 @@ async function respondWithPetbotAgent({
     const args = parseAgentToolArguments(toolCall)
 
     if (name === 'search_petshop_products') {
+      const known = mergeProductQueryFacts({
+        interpretation: {
+          product_kind: productFacts.product_kind || llmInterpretation?.product_kind,
+          species: productFacts.species || args.species,
+          breed: productFacts.breed,
+          age_category: productFacts.age_category || args.age_category,
+          size: productFacts.size || args.size,
+          brand: productFacts.brand || args.brand,
+          package_preference: productFacts.package_preference,
+          package_kg: productFacts.package_kg || args.package_kg,
+        },
+        previousFacts: productFacts,
+        serviceFacts,
+        message: [trimmedMessage, cleanText(args.query)].filter(Boolean).join(' '),
+      })
       const query = [
         cleanText(args.query),
-        cleanText(args.species),
-        cleanText(args.age_category),
-        cleanText(args.size),
-        cleanText(args.brand),
-        Number(args.package_kg || 0) > 0 ? `${Number(args.package_kg)} kg` : '',
+        cleanText(known.species),
+        cleanText(known.breed),
+        cleanText(known.age_category),
+        cleanText(known.size),
+        cleanText(known.brand),
+        cleanText(known.package_preference),
+        Number(known.package_kg || 0) > 0 ? `${Number(known.package_kg)} kg` : '',
       ].filter(Boolean).join(' ')
       if (!query) return { ok: false, action: name, status: 'invalid_input', error: 'missing_query' }
-      const searched = (await loadProducts(supabase, moduleId, session.tenant_id, query))
+      const searched = (await loadProducts(supabase, moduleId, session.tenant_id, query, known))
         .filter(isSellableProduct)
       const refreshed = await loadProductsByIds(
         supabase,
@@ -1977,16 +2015,12 @@ async function respondWithPetbotAgent({
         session.tenant_id,
         searched.map((product) => product.id),
       )
-      const found = refreshed.filter(isSellableProduct)
+      const found = rankCatalogProducts(
+        refreshed.filter(isSellableProduct),
+        known,
+        query,
+      ).map((item) => item.product)
       liveProducts = mergeProductsById(liveProducts, found)
-      const known = {
-        ...normalizeProductQueryFacts(llmInterpretation || {}, serviceFacts),
-        species: cleanText(args.species) || normalizeProductQueryFacts(llmInterpretation || {}, serviceFacts).species,
-        age_category: cleanText(args.age_category) || cleanText(llmInterpretation?.age_category),
-        size: cleanText(args.size) || cleanText(llmInterpretation?.size),
-        brand: cleanText(args.brand) || cleanText(llmInterpretation?.brand),
-        package_kg: Number(args.package_kg || llmInterpretation?.package_kg || 0) || null,
-      }
       const differentiation = analyzeProductDifferentiation(found.slice(0, 12), known)
       return {
         ok: found.length > 0,
@@ -2402,6 +2436,9 @@ async function respondWithPetbotAgent({
       storeInformation: verifiedStoreInformation,
     }) || buildUnknownStoreQuestionReply({ storeInformation: verifiedStoreInformation })
     : ''
+  const rationPackageReply = !pendingAtTurnStart && !serviceOrderType
+    ? buildRationPackagePreferenceReply(trimmedMessage, productFacts)
+    : ''
   const shouldForceServicePreparation = !pendingAtTurnStart && shouldForcePetbotServicePreparation({
     orderType: serviceOrderType,
     customerName: trustedCustomerName(),
@@ -2478,6 +2515,17 @@ async function respondWithPetbotAgent({
   } else if (verifiedStoreReply) {
     agentResult = {
       reply: verifiedStoreReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
+    }
+  } else if (rationPackageReply) {
+    agentResult = {
+      reply: rationPackageReply,
       toolRuns: preloadedToolRuns,
       tokensUsed: 0,
       messages: [],
@@ -2628,6 +2676,7 @@ async function respondWithPetbotAgent({
       updatedAt: botSentAt,
       pending_order: pendingOrder,
       facts: serviceFacts,
+      product_facts: productFacts,
       resolved_service: resolvedServiceThisTurn
         ? {
           fact_signature: petbotServiceFactsSignature(serviceFacts),
@@ -2994,12 +3043,23 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     mediaContext: options.mediaContext || '',
     customInstructions,
   })
+  const recoveredAgentContext = parseJsonObject(recoveredContext)?.petbot_agent || {}
+  const productConversationText = buildCatalogSearchText(history, trimmedMessage)
+  const initialProductFacts = mergeProductQueryFacts({
+    interpretation: llmInterpretation || {},
+    previousFacts: recoveredAgentContext.product_facts || {},
+    serviceFacts: recoveredAgentContext.facts || recoveredAgentContext.explicit_facts || {},
+    message: trimmedMessage,
+  })
   const catalogSearchText = buildPetbotSearchText(
-    buildInterpretedPetbotSearchText(buildCatalogSearchText(history, trimmedMessage), llmInterpretation),
+    buildInterpretedPetbotSearchText(productConversationText, {
+      ...(llmInterpretation || {}),
+      ...initialProductFacts,
+    }),
     recoveredContext,
   )
   const [products, services, appointments] = await Promise.all([
-    loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText),
+    loadProducts(supabase, moduleId, session.tenant_id, catalogSearchText, initialProductFacts),
     loadPetshopServices(supabase, moduleId, session.tenant_id),
     loadAppointments(supabase, moduleId, session.tenant_id, storeSettings),
   ])
@@ -3019,6 +3079,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       runtimeConfig,
       customer,
       llmInterpretation,
+      initialProductFacts,
       products,
       services,
       appointments,

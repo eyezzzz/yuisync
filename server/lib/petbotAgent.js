@@ -421,13 +421,18 @@ function catalogServiceCode(productId = '') {
 export function isServiceCatalogProduct(product = {}) {
   const metadata = objectValue(product?.bot_metadata)
   const name = normalize(product.name)
+  const category = normalize(product.category)
   const text = normalize([product.name, product.category, metadata.product_type].filter(Boolean).join(' '))
 
+  // The operational category is stronger evidence than stale metadata left by
+  // legacy imports. A physical ration must remain sellable even if an old row
+  // was accidentally tagged with product_type="servico".
+  if (/racao|petisco|medicamento|acessorio|areia|brinquedo/.test(category)) return false
   if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return false
   if (/pacote.*banho|banho.*pacote/.test(name)) return false
 
   return normalize(metadata.product_type) === 'servico'
-    || normalize(product.category) === 'servico'
+    || category === 'servico'
     || /banho|tosa|desembolo|escovac|hidrat|higieniz|consulta|vacina|exame|cirurg/.test(text)
 }
 
