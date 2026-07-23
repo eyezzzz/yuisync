@@ -151,6 +151,33 @@ test('preferência de embalagem e raça sobrevivem a mensagens separadas', () =>
   assert.equal(thirdTurn.package_preference, 'saco_maior')
 })
 
+test('marca informada no primeiro turno permanece até o catálogo ou mudança explícita', () => {
+  const initial = mergeProductQueryFacts({
+    interpretation: { product_kind: 'food', brand: 'Premier' },
+    message: 'vocês têm ração da Premier?',
+  })
+  const withFormatAndBreed = mergeProductQueryFacts({
+    interpretation: { breed: 'Shih Tzu' },
+    previousFacts: initial,
+    message: 'queria a granel, para shih tzu',
+  })
+  const completed = mergeProductQueryFacts({
+    interpretation: { age_category: 'adulto' },
+    previousFacts: withFormatAndBreed,
+    message: 'ele é adulto',
+  })
+  const expanded = mergeProductQueryFacts({
+    interpretation: {},
+    previousFacts: completed,
+    message: 'pode mostrar outra marca',
+  })
+
+  assert.equal(initial.brand, 'premier')
+  assert.equal(withFormatAndBreed.brand, 'premier')
+  assert.equal(completed.brand, 'premier')
+  assert.equal(expanded.brand, '')
+})
+
 test('kg solicitado depois da escolha a granel continua quantidade e não vira pacote', () => {
   const previous = mergeProductQueryFacts({
     interpretation: {
@@ -286,7 +313,46 @@ test('busca por raça inclui o porte geral e elimina outra raça e outro porte',
     quantity: 2,
   }, 'e a granel?')
 
-  assert.deepEqual(ranked.map((item) => item.product.id), ['small-bulk'])
+  assert.deepEqual(ranked.map((item) => item.product.id), [])
+  assert.deepEqual(
+    rankCatalogProducts(products, {
+      product_kind: 'food',
+      species: 'dog',
+      breed: 'Shih Tzu',
+      size: 'pequeno',
+      age_category: 'adulto',
+      package_preference: 'granel',
+      quantity: 2,
+    }, 'e a granel?').map((item) => item.product.id),
+    ['small-bulk'],
+  )
+})
+
+test('marca explícita elimina outras marcas inclusive quando não está no dicionário', () => {
+  const products = [
+    { id: 'premier', name: 'GRANEL PREMIER ADULTO RAÇAS PEQUENAS KG', category: 'Ração', price: 21.5, stock_quantity: 17, active: true },
+    { id: 'bionatural', name: 'GRANEL BIONATURAL ADULTO RAÇAS PEQUENAS KG', category: 'Ração', price: 18, stock_quantity: 5, active: true },
+    { id: 'formula', name: 'GRANEL FORMULA NATURAL ADULTO RAÇAS PEQUENAS KG', category: 'Ração', price: 20, stock_quantity: 5, active: true },
+  ]
+  const base = {
+    product_kind: 'food',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    size: 'pequeno',
+    age_category: 'adulto',
+    package_preference: 'granel',
+  }
+
+  assert.deepEqual(
+    rankCatalogProducts(products, { ...base, brand: 'premier' }, 'ração a granel')
+      .map((item) => item.product.id),
+    ['premier'],
+  )
+  assert.deepEqual(
+    rankCatalogProducts(products, { ...base, brand: 'bionatural' }, 'ração a granel')
+      .map((item) => item.product.id),
+    ['bionatural'],
+  )
 })
 
 test('formatos pequeno e saco maior não se misturam', () => {

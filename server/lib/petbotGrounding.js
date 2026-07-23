@@ -447,6 +447,7 @@ export function buildPetbotAgentV3Prompt({
     '- Para toda compra de ração, antes de listar produtos descubra o formato: granel, pacote pequeno de 1 ou 2 kg, ou saco maior de 7, 10, 15, 20 ou 25 kg. Se o cliente já informou o formato ou o peso da embalagem, não pergunte novamente.',
     '- Antes de oferecer ração, confirme também a espécie, a raça ou porte quando for cachorro, e a fase de vida: filhote, adulto, sênior ou castrado. Quando uma raça cadastrada estiver informada, o servidor já deriva o porte; nunca pergunte o porte novamente.',
     '- Quando o cliente informar uma raça, considere tanto produtos específicos daquela raça quanto produtos gerais do porte correspondente. Nunca ofereça produto específico de outra raça nem ração de outro porte.',
+    '- Quando o cliente informar uma marca, preserve-a nos turnos seguintes e mostre somente produtos dessa marca. Não substitua silenciosamente por outra marca; ofereça alternativas apenas depois que o cliente aceitar ampliar a busca.',
     '- Em ração a granel, valores em kg pedidos depois da escolha são quantidade da venda, não tamanho de embalagem. Preserve package_preference="granel" e use quantity com os kg solicitados.',
     '- Se selected_product_candidate estiver preenchido, o cliente escolheu uma opção apresentada anteriormente. Use exatamente o ID desse candidato e o estoque revalidado; não substitua por uma nova busca aproximada nem diga que acabou quando sufficient_stock=true.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
@@ -551,6 +552,15 @@ export function mergeProductQueryFacts({
     && previous.pet_name
     && normalizeCatalogText(current.pet_name) !== normalizeCatalogText(previous.pet_name),
   )
+  const rejectsOtherBrand = /\bnao (?:quero|aceito|pode ser) (?:de )?outra marca\b/.test(normalizedMessage)
+  const clearsBrandPreference = !rejectsOtherBrand && Boolean(
+    /\b(?:outra marca|qualquer marca|sem preferencia de marca|nao tenho preferencia de marca)\b/.test(normalizedMessage)
+    || (
+      previous.brand
+      && /\bnao precisa ser\b/.test(normalizedMessage)
+      && normalizedMessage.includes(normalizeCatalogText(previous.brand))
+    ),
+  )
   const currentRequest = detectCatalogRequest(message, {
     productKind: current.product_kind || previous.product_kind,
     packagePreference: current.package_preference,
@@ -586,7 +596,7 @@ export function mergeProductQueryFacts({
       || clean(messageBreed?.size)
       || messageSize
       || (petChanged ? '' : previous.size),
-    brand: current.brand || previous.brand,
+    brand: clearsBrandPreference ? '' : (current.brand || previous.brand),
     package_preference: currentPackagePreference || previous.package_preference,
     package_kg: bulkQuantityContinuation
       ? null

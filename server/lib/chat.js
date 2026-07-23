@@ -2139,7 +2139,20 @@ async function respondWithPetbotAgent({
         Number(known.package_kg || 0) > 0 ? `${Number(known.package_kg)} kg` : '',
       ].filter(Boolean).join(' ')
       if (!query) return { ok: false, action: name, status: 'invalid_input', error: 'missing_query' }
-      const searched = (await loadProducts(supabase, moduleId, session.tenant_id, query, known))
+      const productSelectColumns = 'id, name, category, description, species_target, barcode, image_url, price, stock_quantity, active, bot_metadata'
+      const [catalogMatches, explicitBrandMatches] = await Promise.all([
+        loadProducts(supabase, moduleId, session.tenant_id, query, known),
+        cleanText(known.brand)
+          ? searchProductsByTerms(
+            supabase,
+            moduleId,
+            session.tenant_id,
+            [cleanText(known.brand)],
+            productSelectColumns,
+          )
+          : Promise.resolve([]),
+      ])
+      const searched = mergeProductsById(explicitBrandMatches, catalogMatches)
         .filter(isSellableProduct)
       const refreshed = await loadProductsByIds(
         supabase,

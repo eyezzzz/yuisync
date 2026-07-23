@@ -351,12 +351,16 @@ function scoreMetadata(metadata, state = {}, message = '') {
   const requestedBrand = normalizeCatalogText(state.brand)
   const requestedAge = state.ageCategory || state.age_category
   const rationRequest = request.type === 'racao' || request.type === 'granel'
+  const matchesRequestedBrand = !requestedBrand
+    || metadata.brand === requestedBrand
+    || metadata.searchable.includes(requestedBrand)
   let score = 0
 
   if (request.type && !allowedTypeForRequest(request.type, metadata)) return -999
   if (!allowedPackageForPreference(request.packagePreference, metadata)) return -999
   if (rationRequest && state.species && metadata.species && metadata.species !== state.species) return -999
   if (rationRequest && requestedAge && metadata.age && metadata.age !== requestedAge) return -999
+  if (rationRequest && requestedBrand && !matchesRequestedBrand) return -999
   if (
     rationRequest
     && requestedBreed
@@ -378,8 +382,7 @@ function scoreMetadata(metadata, state = {}, message = '') {
   if (state.breed && metadata.breed && !requestedBreed.includes(productBreed)) score -= 8
   if (state.size && metadata.size === state.size) score += 10
   if (state.size && metadata.size && metadata.size !== state.size) score -= 6
-  if (state.brand && metadata.brand === requestedBrand) score += 22
-  if (state.brand && metadata.brand && metadata.brand !== requestedBrand) score -= 8
+  if (requestedBrand && matchesRequestedBrand) score += 22
 
   if (request.type === 'granel' || request.packagePreference === 'granel') {
     score += metadata.isBulk ? 35 : -80

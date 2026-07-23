@@ -74,6 +74,13 @@ test('opções de produto são persistidas e revalidadas por id no turno seguint
   assert.match(localChat, /selected_candidate:[\s\S]*sufficient_stock/)
 })
 
+test('busca de ração com marca consulta a marca diretamente antes do ranking', () => {
+  const localChat = read('server/lib/chat.js')
+  const catalog = read('server/lib/petbotCatalog.js')
+  assert.match(localChat, /explicitBrandMatches[\s\S]*searchProductsByTerms\([\s\S]*\[cleanText\(known\.brand\)\]/)
+  assert.match(catalog, /rationRequest && requestedBrand && !matchesRequestedBrand/)
+})
+
 test('configuracao de deploy expoe debounce seguro e modelos de midia', () => {
   const env = read('.env.example')
   assert.match(env, /WHATSAPP_REPLY_DEBOUNCE_MS=1000/)
