@@ -63,7 +63,6 @@ export default async function petbotLiveE2E(req: IncomingMessage, res: ServerRes
     try {
       const report = await runPetbotLiveConversations({
         tenantId,
-        onProgress: (progress: unknown) => console.log('[petbot-live-e2e]', progress),
       })
       const success = report.failed === 0 && !report.cleanup_error && report.passed === report.total
       sendJson(res, 200, { success, data: report })
