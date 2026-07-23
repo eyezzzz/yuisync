@@ -66,6 +66,9 @@ test('prompt v3 entrega autonomia conversacional sem despejar catalogo ou frase 
   assert.match(prompt, /acolhedora, simpática e natural/)
   assert.doesNotMatch(prompt, /PRECO:|QTD:|ID:/)
   assert.doesNotMatch(prompt, /Qual é o peso exato|Não vou deduzir|Bom dia! Claro/)
+  assert.match(prompt, /Sintoma e intenção principal são campos separados/)
+  assert.match(prompt, /Ofereça primeiro a consulta veterinária/)
+  assert.match(prompt, /urgent recomenda avaliação rápida, mas não autoriza transferência automática/)
 })
 
 test('Luna se apresenta e responde a saudação somente no início da conversa', () => {

@@ -3,6 +3,7 @@ import test from 'node:test'
 
 import {
   normalizePetbotInterpretation,
+  resolveEffectiveVeterinaryRisk,
   resolvePetbotTurnSemantics,
 } from '../server/lib/petbotAi.js'
 import { mergeInterpretedPetbotServiceFacts } from '../server/lib/petbotAgent.js'
@@ -10,6 +11,11 @@ import {
   detectExplicitProductFulfillmentType,
   detectExplicitProductPaymentMethod,
   detectExplicitProductQuantity,
+  acceptedVeterinaryConsultationOffer,
+  buildVeterinaryConsultationReply,
+  declinedVeterinaryConsultationOffer,
+  isVeterinaryConsultationQuestion,
+  isVeterinaryTreatmentAdviceRequest,
   mergeProductQueryFacts,
   buildVerifiedStoreQuestionReply,
   shouldAnswerVerifiedStoreQuestion,
@@ -356,4 +362,76 @@ test('MotoDog distingue modalidade generica das tres opcoes reais e preserva end
   assert.equal(facts.service_transport_city, 'Muriaé')
   assert.equal(facts.service_transport_reference, 'portão azul')
   assert.equal(facts.weight_kg, 8)
+})
+
+
+test('veterinária prioriza pergunta objetiva de consulta mesmo quando há sintoma urgente', () => {
+  assert.equal(
+    isVeterinaryConsultationQuestion('meu cachorrinho ta vomitando bastante, quanto é a consulta veterinaria de voces?'),
+    true,
+  )
+  assert.equal(isVeterinaryConsultationQuestion('vcs nao tem consulta veterinaria?'), true)
+  assert.equal(isVeterinaryConsultationQuestion('quero marcar uma consulta veterinária'), false)
+
+  const reply = buildVeterinaryConsultationReply({
+    service: {
+      name: 'CONSULTA VETERINÁRIA',
+      price: 80,
+      duration_min: 40,
+    },
+    veterinaryRisk: 'urgent',
+  })
+
+  assert.match(reply, /Sim, temos CONSULTA VETERINÁRIA/i)
+  assert.match(reply, /R\$\s*80,00/)
+  assert.match(reply, /avaliação o quanto antes/i)
+  assert.match(reply, /primeiro horário disponível/i)
+  assert.doesNotMatch(reply, /transferir|vou chamar/i)
+})
+
+test('pedido de remédio oferece consulta antes de atendimento humano', () => {
+  for (const message of [
+    'que remédio posso dar?',
+    'qual dose de dipirona eu dou?',
+    'o que ele tem?',
+    'como tratar isso em casa?',
+  ]) {
+    assert.equal(isVeterinaryTreatmentAdviceRequest(message), true, message)
+  }
+  assert.equal(isVeterinaryTreatmentAdviceRequest('vocês vendem remédio para pulga?'), false)
+
+  const reply = buildVeterinaryConsultationReply({
+    service: { name: 'Consulta veterinária', price: 75, duration_min: 30 },
+    treatmentAdvice: true,
+  })
+  assert.match(reply, /Não posso indicar remédio, dose, diagnóstico ou tratamento/i)
+  assert.match(reply, /consulta veterinária por R\$\s*75,00/i)
+  assert.match(reply, /Posso verificar um horário/i)
+  assert.doesNotMatch(reply, /chamar um atendente/i)
+})
+
+test('aceite continua consulta e recusa apenas oferece atendimento humano', () => {
+  const consultationHistory = [{
+    role: 'assistant',
+    content: 'Temos consulta veterinária por R$ 75,00. Posso verificar um horário para você?',
+  }]
+  assert.equal(acceptedVeterinaryConsultationOffer('sim por favor', consultationHistory), true)
+  assert.equal(acceptedVeterinaryConsultationOffer('quero marcar a consulta', consultationHistory), true)
+  assert.equal(declinedVeterinaryConsultationOffer('não obrigado', consultationHistory), true)
+  assert.equal(declinedVeterinaryConsultationOffer('não quero agendar consulta, quero falar com alguém', consultationHistory), true)
+  assert.equal(acceptedVeterinaryConsultationOffer('sim', [{ role: 'assistant', content: 'Qual o peso?' }]), false)
+})
+
+test('consulta ausente oferece confirmação humana sem transferir automaticamente', () => {
+  const reply = buildVeterinaryConsultationReply({ treatmentAdvice: true, service: null })
+  assert.match(reply, /Não encontrei uma consulta veterinária ativa/i)
+  assert.match(reply, /Posso chamar um atendente/i)
+  assert.doesNotMatch(reply, /Vou transferir/i)
+})
+
+
+test('risco veterinário só vira emergência automática com sinal explícito', () => {
+  assert.equal(resolveEffectiveVeterinaryRisk('meu cachorro está vomitando bastante', 'emergency'), 'urgent')
+  assert.equal(resolveEffectiveVeterinaryRisk('ele está com dificuldade para respirar', 'urgent'), 'emergency')
+  assert.equal(resolveEffectiveVeterinaryRisk('quanto custa a consulta?', 'none'), 'none')
 })
