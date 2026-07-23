@@ -11,9 +11,13 @@ import {
 } from '../server/lib/petbotAgent.js'
 import {
   buildPetbotAgentV3Prompt,
+  buildProductCheckoutQualificationReply,
   buildRationQualificationReply,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
+  detectExplicitProductFulfillmentType,
+  detectExplicitProductPaymentMethod,
+  detectExplicitProductQuantity,
   enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
   productFactsSignature,
@@ -205,6 +209,113 @@ test('kg solicitado depois da escolha a granel continua quantidade e não vira p
   assert.equal(current.package_kg, null)
   assert.equal(current.quantity, 2)
   assert.equal(productFactsSignature(current), productFactsSignature(previous))
+})
+
+test('checkout de produto ignora retirada e Pix inventados pelo modelo', () => {
+  const product = {
+    id: 'premier-adulto-granel',
+    name: 'GRANEL PREMIER FRANGO RAÇAS PEQUENAS ADULTOS KG',
+  }
+  const beforeQuantity = mergeProductQueryFacts({
+    interpretation: {
+      product_kind: 'food',
+      species: 'dog',
+      breed: 'Shih Tzu',
+      age_category: 'adulto',
+      brand: 'Premier',
+      package_preference: 'granel',
+    },
+    message: 'quero Premier a granel para Shih Tzu adulto',
+  })
+  const withQuantity = mergeProductQueryFacts({
+    interpretation: {
+      quantity: 3,
+      weight_kg: 3,
+      payment_method: 'pix',
+      fulfillment_type: 'retirada',
+    },
+    previousFacts: beforeQuantity,
+    message: 'pode ser 3kg',
+  })
+
+  assert.equal(withQuantity.quantity, 3)
+  assert.equal(withQuantity.fulfillment_type, '')
+  assert.equal(withQuantity.payment_method, '')
+  assert.match(
+    buildProductCheckoutQualificationReply({ facts: withQuantity, selectedProduct: product }),
+    /retirar na loja ou receber por entrega/i,
+  )
+})
+
+test('checkout pergunta pagamento somente na entrega e usa a combinar na retirada', () => {
+  const product = { id: 'product-1', name: 'Produto real' }
+  const selected = {
+    product_kind: 'food',
+    package_preference: 'granel',
+    quantity: 3,
+  }
+  const delivery = mergeProductQueryFacts({
+    interpretation: { payment_method: 'pix' },
+    previousFacts: selected,
+    message: 'quero entrega',
+  })
+
+  assert.equal(delivery.fulfillment_type, 'entrega')
+  assert.equal(delivery.payment_method, '')
+  assert.match(
+    buildProductCheckoutQualificationReply({ facts: delivery, selectedProduct: product }),
+    /Pix, dinheiro ou cartão/i,
+  )
+
+  const deliveryPaid = mergeProductQueryFacts({
+    interpretation: { fulfillment_type: 'retirada' },
+    previousFacts: delivery,
+    message: 'vou pagar no Pix',
+  })
+  assert.equal(deliveryPaid.fulfillment_type, 'entrega')
+  assert.equal(deliveryPaid.payment_method, 'pix')
+  assert.equal(
+    buildProductCheckoutQualificationReply({ facts: deliveryPaid, selectedProduct: product }),
+    '',
+  )
+
+  const pickup = mergeProductQueryFacts({
+    interpretation: { payment_method: 'pix' },
+    previousFacts: selected,
+    message: 'vou buscar na loja',
+  })
+  assert.equal(pickup.fulfillment_type, 'retirada')
+  assert.equal(pickup.payment_method, 'a_combinar')
+  assert.equal(
+    buildProductCheckoutQualificationReply({ facts: pickup, selectedProduct: product }),
+    '',
+  )
+})
+
+test('detecção estrutural de checkout diferencia escolha, dúvida e peso do pet', () => {
+  assert.equal(detectExplicitProductFulfillmentType('quero entrega e vou pagar no cartão'), 'entrega')
+  assert.equal(detectExplicitProductPaymentMethod('quero entrega e vou pagar no cartão'), 'cartao')
+  assert.equal(detectExplicitProductFulfillmentType('vocês fazem entrega?'), '')
+  assert.equal(detectExplicitProductQuantity('pode ser 3kg', 'granel'), 3)
+  assert.equal(detectExplicitProductQuantity('me vê três quilos', 'granel'), 3)
+  assert.equal(detectExplicitProductQuantity('quero 500g', 'granel'), 0.5)
+  assert.equal(detectExplicitProductQuantity('meu cachorro pesa 3kg', 'granel'), null)
+
+  const petWeight = mergeProductQueryFacts({
+    interpretation: {
+      package_preference: 'pacote_pequeno',
+      package_kg: 3,
+      quantity: 3,
+    },
+    previousFacts: {
+      product_kind: 'food',
+      package_preference: 'granel',
+    },
+    message: 'meu cachorro pesa 3kg',
+  })
+  assert.equal(petWeight.package_preference, 'granel')
+  assert.equal(petWeight.package_kg, null)
+  assert.equal(petWeight.quantity, null)
 })
 
 test('troca explícita de granel para pacote continua permitida', () => {
@@ -468,7 +579,7 @@ test('compra fracionada é revalidada contra o estoque antes da confirmação', 
   const args = {
     customer_name: 'Carlos', order_type: 'produto',
     items: [{ product_id: 'bulk-food', quantity: 2.5, upsell: false }],
-    payment_method: 'pix', fulfillment_type: 'retirada',
+    payment_method: 'a_combinar', fulfillment_type: 'retirada',
   }
   const available = preparePetshopOrderDraft({
     args,
@@ -476,6 +587,8 @@ test('compra fracionada é revalidada contra o estoque antes da confirmação', 
   })
   assert.equal(available.ok, true)
   assert.equal(available.order.total, 50)
+  assert.equal(available.order.payment_method, 'a_combinar')
+  assert.match(available.summary, /Pagamento: a combinar/i)
 
   const changedStock = preparePetshopOrderDraft({
     args: available.order,

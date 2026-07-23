@@ -89,7 +89,7 @@ test('recusa pedido com produto inexistente ou dados incompletos', () => {
 
   assert.equal(prepared.ok, false)
   assert.ok(prepared.missing.some((item) => item.includes('produto real')))
-  assert.ok(prepared.missing.includes('forma de pagamento'))
+  assert.equal(prepared.missing.includes('forma de pagamento'), false)
   assert.ok(prepared.missing.includes('entrega ou retirada'))
 })
 

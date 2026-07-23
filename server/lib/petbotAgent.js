@@ -1143,7 +1143,7 @@ function formatOrderSummary(order, settings = {}) {
       }
     }
   } else {
-    lines.push(`• Pagamento: ${order.payment_method}`)
+    lines.push(`• Pagamento: ${order.payment_method === 'a_combinar' ? 'a combinar' : order.payment_method}`)
     lines.push(`• Modalidade: ${order.fulfillment_type === 'entrega' ? 'entrega' : 'retirada na loja'}`)
     if (order.fulfillment_type === 'entrega') {
       lines.push(`• Endereço: ${[order.delivery_address, order.delivery_neighborhood, order.delivery_city].filter(Boolean).join(' - ')}`)
@@ -1274,7 +1274,7 @@ export const PETBOT_AGENT_TOOLS = [
               required: ['product_id', 'name', 'quantity', 'upsell'],
             },
           },
-          payment_method: { type: 'string', enum: ['pix', 'dinheiro', 'cartao'] },
+          payment_method: { type: 'string', enum: ['pix', 'dinheiro', 'cartao', 'a_combinar'] },
           fulfillment_type: { type: 'string', enum: ['entrega', 'retirada'] },
           delivery_address: strictNullableString(),
           delivery_neighborhood: strictNullableString(),
@@ -1936,8 +1936,13 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
 
     const paymentMethod = clean(args.payment_method).toLowerCase()
     const fulfillmentType = clean(args.fulfillment_type).toLowerCase()
-    if (!['pix', 'dinheiro', 'cartao'].includes(paymentMethod)) missing.push('forma de pagamento')
     if (!['entrega', 'retirada'].includes(fulfillmentType)) missing.push('entrega ou retirada')
+    if (fulfillmentType === 'entrega' && !['pix', 'dinheiro', 'cartao'].includes(paymentMethod)) {
+      missing.push('forma de pagamento')
+    }
+    if (fulfillmentType === 'retirada' && paymentMethod !== 'a_combinar') {
+      missing.push('pagamento a combinar na retirada')
+    }
 
     const deliveryAddress = nullableString(args.delivery_address, 200)
     const deliveryNeighborhood = nullableString(args.delivery_neighborhood, 100)

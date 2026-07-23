@@ -212,7 +212,7 @@ begin
     'customer_phone', coalesce(v_customer_phone, 'sem telefone'),
     'items', jsonb_build_array(jsonb_build_object('product_id', v_product_id, 'quantity', 0.5)),
     'fulfillment_type', 'retirada',
-    'payment_method', 'pix',
+    'payment_method', 'a_combinar',
     'expected_total', v_product_price * 0.5,
     'notes', 'Teste transacional descartavel do PetBot'
   );
@@ -233,6 +233,28 @@ begin
       and item.quantity = 0.5
   ) then
     raise exception 'FALHA: item fracionado nao foi gravado na venda.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.sales sale
+    where sale.id = v_sale_id
+      and sale.payment_method = 'a_combinar'
+      and sale.payment_status = 'a_receber'
+      and sale.status = 'pendente'
+      and sale.fulfillment_type = 'balcao'
+  ) then
+    raise exception 'FALHA: retirada nao foi registrada como pagamento a combinar.';
+  end if;
+
+  if not exists (
+    select 1
+    from public.service_delivery_orders delivery_order
+    where delivery_order.id = v_order_id
+      and delivery_order.status = 'pendente'
+      and delivery_order.payment_status = 'a_receber'
+  ) then
+    raise exception 'FALHA: retirada nao apareceu na aba Pendente.';
   end if;
 
   if not exists (

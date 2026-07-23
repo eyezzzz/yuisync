@@ -37,9 +37,11 @@ import {
 import {
   analyzeProductDifferentiation,
   buildPetbotAgentV3Prompt,
+  buildProductCheckoutQualificationReply,
   buildRationQualificationReply,
   buildUnknownStoreQuestionReply,
   buildVerifiedStoreQuestionReply,
+  detectExplicitProductQuantity,
   enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
   prependPetbotConversationOpening,
@@ -1307,8 +1309,13 @@ async function createConfirmedPetshopOrderViaRpc(supabase, session, settings, ar
   const payload = buildPetbotOrderTransactionPayload(session, customer, settings, args)
   if (!payload.idempotency_key) throw new Error('Chave idempotente do pedido ausente.')
   if (!payload.items.length) throw new Error('Pedido sem itens para registrar.')
-  if (payload.order_type === 'produto' && !['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)) {
-    throw new Error('Forma de pagamento ausente ou invalida.')
+  if (payload.order_type === 'produto') {
+    const validProductPayment = payload.fulfillment_type === 'retirada'
+      ? payload.payment_method === 'a_combinar'
+      : ['pix', 'dinheiro', 'cartao'].includes(payload.payment_method)
+    if (!validProductPayment) {
+      throw new Error('Forma de pagamento ausente ou invalida para a modalidade escolhida.')
+    }
   }
 
   const { data, error } = await supabase.rpc('create_petbot_order_transaction', {
@@ -1742,8 +1749,16 @@ async function respondWithPetbotAgent({
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
   const inferredTransportMode = inferExplicitPetTransportMode(trimmedMessage, history)
+  const previousProductFacts = initialProductFacts || previousAgentContext.product_facts || {}
+  const productBulkQuantityMessage = Boolean(
+    cleanText(previousProductFacts.package_preference) === 'granel'
+    && Number(detectExplicitProductQuantity(trimmedMessage, 'granel') || 0) > 0,
+  )
   const interpretationForFacts = {
     ...(llmInterpretation || {}),
+    ...(productBulkQuantityMessage
+      ? { weight_kg: null, weight_label: null, weight_estimated: false }
+      : {}),
     ...(isExplicitNoServiceNotesAnswer(trimmedMessage, history)
       ? { service_notes: null, service_notes_resolved: true }
       : {}),
@@ -1756,7 +1771,7 @@ async function respondWithPetbotAgent({
   const productConversationText = buildCatalogSearchText(history, trimmedMessage)
   let productFacts = mergeProductQueryFacts({
     interpretation: llmInterpretation || {},
-    previousFacts: initialProductFacts || previousAgentContext.product_facts || {},
+    previousFacts: previousProductFacts,
     serviceFacts,
     message: trimmedMessage,
   })
@@ -1837,7 +1852,9 @@ async function respondWithPetbotAgent({
     species: cleanText(serviceFacts.species),
     size: cleanText(serviceFacts.size),
     breed: cleanText(serviceFacts.breed),
-    weight_kg: Number(serviceFacts.weight_kg || 0) || null,
+    weight_kg: cleanText(productFacts.product_kind)
+      ? null
+      : (Number(serviceFacts.weight_kg || 0) || null),
     coat_type: cleanText(serviceFacts.coat_type),
     symptom: cleanText(serviceFacts.symptom),
     address: cleanText(llmInterpretation?.delivery_address),
@@ -1937,7 +1954,17 @@ async function respondWithPetbotAgent({
       const persistedSelectedCandidate = lastProductCandidates.find((candidate) => (
         cleanText(candidate.id) === cleanText(previousCandidateState.selected_product_id)
       ))
+      const quantitySelectedSoleCandidate = (
+        lastProductCandidates.length === 1
+        && Number(detectExplicitProductQuantity(
+          trimmedMessage,
+          productFacts.package_preference,
+        ) || 0) > 0
+      )
+        ? lastProductCandidates[0]
+        : null
       selectedRecentProductCandidate = explicitlySelectedCandidate
+        || quantitySelectedSoleCandidate
         || (rejectsPreviousProductCandidate ? null : persistedSelectedCandidate)
     } catch (error) {
       logger.warn('PetBot previous product candidate refresh failed', {
@@ -2017,9 +2044,9 @@ async function respondWithPetbotAgent({
       size: isProductConversation ? productFacts.size : serviceFacts.size,
       symptom: serviceFacts.symptom,
       veterinary_risk: cleanText(llmInterpretation?.veterinary_risk) || 'none',
-      weight_kg: serviceFacts.weight_kg,
-      weight_label: serviceFacts.weight_label,
-      weight_estimated: serviceFacts.weight_estimated,
+      weight_kg: isProductConversation ? null : serviceFacts.weight_kg,
+      weight_label: isProductConversation ? null : serviceFacts.weight_label,
+      weight_estimated: isProductConversation ? false : serviceFacts.weight_estimated,
       coat_type: serviceFacts.coat_type,
       resolved_service: resolvedServiceThisTurn
         ? {
@@ -2047,6 +2074,8 @@ async function respondWithPetbotAgent({
       package_preference: cleanText(productFacts.package_preference) || null,
       package_kg: Number(productFacts.package_kg || 0) || null,
       quantity: Number(productFacts.quantity || 0) || null,
+      payment_method: cleanText(productFacts.payment_method) || null,
+      fulfillment_type: cleanText(productFacts.fulfillment_type) || null,
       recent_product_candidates: lastProductCandidates,
       selected_product_candidate: selectedRecentProductCandidate,
     },
@@ -2344,7 +2373,20 @@ async function respondWithPetbotAgent({
       const effectiveArgs = {
         ...baseArgs,
         customer_name: trustedCustomerName() || (!isPlaceholderName(modelCustomerName) ? modelCustomerName : ''),
-        ...(isProductOrder ? {} : {
+        ...(isProductOrder ? {
+          ...(selectedRecentProductCandidate && Number(productFacts.quantity || 0) > 0
+            ? {
+              items: [{
+                product_id: selectedRecentProductCandidate.id,
+                name: selectedRecentProductCandidate.name,
+                quantity: Number(productFacts.quantity),
+                upsell: false,
+              }],
+            }
+            : {}),
+          payment_method: cleanText(productFacts.payment_method) || null,
+          fulfillment_type: cleanText(productFacts.fulfillment_type) || null,
+        } : {
           items: [],
           payment_method: null,
           fulfillment_type: 'servico',
@@ -2591,6 +2633,12 @@ async function respondWithPetbotAgent({
       facts: productFacts,
     })
     : ''
+  const productCheckoutQualificationReply = !pendingAtTurnStart && !serviceOrderType
+    ? buildProductCheckoutQualificationReply({
+      facts: productFacts,
+      selectedProduct: selectedRecentProductCandidate,
+    })
+    : ''
   const shouldForceServicePreparation = !pendingAtTurnStart && shouldForcePetbotServicePreparation({
     orderType: serviceOrderType,
     customerName: trustedCustomerName(),
@@ -2598,11 +2646,30 @@ async function respondWithPetbotAgent({
     resolvedService: resolvedServiceThisTurn,
     operationalContext,
   })
+  const shouldForceProductPreparation = Boolean(
+    !pendingAtTurnStart
+    && !serviceOrderType
+    && selectedRecentProductCandidate
+    && Number(productFacts.quantity || 0) > 0
+    && ['entrega', 'retirada'].includes(cleanText(productFacts.fulfillment_type))
+    && (
+      (
+        cleanText(productFacts.fulfillment_type) === 'retirada'
+        && cleanText(productFacts.payment_method) === 'a_combinar'
+      )
+      || (
+        cleanText(productFacts.fulfillment_type) === 'entrega'
+        && ['pix', 'dinheiro', 'cartao'].includes(cleanText(productFacts.payment_method))
+      )
+    ),
+  )
   const initialToolChoice = shouldForceServicePreparation
     ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
-    : selectedRecentProductCandidate
-      ? { type: 'function', function: { name: 'search_petshop_products' } }
-      : 'auto'
+    : shouldForceProductPreparation
+      ? { type: 'function', function: { name: 'prepare_petshop_product_order' } }
+      : selectedRecentProductCandidate
+        ? { type: 'function', function: { name: 'search_petshop_products' } }
+        : 'auto'
 
   let agentResult
   if (requestedHandoffTarget) {
@@ -2688,6 +2755,17 @@ async function respondWithPetbotAgent({
       terminal: true,
       durationMs: 0,
     }
+  } else if (productCheckoutQualificationReply) {
+    agentResult = {
+      reply: productCheckoutQualificationReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
+    }
   } else agentResult = await runPetbotAgent({
     model: runtimeConfig.modelName,
     temperature: runtimeConfig.temperature,
@@ -2740,6 +2818,11 @@ async function respondWithPetbotAgent({
           serviceOrderType
           || (pendingOrder?.order?.order_type && pendingOrder.order.order_type !== 'produto'),
         ),
+        productContext: Boolean(
+          isProductConversation
+          || pendingOrder?.order?.order_type === 'produto'
+          || selectedRecentProductCandidate,
+        ),
       })
       const problems = [
         ...(operationalValidation.problems || []),
@@ -2778,7 +2861,9 @@ async function respondWithPetbotAgent({
     pet_name: cleanText(serviceFacts.pet_name),
     species: cleanText(serviceFacts.species),
     breed: cleanText(serviceFacts.breed),
-    weight_kg: Number(serviceFacts.weight_kg || 0) || null,
+    weight_kg: isProductConversation
+      ? null
+      : (Number(serviceFacts.weight_kg || 0) || null),
     coat_type: cleanText(serviceFacts.coat_type),
     symptom: cleanText(serviceFacts.symptom),
   }
@@ -2836,7 +2921,7 @@ async function respondWithPetbotAgent({
       updatedAt: botSentAt,
       pending_order: pendingOrder,
       facts: serviceFacts,
-      product_facts: productFacts,
+      product_facts: orderResult ? {} : productFacts,
       last_product_candidates: orderResult
         ? null
         : {

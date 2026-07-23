@@ -204,6 +204,29 @@ test('validador exige nome do pet antes de chegada ou resumo', () => {
   assert.ok(validation.problems.some((problem) => /nome do pet ainda está ausente/.test(problem)))
 })
 
+test('validador não deixa compra pedir nome do pet nem pagamento na retirada', () => {
+  const asksPetName = validatePetbotConversationReply({
+    reply: 'Desculpe pela confusão! Para finalizar, preciso saber o nome do seu Shih Tzu.',
+    facts: { product_kind: 'food', quantity: 3 },
+    productContext: true,
+  })
+  assert.equal(asksPetName.ok, false)
+  assert.ok(asksPetName.problems.some((problem) => /nome do pet não é obrigatório/.test(problem)))
+
+  const asksPickupPayment = validatePetbotConversationReply({
+    reply: 'Como prefere pagar: Pix, dinheiro ou cartão?',
+    facts: {
+      product_kind: 'food',
+      quantity: 3,
+      fulfillment_type: 'retirada',
+      payment_method: 'a_combinar',
+    },
+    productContext: true,
+  })
+  assert.equal(asksPickupPayment.ok, false)
+  assert.ok(asksPickupPayment.problems.some((problem) => /pagamento é a combinar/.test(problem)))
+})
+
 test('grounding bloqueia preco, agenda, estoque e confirmacao inventados', () => {
   const invalid = validatePetbotOperationalReply({
     reply: 'Temos em estoque por R$ 120,00. O horário 14:00 está disponível e o agendamento foi confirmado.',
@@ -1239,6 +1262,7 @@ test('ferramentas separam compra de produto de agendamento de servico', () => {
   assert.ok(Object.hasOwn(productFields, 'payment_method'))
   assert.ok(Object.hasOwn(productFields, 'fulfillment_type'))
   assert.ok(Object.hasOwn(productFields, 'change_for'))
+  assert.ok(productFields.payment_method.enum.includes('a_combinar'))
   assert.equal(Object.hasOwn(serviceFields, 'payment_method'), false)
   assert.equal(Object.hasOwn(serviceFields, 'fulfillment_type'), false)
   assert.equal(Object.hasOwn(serviceFields, 'change_for'), false)

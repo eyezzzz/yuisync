@@ -16,6 +16,82 @@ function clean(value = '') {
   return String(value ?? '').trim()
 }
 
+export function detectExplicitProductPaymentMethod(message = '') {
+  const normalized = normalizeCatalogText(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return ''
+
+  const selectsPayment = /^(?:pix|dinheiro|cartao|credito|debito)$/.test(normalized)
+    || /\b(?:vou pagar|quero pagar|prefiro pagar|pode ser|pagamento (?:vai ser|sera|no|em)|pago (?:no|em|com))\b/.test(normalized)
+  if (!selectsPayment) return ''
+  if (/\bpix\b/.test(normalized)) return 'pix'
+  if (/\b(?:dinheiro|especie)\b/.test(normalized)) return 'dinheiro'
+  if (/\b(?:cartao|credito|debito)\b/.test(normalized)) return 'cartao'
+  return ''
+}
+
+export function detectExplicitProductFulfillmentType(message = '') {
+  const normalized = normalizeCatalogText(message)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return ''
+  if (/\b(?:tem|faz|fazem|voces fazem|qual (?:o )?valor|quanto custa)\b.{0,25}\bentrega\b/.test(normalized)) {
+    return ''
+  }
+  if (
+    /^(?:entrega|delivery)$/.test(normalized)
+    || /\b(?:quero entrega|quero que entregue|prefiro entrega|pode ser entrega|pode entregar|manda pra mim|mandar pra mim|envia pra mim|receber em casa)\b/.test(normalized)
+  ) return 'entrega'
+  if (
+    /^(?:retirada|retirar|retirar na loja|vou retirar|vou buscar|eu busco|vou pegar|eu pego)$/.test(normalized)
+    || /\b(?:quero retirar|prefiro retirar|pode ser retirada|retirada na loja|retirar na loja|vou retirar|vou buscar|eu busco|busco na loja|vou pegar|eu pego|passo ai|buscar na loja)\b/.test(normalized)
+  ) return 'retirada'
+  return ''
+}
+
+export function detectExplicitProductQuantity(message = '', packagePreference = '') {
+  const normalized = normalizeCatalogText(message).replace(/,/g, '.')
+  if (!normalized) return null
+
+  const countedPackage = normalized.match(/\b(\d{1,3}(?:\.\d{1,3})?)\s*(?:pacotes?|sacos?|unidades?|un)\b/)
+  if (countedPackage) return Number(countedPackage[1]) || null
+
+  if (clean(packagePreference) === 'granel') {
+    const bulk = normalized.match(/\b(\d{1,3}(?:\.\d{1,3})?)\s*(?:kg|quilos?)\b/)
+    if (bulk && !/\b(?:pesa|peso|pesando)\b/.test(normalized)) return Number(bulk[1]) || null
+    const grams = normalized.match(/\b(\d{2,4})\s*(?:g|gramas?)\b/)
+    if (grams && !/\b(?:pesa|peso|pesando)\b/.test(normalized)) {
+      return Number(grams[1]) / 1000 || null
+    }
+    const writtenNumbers = {
+      meio: 0.5,
+      meia: 0.5,
+      um: 1,
+      uma: 1,
+      dois: 2,
+      duas: 2,
+      tres: 3,
+      quatro: 4,
+      cinco: 5,
+      seis: 6,
+      sete: 7,
+      oito: 8,
+      nove: 9,
+      dez: 10,
+    }
+    const writtenBulk = normalized.match(/\b(meio|meia|um|uma|dois|duas|tres|quatro|cinco|seis|sete|oito|nove|dez)\s+quilos?\b/)
+    if (writtenBulk && !/\b(?:pesa|peso|pesando)\b/.test(normalized)) {
+      return writtenNumbers[writtenBulk[1]] || null
+    }
+  }
+
+  const plain = normalized.match(/\b(?:quero|levo|vou levar|me ve|pode ser)\s+(\d{1,3}(?:\.\d{1,3})?)\b/)
+  return plain ? Number(plain[1]) || null : null
+}
+
 export function buildPetbotConversationOpening({
   message = '',
   history = [],
@@ -263,7 +339,7 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
   }
 }
 
-export function validatePetbotConversationReply({ reply = '', facts = {}, pendingOrder = null, currentMessageIsConfirmation = false, serviceContext = false, toolRuns = [] } = {}) {
+export function validatePetbotConversationReply({ reply = '', facts = {}, pendingOrder = null, currentMessageIsConfirmation = false, serviceContext = false, productContext = false, toolRuns = [] } = {}) {
   const normalized = normalizeCatalogText(reply)
   const problems = []
 
@@ -298,6 +374,7 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
     || /(?:observacao|observacoes).{0,45}(?:banho|tosa|servico|agendamento)/.test(normalized)
   const asksPetName = /(?:qual|como).{0,30}(?:nome).{0,20}(?:pet|cachorro|cao|cadela|gato|gata|dele|dela)/.test(normalized)
     || /(?:nome).{0,20}(?:do|da|desse|dessa).{0,15}(?:pet|cachorro|cao|cadela|gato|gata)/.test(normalized)
+    || /(?:preciso|poderia|pode|informe|diga).{0,35}\bnome\b.{0,30}(?:pet|animal|cachorro|cao|cadela|gato|gata|dele|dela|seu|sua)/.test(normalized)
   const asksPetTransport = /(?:como|quem|voce|cliente|tutor|prefere).{0,55}(?:chegar|levar|trazer|motodog)/.test(normalized)
     || /(?:levar|trazer).{0,45}(?:loja|motodog)/.test(normalized)
   const asksServiceAddon = /(?:adicionar|incluir|gostaria|quer|deseja).{0,60}(?:outro servico|outro produto|algum servico|algum produto|corte de unhas|algo mais)/.test(normalized)
@@ -350,6 +427,12 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   }
   if (isServiceConversation && !clean(facts.pet_name) && !asksPetName) {
     problems.push('nome do pet ainda está ausente; pergunte somente o nome do pet antes de continuar')
+  }
+  if (productContext && asksPetName) {
+    problems.push('nome do pet não é obrigatório para concluir uma compra de produto')
+  }
+  if (productContext && clean(facts.fulfillment_type) === 'retirada' && asksPaymentMethod) {
+    problems.push('na retirada o pagamento é a combinar; não pergunte forma de pagamento')
   }
   if (isBathConversation && transportResolved && asksPetTransport) {
     problems.push('chegada do pet já foi respondida; não pergunte novamente se o cliente vai levar ou usar MotoDog')
@@ -450,6 +533,8 @@ export function buildPetbotAgentV3Prompt({
     '- Quando o cliente informar uma marca, preserve-a nos turnos seguintes e mostre somente produtos dessa marca. Não substitua silenciosamente por outra marca; ofereça alternativas apenas depois que o cliente aceitar ampliar a busca.',
     '- Em ração a granel, valores em kg pedidos depois da escolha são quantidade da venda, não tamanho de embalagem. Preserve package_preference="granel" e use quantity com os kg solicitados.',
     '- Se selected_product_candidate estiver preenchido, o cliente escolheu uma opção apresentada anteriormente. Use exatamente o ID desse candidato e o estoque revalidado; não substitua por uma nova busca aproximada nem diga que acabou quando sufficient_stock=true.',
+    '- Em compras de produto, o nome do pet não é obrigatório. Nunca peça o nome do animal apenas para concluir uma venda.',
+    '- Nunca suponha retirada, entrega ou forma de pagamento. Depois que produto e quantidade estiverem definidos, confirme retirada na loja ou entrega. Para entrega, pergunte Pix, dinheiro ou cartão. Para retirada, use pagamento "a combinar" e não pergunte a forma de pagamento. Use somente fulfillment_type e payment_method presentes no Estado confiável.',
     '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
@@ -528,6 +613,12 @@ export function normalizeProductQueryFacts(interpretation = {}, serviceFacts = {
     ),
     package_kg: packageKg,
     quantity: Number(interpretation.quantity || 0) || null,
+    payment_method: ['pix', 'dinheiro', 'cartao', 'a_combinar'].includes(clean(interpretation.payment_method))
+      ? clean(interpretation.payment_method)
+      : '',
+    fulfillment_type: ['entrega', 'retirada'].includes(clean(interpretation.fulfillment_type))
+      ? clean(interpretation.fulfillment_type)
+      : '',
   }
 }
 
@@ -544,6 +635,8 @@ export function mergeProductQueryFacts({
   const messageSpecies = detectCatalogSpecies(message)
   const messageAge = detectCatalogAgeCategory(message)
   const normalizedMessage = normalizeCatalogText(message)
+  const messagePaymentMethod = detectExplicitProductPaymentMethod(message)
+  const messageFulfillmentType = detectExplicitProductFulfillmentType(message)
   const explicitMessageFormat = /\b(?:granel|pacote|embalagem|saco|sacaria)\b/.test(normalizedMessage)
     ? normalizeRationPackagePreference(message)
     : ''
@@ -569,16 +662,31 @@ export function mergeProductQueryFacts({
   const bulkQuantityContinuation = Boolean(
     previous.package_preference === 'granel'
     && !explicitMessageFormat
-    && (current.quantity || current.package_kg || currentRequest.packageKg),
+    && detectExplicitProductQuantity(message, 'granel'),
   )
   const currentPackagePreference = bulkQuantityContinuation
     ? 'granel'
-    : (explicitMessageFormat || current.package_preference || currentRequest.packagePreference)
+    : (
+      explicitMessageFormat
+      || previous.package_preference
+      || current.package_preference
+      || currentRequest.packagePreference
+    )
+  const explicitQuantity = detectExplicitProductQuantity(
+    message,
+    bulkQuantityContinuation ? 'granel' : (currentPackagePreference || previous.package_preference),
+  )
   const changedPackageFormat = Boolean(
     currentPackagePreference
     && previous.package_preference
     && currentPackagePreference !== previous.package_preference,
   )
+  const fulfillmentType = messageFulfillmentType || previous.fulfillment_type
+  const paymentMethod = fulfillmentType === 'retirada'
+    ? 'a_combinar'
+    : fulfillmentType === 'entrega'
+      ? (messagePaymentMethod || (previous.payment_method === 'a_combinar' ? '' : previous.payment_method))
+      : ''
   const merged = {
     product_kind: current.product_kind || previous.product_kind,
     pet_name: current.pet_name || previous.pet_name,
@@ -605,9 +713,10 @@ export function mergeProductQueryFacts({
         || currentRequest.packageKg
         || (changedPackageFormat ? null : previous.package_kg)
       ),
-    quantity: current.quantity
-      || (bulkQuantityContinuation ? Number(current.package_kg || currentRequest.packageKg || 0) || null : null)
+    quantity: explicitQuantity
       || (changedPackageFormat ? null : previous.quantity),
+    payment_method: paymentMethod,
+    fulfillment_type: fulfillmentType,
   }
   const request = detectCatalogRequest(message, {
     productKind: merged.product_kind,
@@ -671,6 +780,20 @@ export function buildRationQualificationReply({ message = '', facts = {} } = {})
   }
   if (['dog', 'cat'].includes(clean(facts.species)) && !clean(facts.age_category)) {
     return `${petName || 'O pet'} é filhote, adulto, sênior ou castrado?`
+  }
+  return ''
+}
+
+export function buildProductCheckoutQualificationReply({
+  facts = {},
+  selectedProduct = null,
+} = {}) {
+  if (!selectedProduct || Number(facts.quantity || 0) <= 0) return ''
+  if (!clean(facts.fulfillment_type)) {
+    return 'Perfeito! Você prefere retirar na loja ou receber por entrega?'
+  }
+  if (clean(facts.fulfillment_type) === 'entrega' && !clean(facts.payment_method)) {
+    return 'Certo! Para a entrega, como você prefere pagar: Pix, dinheiro ou cartão?'
   }
   return ''
 }

@@ -70,6 +70,18 @@ test('smoke test do PetBot valida operacoes reais e sempre descarta os dados', a
   assert.doesNotMatch(smoke, /\bcommit\s*;/i)
 })
 
+test('retirada do PetBot fica pendente com pagamento a combinar', async () => {
+  const paymentMigration = await read('supabase/migrations/20260723002000_petbot_pickup_payment_to_arrange.sql')
+  const constraintMigration = await read('supabase/migrations/20260723003000_sales_payment_to_arrange_constraint.sql')
+  const smoke = await read('supabase/petbot_controlled_smoke_test.sql')
+
+  assert.match(paymentMigration, /v_payment_method := ''a_combinar''/)
+  assert.match(paymentMigration, /when v_payment_method = ''a_combinar'' then ''a_receber''/)
+  assert.match(constraintMigration, /'a_combinar'/)
+  assert.match(smoke, /sale\.payment_method = 'a_combinar'/)
+  assert.match(smoke, /delivery_order\.status = 'pendente'/)
+})
+
 test('estoque e itens vendidos preservam quantidades fracionadas no banco', async () => {
   const migration = await read('supabase/migrations/20260722005000_fractional_inventory_quantities.sql')
   assert.match(migration, /products alter column stock_quantity type numeric\(12,3\)/)
