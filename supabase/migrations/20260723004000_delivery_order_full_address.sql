@@ -28,13 +28,15 @@ begin
     );
   end if;
 
-  if v_definition !~ 'service_transport_reference' then
-    v_definition := regexp_replace(
-      v_definition,
-      '(when v_transport_fee > 0 then nullif\(trim\(p_payload->>''service_transport_city''\), ''''\)\s+else null\s+end,)(\s+v_customer_phone,)',
-      E'\\1\n    case\n      when v_order_type = ''produto'' and p_payload->>''fulfillment_type'' = ''entrega'' then nullif(trim(p_payload->>''delivery_reference''), '''')\n      when v_transport_fee > 0 then nullif(trim(p_payload->>''service_transport_reference''), '''')\n      else null\n    end,\\2'
-    );
-  end if;
+  -- The variable can already exist in the function declaration while the
+  -- service_delivery_orders VALUES list is still missing its expression.
+  -- This pattern only matches the incomplete VALUES block, so it remains
+  -- idempotent without relying on a declaration-level text check.
+  v_definition := regexp_replace(
+    v_definition,
+    '(when v_transport_fee > 0 then nullif\(trim\(p_payload->>''service_transport_city''\), ''''\)\s+else null\s+end,)(\s+v_customer_phone,)',
+    E'\\1\n    case\n      when v_order_type = ''produto'' and p_payload->>''fulfillment_type'' = ''entrega'' then nullif(trim(p_payload->>''delivery_reference''), '''')\n      when v_transport_fee > 0 then nullif(trim(p_payload->>''service_transport_reference''), '''')\n      else null\n    end,\\2'
+  );
 
   if v_definition !~ 'delivery_reference\s*=\s*excluded\.delivery_reference' then
     v_definition := regexp_replace(

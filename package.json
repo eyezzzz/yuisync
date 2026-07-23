@@ -21,6 +21,7 @@
     "preview": "vite preview",
     "test:petbot:legacy": "node --test test/petbotGuard.test.mjs",
     "test:petbot:live": "node scripts/eval-petbot-agent.mjs",
+    "test:petbot:live-chat": "node --env-file=.env scripts/test-petbot-live-conversations.mjs --run",
     "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs"
   },
   "dependencies": {
@@ -61,5 +62,8 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "engines": {
+    "node": "22.x"
+  }
 }

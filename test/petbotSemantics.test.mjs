@@ -239,6 +239,14 @@ test('pedido de atendimento humano é uma intenção canônica com destino estru
     handoff_target: 'atendente',
   })
   assert.equal(inconsistent.requests_human, false)
+
+  const petFactMisclassifiedAsHandoff = semantics({
+    dialogue_act: 'request_human',
+    reply_target: 'pet_identity',
+    wants_human: true,
+    handoff_target: 'atendente',
+  })
+  assert.equal(petFactMisclassifiedAsHandoff.requests_human, false)
 })
 
 test('normalização preserva a taxonomia semântica e quantidade fracionada', () => {

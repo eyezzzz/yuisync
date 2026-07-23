@@ -340,3 +340,31 @@ test('preflight operacional nao mistura venda de produto com servico e exige age
   assert.match(localChat, /agendaAvailable: appointmentRefresh\.ok/)
   assert.match(localChat, /check_petshop_availability'[\s\S]*species: serviceFacts\.species[\s\S]*weightKg: serviceFacts\.weight_kg/)
 })
+
+test('confirmacao repetida de pedido concluido nao reabre o resumo nem duplica a operacao', () => {
+  const localChat = read('server/lib/chat.js')
+  assert.match(localChat, /respondToAlreadyCommittedConfirmation/)
+  assert.match(localChat, /duplicate_confirmation_ignored/)
+  assert.match(localChat, /pending_order: null/)
+  assert.match(localChat, /A confirmação repetida não criou outro registro/)
+  assert.match(localChat, /hasConfirmedOrderContext\(sessionForAgent\)[\s\S]*!getPendingAgentOrder\(recoveredContext\)/)
+})
+
+test('painel expõe diagnóstico E2E protegido do PetBot no tenant ativo', () => {
+  const settingsPage = read('src/shared/pages/SettingsPage.jsx')
+  const apiClient = read('src/lib/api.js')
+  const apiRoute = read('api/admin/petbot-e2e.ts')
+  const runner = read('scripts/test-petbot-live-conversations.mjs')
+  const vercel = JSON.parse(read('vercel.json'))
+
+  assert.match(settingsPage, /setPetSettingsTab\('diagnostico'\)/)
+  assert.match(settingsPage, /Executar os 3 testes/)
+  assert.match(settingsPage, /saved_in_agenda|Agenda:/)
+  assert.match(settingsPage, /Confirmacao duplicada/)
+  assert.match(apiClient, /RUN_PETBOT_LIVE_E2E/)
+  assert.match(apiRoute, /isModuleAdmin\(requester, 'petshop'\)/)
+  assert.match(apiRoute, /requester\.active_tenant_id !== tenantId/)
+  assert.match(apiRoute, /runPetbotLiveConversations/)
+  assert.match(runner, /export async function runPetbotLiveConversations/)
+  assert.equal(vercel.functions['api/admin/petbot-e2e.ts'].maxDuration, 300)
+})

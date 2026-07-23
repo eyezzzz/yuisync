@@ -1610,6 +1610,108 @@ function inferPetbotServiceOrderType({ interpretation = {}, facts = {}, message 
 
 const PETBOT_FRIENDLY_CLOSING = 'Agradecemos pela preferência! Estamos à disposição. Volte sempre! 😊'
 
+async function respondToAlreadyCommittedConfirmation({
+  supabase,
+  session,
+  expectedLastMessageAt,
+  options = {},
+  turnSemantics = {},
+}) {
+  const sentAt = new Date().toISOString()
+  const existingContext = parseJsonObject(session.context)
+  const previousAgentState = existingContext.petbot_agent
+    && typeof existingContext.petbot_agent === 'object'
+    ? existingContext.petbot_agent
+    : {}
+  const isAppointment = Boolean(cleanText(existingContext.last_appointment_id))
+  const reply = [
+    isAppointment
+      ? 'Esse agendamento já foi confirmado e continua salvo na agenda.'
+      : 'Esse pedido já foi confirmado e continua salvo.',
+    'A confirmação repetida não criou outro registro.',
+    PETBOT_FRIENDLY_CLOSING,
+  ].join('\n')
+  const nextContext = {
+    ...existingContext,
+    petbot_agent: {
+      ...previousAgentState,
+      version: 3,
+      engine_version: 'petbot_agent_v3',
+      updatedAt: sentAt,
+      pending_order: null,
+      last_action: 'duplicate_confirmation_ignored',
+      last_turn_semantics: turnSemantics,
+      order_saved: true,
+    },
+  }
+
+  let sessionUpdate = supabase
+    .from('chat_sessions')
+    .update({
+      intent: 'pedido_confirmado',
+      context: nextContext,
+      last_message_at: sentAt,
+    })
+    .eq('id', session.id)
+  if (cleanText(expectedLastMessageAt)) {
+    sessionUpdate = sessionUpdate.eq('last_message_at', expectedLastMessageAt)
+  }
+  const { data: updatedSession, error: sessionUpdateError } = await sessionUpdate
+    .select('id')
+    .maybeSingle()
+  if (!sessionUpdateError && !updatedSession && cleanText(expectedLastMessageAt)) {
+    const staleError = new HttpError(409, 'A newer customer message superseded this PetBot turn.')
+    staleError.code = 'PETBOT_STALE_TURN'
+    throw staleError
+  }
+  if (sessionUpdateError || !updatedSession) {
+    throw new HttpError(500, 'Unable to persist duplicate confirmation state.')
+  }
+
+  const { data: savedReply, error: replyInsertError } = await supabase
+    .from('chat_messages')
+    .insert({
+      session_id: session.id,
+      role: 'assistant',
+      content: reply,
+      metadata: {
+        source: options.source || 'dashboard_simulation',
+        ...(options.assistantMetadata || {}),
+        petbot_agent: {
+          engine_version: 'petbot_agent_v3',
+          terminal: true,
+          order_saved: true,
+          duplicate_confirmation_ignored: true,
+          turn_semantics: turnSemantics,
+        },
+      },
+      tokens_used: 0,
+      sent_at: sentAt,
+    })
+    .select('id, role, content, metadata, tokens_used, sent_at')
+    .single()
+  if (replyInsertError) throw new HttpError(500, 'Unable to save assistant response.')
+
+  await recordPetbotEvent(supabase, {
+    tenant_id: session.tenant_id,
+    module_id: session.module_id,
+    session_id: session.id,
+    message_id: savedReply.id,
+    event_type: 'duplicate_confirmation_ignored',
+    engine_version: 'petbot_agent_v3',
+    intent: 'pedido_confirmado',
+    action: 'duplicate_confirmation_ignored',
+    outcome: 'already_saved',
+    handoff_target: null,
+    metadata: {
+      source: options.source || 'dashboard_simulation',
+      turn_semantics: turnSemantics,
+    },
+  })
+
+  return { reply, savedMessage: savedReply }
+}
+
 function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedService = null, timezone = 'America/Sao_Paulo' } = {}) {
   const runs = Array.isArray(toolRuns) ? toolRuns : []
   const availabilityRun = [...runs].reverse().find((run) => (
@@ -3390,6 +3492,28 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     interpretation: llmInterpretation || {},
     hasPendingOrder: Boolean(getPendingAgentOrder(recoveredContext)),
   })
+  const repeatsCompletedConfirmation = Boolean(
+    hasConfirmedOrderContext(sessionForAgent)
+    && !getPendingAgentOrder(recoveredContext)
+    && !turnSemantics.negated
+    && (
+      isExplicitPetbotConfirmation(trimmedMessage)
+      || (
+        turnSemantics.confident
+        && turnSemantics.action === 'affirm'
+        && ['final_confirmation', 'other', ''].includes(cleanText(turnSemantics.target))
+      )
+    )
+  )
+  if (repeatsCompletedConfirmation) {
+    return respondToAlreadyCommittedConfirmation({
+      supabase,
+      session: sessionForAgent,
+      expectedLastMessageAt: concurrencyLastMessageAt,
+      options,
+      turnSemantics,
+    })
+  }
   const productConversationText = buildCatalogSearchText(history, trimmedMessage)
   const recoveredProductFacts = recoverProductQueryFactsFromHistory({
     facts: recoveredAgentContext.product_facts || {},

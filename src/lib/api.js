@@ -127,6 +127,16 @@ export function importLegacyRows({ kind, rows, moduleId, tenantId }) {
   })
 }
 
+export function runPetbotLiveE2E({ tenantId }) {
+  return apiRequest('/admin/petbot-e2e', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId,
+      confirm: 'RUN_PETBOT_LIVE_E2E',
+    }),
+  })
+}
+
 export function searchProductImages({ name, barcode, category, brand, moduleId, tenantId, limit = 8 }) {
   return apiRequest('/products/image-suggestions', {
     method: 'POST',

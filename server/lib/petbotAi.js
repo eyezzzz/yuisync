@@ -288,7 +288,9 @@ export function resolvePetbotTurnSemantics({
     requests_human: Boolean(
       confident
       && data.wants_human
-      && action === 'request_human',
+      && action === 'request_human'
+      && target === 'other'
+      && Boolean(data.handoff_target),
     ),
     handoff_target: confident ? data.handoff_target : '',
     fulfillment_type: slot(data.fulfillment_type, 'fulfillment'),
