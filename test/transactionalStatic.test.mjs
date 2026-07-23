@@ -472,3 +472,17 @@ test('integridade do banho unifica catalogo, peso e retorno transacional', async
   assert.match(cleanup, /commit;/)
   assert.match(management, /\(\?:commit\|rollback\)/)
 })
+
+test('correcao do endereco mantem colunas e VALUES da ordem alinhados', async () => {
+  const original = await read('supabase/migrations/20260723004000_delivery_order_full_address.sql')
+  const forward = await read('supabase/migrations/20260723005000_fix_petbot_order_delivery_reference_values.sql')
+
+  assert.match(original, /regexp_replace\([\s\S]*service_transport_city[\s\S]*service_transport_reference/)
+  assert.doesNotMatch(original, /if v_definition !~ 'service_transport_reference' then/)
+  assert.match(forward, /insert into public\.service_delivery_orders/)
+  assert.match(forward, /delivery_city,\\s\+delivery_reference,\\s\+contact_phone/)
+  assert.match(forward, /p_payload->>''delivery_reference''/)
+  assert.match(forward, /p_payload->>''service_transport_reference''/)
+  assert.match(forward, /Nao foi localizado o ponto de VALUES para delivery_reference/)
+  assert.match(forward, /notify pgrst, 'reload schema'/)
+})

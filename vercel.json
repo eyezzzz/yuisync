@@ -35,6 +35,9 @@
     },
     "api/petshop/checkout.ts": {
       "maxDuration": 30
+    },
+    "api/admin/petbot-e2e.ts": {
+      "maxDuration": 300
     }
   },
   "rewrites": [
