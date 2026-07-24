@@ -284,6 +284,9 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     notes: facts.service_notes_explicit
       ? clean(facts.service_notes) || null
       : clean(args.notes) || null,
+    service_grooming_detail: facts.service_notes_explicit
+      ? clean(facts.service_notes) || null
+      : null,
     service_transport_mode: facts.service_transport_mode_explicit && normalizeCode(facts.service_transport_mode) !== 'motodog'
       ? clean(facts.service_transport_mode)
       : clean(args.service_transport_mode) || null,

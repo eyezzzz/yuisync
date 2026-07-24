@@ -272,6 +272,35 @@ function isExplicitNoServiceNotesAnswer(message = '', history = []) {
   return /\b(?:observacao|observacoes|recado|alergia|perfume|cuidado especial)\b/.test(previousText)
 }
 
+function isServiceInformationQuestion(message = '') {
+  const raw = cleanText(message)
+  const normalized = normalizeSearchText(raw)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return false
+  const serviceSubject = /\b(?:banho|tosa|servico|consulta|hidratacao|escovacao|unha|ouvido)\b/.test(normalized)
+  const questionForm = /[?？]/.test(raw)
+    || /^(?:o que|que |qual |quais |como |quando |onde |quanto |tem |inclui |vem |pode me dizer|gostaria de saber)\b/.test(normalized)
+  return serviceSubject && questionForm
+}
+
+function inferExplicitServiceNoteUpdate(message = '') {
+  const raw = cleanText(message)
+  const normalized = normalizeSearchText(raw)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized || isServiceInformationQuestion(raw)) return ''
+
+  if (/\bsem perfume\b/.test(normalized)) return 'sem perfume'
+  if (/\bnao usar perfume\b/.test(normalized)) return 'sem perfume'
+  if (/\bsem laco\b/.test(normalized)) return 'sem laço'
+  if (/\bsem gravata\b/.test(normalized)) return 'sem gravata'
+  if (/\b(?:com bastante cuidado|com cuidado|aparar com cuidado)\b/.test(normalized)) return 'fazer com cuidado'
+  return ''
+}
+
 export function inferExplicitPetTransportMode(message = '', history = []) {
   const answer = normalizeSearchText(message)
     .replace(/[^a-z0-9\s]/g, ' ')
@@ -2139,12 +2168,13 @@ async function respondWithPetbotAgent({
   customInstructions,
 }) {
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
+  const explicitCurrentMessageConfirmation = Boolean(
+    pendingAtTurnStart
+    && isExplicitPetbotConfirmation(trimmedMessage)
+  )
   const trustedCurrentMessageConfirmation = Boolean(
-    turnSemantics?.confirms_pending_order
-    || (
-      !turnSemantics?.confirmation_decision_made
-      && isExplicitPetbotConfirmation(trimmedMessage)
-    ),
+    explicitCurrentMessageConfirmation
+    || turnSemantics?.confirms_pending_order
   )
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
   const previousProductFacts = initialProductFacts || previousAgentContext.product_facts || {}
@@ -2221,7 +2251,10 @@ async function respondWithPetbotAgent({
     ? ''
     : inferSpecificPetbotServiceType(trimmedMessage)
   const informationalServiceQuestion = !productConversationAtTurnStart
-    && isPetshopServiceKnowledgeQuestion(trimmedMessage)
+    && (isPetshopServiceKnowledgeQuestion(trimmedMessage) || isServiceInformationQuestion(trimmedMessage))
+  const explicitServiceNoteUpdate = productConversationAtTurnStart
+    ? ''
+    : inferExplicitServiceNoteUpdate(trimmedMessage)
   const interpretationForFacts = {
     ...(llmInterpretation || {}),
     ...(explicitSpecificServiceType ? { service_type: explicitSpecificServiceType } : {}),
@@ -2248,6 +2281,9 @@ async function respondWithPetbotAgent({
           service_notes_resolved: previousServiceFacts.service_notes_resolved === true,
         }
         : {}),
+    ...(explicitServiceNoteUpdate
+      ? { service_notes: explicitServiceNoteUpdate, service_notes_resolved: true }
+      : {}),
     service_transport_mode: inferredTransportMode || null,
     ...currentTransportAddress,
     service_transport_address_reset: resetSavedTransportAddress,
@@ -3236,6 +3272,11 @@ async function respondWithPetbotAgent({
     pendingAtTurnStart
     && trustedCurrentMessageConfirmation,
   )
+  const currentMessageUpdatesServiceNotes = Boolean(
+    pendingAtTurnStart
+    && pendingAtTurnStart.order?.order_type !== 'produto'
+    && explicitServiceNoteUpdate
+  )
   const transportQualificationReply = serviceOrderType === 'banho_tosa'
     ? buildPetbotTransportQualificationReply({ facts: serviceFacts, settings: storeSettings })
     : ''
@@ -3373,6 +3414,41 @@ async function respondWithPetbotAgent({
       steps: 1,
       terminal: true,
       durationMs: Date.now() - confirmationStartedAt,
+    }
+  } else if (currentMessageUpdatesServiceNotes) {
+    const noteUpdateStartedAt = Date.now()
+    const noteUpdateToolCall = {
+      id: `service-note-${pendingAtTurnStart.id}`,
+      type: 'function',
+      function: {
+        name: 'prepare_petshop_service_booking',
+        arguments: JSON.stringify({
+          ...pendingAtTurnStart.order,
+          notes: explicitServiceNoteUpdate,
+          service_grooming_detail: explicitServiceNoteUpdate,
+        }),
+      },
+    }
+    const noteUpdateResult = await executeTool(noteUpdateToolCall)
+    const noteUpdateRun = {
+      name: 'prepare_petshop_service_booking',
+      ok: noteUpdateResult?.ok !== false,
+      status: cleanText(noteUpdateResult?.status) || null,
+      duration_ms: Date.now() - noteUpdateStartedAt,
+      result: noteUpdateResult,
+    }
+    if (!noteUpdateRun.ok || noteUpdateRun.status !== 'prepared') {
+      throw new HttpError(409, 'Não foi possível atualizar a observação do agendamento com os dados atuais.')
+    }
+    agentResult = {
+      reply: noteUpdateResult.summary,
+      toolRuns: [...preloadedToolRuns, noteUpdateRun],
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 1,
+      terminal: true,
+      durationMs: Date.now() - noteUpdateStartedAt,
     }
   } else if (serviceAddonReply) {
     agentResult = {
@@ -3629,7 +3705,16 @@ async function respondWithPetbotAgent({
         }
         : null,
       last_action: agentResult.recovered ? 'agent_recovery' : (agentResult.toolRuns.at(-1)?.name || 'reply'),
-      last_turn_semantics: turnSemantics,
+      last_turn_semantics: currentMessageUpdatesServiceNotes
+        ? {
+          ...(turnSemantics || {}),
+          action: 'correct',
+          target: 'service_notes',
+          cancels_pending_order: false,
+          confirms_pending_order: false,
+          confirmation_decision_made: false,
+        }
+        : turnSemantics,
       last_tools: agentResult.toolRuns.map((run) => ({ name: run.name, ok: run.ok, status: run.status || null })),
       needs_human: needsHuman,
       handoff_target: handoffTarget,
