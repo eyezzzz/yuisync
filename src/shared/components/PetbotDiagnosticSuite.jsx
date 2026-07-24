@@ -107,7 +107,7 @@ function ScenarioResult({ scenario, result, isCurrent }) {
         <div className="min-w-0 flex-1">
           <p className="text-sm font-bold text-text truncate">{scenario.id} · {scenario.title}</p>
           <p className="text-xs text-muted truncate">
-            {scenario.service_name || scenario.product_name || scenario.expected_outcome}
+            Pedido semântico: {scenario.request_label || scenario.expected_outcome}
             {scenario.addition_name ? ` · acrescenta ${scenario.addition_name}` : ''}
           </p>
         </div>
@@ -119,6 +119,11 @@ function ScenarioResult({ scenario, result, isCurrent }) {
         {!result && (
           <p className="text-xs text-muted">Este cenário ainda não foi executado.</p>
         )}
+        <div className="rounded-xl border border-white/10 bg-black/10 p-4">
+          <p className="text-[10px] uppercase tracking-wider text-muted">Alvo usado apenas para auditoria</p>
+          <p className="text-xs text-text mt-1">{scenario.service_name || scenario.product_name || scenario.request_label || '-'}</p>
+          <p className="text-[11px] text-muted mt-1">A mensagem enviada ao PetBot não copia este nome completo.</p>
+        </div>
         {result?.error && (
           <div className="rounded-xl border border-red-500/20 bg-red-500/10 p-4 text-red-300">
             <p className="text-xs font-bold">Falha funcional</p>
@@ -181,6 +186,7 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
   const [running, setRunning] = useState(false)
   const [currentScenarioId, setCurrentScenarioId] = useState('')
   const [error, setError] = useState('')
+  const [selectedCategory, setSelectedCategory] = useState('all')
   const stopRef = useRef(false)
 
   useEffect(() => {
@@ -204,6 +210,12 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
   const pendingScenarios = useMemo(() => (
     (plan?.scenarios || []).filter((scenario) => !resultByScenario.has(scenario.id))
   ), [plan, resultByScenario])
+  const selectedScenarios = useMemo(() => (
+    (plan?.scenarios || []).filter((scenario) => selectedCategory === 'all' || scenario.category === selectedCategory)
+  ), [plan, selectedCategory])
+  const pendingSelectedScenarios = useMemo(() => (
+    selectedScenarios.filter((scenario) => !resultByScenario.has(scenario.id))
+  ), [selectedScenarios, resultByScenario])
 
   function persist(nextPlan, nextResults) {
     if (!tenantId) return
@@ -229,9 +241,13 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
 
   async function handleStart({ reset = false } = {}) {
     if (!canEdit || !tenantId || running) return
+    const selectedLabel = selectedCategory === 'all'
+      ? 'todos os 50 cenários'
+      : plan?.groups?.find((group) => group.category === selectedCategory)?.label || selectedCategory
+    const pendingCount = selectedCategory === 'all' ? pendingScenarios.length : pendingSelectedScenarios.length
     const message = reset || !results.length
-      ? 'Executar 50 conversas fictícias no runtime real? Cada cenário será limpo ao terminar. A execução pode levar vários minutos e o relatório ficará salvo neste navegador.'
-      : `Continuar os ${pendingScenarios.length} cenários restantes? O relatório já salvo será preservado.`
+      ? `Executar ${selectedLabel} no runtime real? Cada cenário será limpo ao terminar. O relatório ficará salvo neste navegador.`
+      : `Executar os ${pendingCount} cenários pendentes de ${selectedLabel}? O relatório já salvo será preservado.`
     if (!window.confirm(message)) return
 
     setRunning(true)
@@ -240,7 +256,10 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
     try {
       const { nextPlan, nextResults } = await preparePlan({ reset })
       const completedIds = new Set(nextResults.map((result) => result?.scenario?.id))
-      const queue = (nextPlan?.scenarios || []).filter((scenario) => !completedIds.has(scenario.id))
+      const queue = (nextPlan?.scenarios || []).filter((scenario) => (
+        !completedIds.has(scenario.id)
+        && (selectedCategory === 'all' || scenario.category === selectedCategory)
+      ))
       let accumulated = [...nextResults]
       const suiteId = `PETBOT_DIAGNOSTIC_${Date.now()}`
 
@@ -307,7 +326,7 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
     })
   }
 
-  const estimatedRemainingMs = summary.averageDurationMs * pendingScenarios.length
+  const estimatedRemainingMs = summary.averageDurationMs * pendingSelectedScenarios.length
 
   return (
     <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-6">
@@ -317,20 +336,29 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
             <FlaskConical size={22} />
           </div>
           <div>
-            <h3 className="text-lg font-display font-bold text-text">Bateria real do PetBot — 50 cenários</h3>
+            <h3 className="text-lg font-display font-bold text-text">Bateria semântica do PetBot — 50 cenários</h3>
             <p className="text-sm text-muted mt-1 max-w-3xl">
-              Executa 10 banhos, 10 tosas e outros serviços, 10 produtos, 10 rações e 10 cenários veterinários. Cada caso roda numa requisição separada, mostra a conversa aqui, audita venda, ordem, agenda e duplicidade quando aplicável e remove os dados fictícios antes de avançar.
+              Executa 10 banhos, 10 serviços de tosa e cuidados, 10 produtos, 10 rações e 10 cenários veterinários. As mensagens usam intenção, categoria e características; não copiam o nome completo do item do catálogo. Cada caso roda numa requisição separada e é limpo antes de avançar.
             </p>
             <p className="text-xs text-muted mt-2">
-              Modo rápido: não existe debounce ou pausa artificial entre mensagens e cenários. Permanecem somente o tempo da LLM, banco e eventuais tentativas de rede.
+              Modo econômico: não existe debounce ou pausa artificial. Não há repetição automática de frases; no máximo duas mensagens complementares são permitidas quando o estado realmente avançou.
             </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">
           {!running && (
-            <button type="button" onClick={() => handleStart({ reset: results.length === 0 })} disabled={!canEdit || !tenantId} className="btn btn-primary gap-2">
+            <button
+              type="button"
+              onClick={() => handleStart({ reset: results.length === 0 })}
+              disabled={!canEdit || !tenantId || Boolean(plan && pendingSelectedScenarios.length === 0)}
+              className="btn btn-primary gap-2"
+            >
               <Play size={16} />
-              {results.length && pendingScenarios.length ? `Continuar ${pendingScenarios.length} restantes` : 'Executar 50 testes'}
+              {!plan
+                ? selectedCategory === 'all' ? 'Preparar 50 testes' : 'Preparar 10 testes'
+                : pendingSelectedScenarios.length
+                  ? `Executar ${pendingSelectedScenarios.length} ${selectedCategory === 'all' ? 'pendentes' : 'desta categoria'}`
+                  : selectedCategory === 'all' ? 'Bateria concluída' : 'Categoria concluída'}
             </button>
           )}
           {running && (
@@ -356,6 +384,40 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
         </div>
       </div>
 
+      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-4">
+        <p className="text-xs font-black uppercase tracking-wider text-muted">Executar por grupo</p>
+        <div className="flex flex-wrap gap-2 mt-3">
+          <button
+            type="button"
+            disabled={running}
+            onClick={() => setSelectedCategory('all')}
+            className={`btn ${selectedCategory === 'all' ? 'btn-primary' : 'btn-secondary'}`}
+          >
+            Todos (50)
+          </button>
+          {(plan?.groups || [
+            { category: 'banho', label: 'Banho' },
+            { category: 'servicos', label: 'Tosa e cuidados' },
+            { category: 'produtos', label: 'Produtos' },
+            { category: 'racao', label: 'Ração' },
+            { category: 'veterinaria', label: 'Veterinária' },
+          ]).map((group) => (
+            <button
+              key={group.category}
+              type="button"
+              disabled={running}
+              onClick={() => setSelectedCategory(group.category)}
+              className={`btn ${selectedCategory === group.category ? 'btn-primary' : 'btn-secondary'}`}
+            >
+              {group.label} (10)
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-muted mt-3">
+          Recomendado: rode um grupo de 10 por vez. Um cenário para imediatamente quando detectar catálogo incompatível, ausência de progresso ou resposta repetida.
+        </p>
+      </div>
+
       {error && (
         <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-5 text-red-300">
           <p className="text-sm font-bold">Falha ao preparar a suíte</p>
@@ -371,7 +433,7 @@ export default function PetbotDiagnosticSuite({ tenantId, canEdit }) {
                 <p className="text-sm font-bold text-text">{summary.executed} de {summary.total} executados</p>
                 <p className="text-xs text-muted mt-1">
                   {summary.passed} aprovados · {summary.failed} falharam · média {formatDuration(summary.averageDurationMs)} por cenário
-                  {pendingScenarios.length > 0 && summary.averageDurationMs > 0 ? ` · estimativa restante ${formatDuration(estimatedRemainingMs)}` : ''}
+                  {pendingSelectedScenarios.length > 0 && summary.averageDurationMs > 0 ? ` · estimativa da seleção ${formatDuration(estimatedRemainingMs)}` : ''}
                 </p>
               </div>
               <p className={`text-2xl font-black ${summary.failed === 0 ? 'text-emerald-300' : 'text-amber-300'}`}>
