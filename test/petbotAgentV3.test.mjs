@@ -1520,3 +1520,93 @@ test('validador impede resumo antes de modalidade e endereco do MotoDog', () => 
   assert.equal(unconfirmedProfileAddress.ok, false)
   assert.ok(unconfirmedProfileAddress.problems.some((problem) => /não foi confirmado/i.test(problem)))
 })
+
+test('equipamento e cosmético físico não entram como serviços agendáveis', () => {
+  const legacyServiceMetadata = { product_type: 'servico', service_group: 'banho_tosa' }
+  assert.equal(isServiceCatalogProduct({
+    name: 'MAQUINA DE TOSA RECARREGAVEL PET',
+    category: 'Acessórios',
+    bot_metadata: legacyServiceMetadata,
+  }), false)
+  assert.equal(isServiceCatalogProduct({
+    name: 'CONDICIONADOR HIDRATANTE BEEPS 500 ML',
+    category: 'Higiene',
+    bot_metadata: legacyServiceMetadata,
+  }), false)
+})
+
+test('agenda do dia marca horários ocupados e aceita último início às 17h', () => {
+  const result = buildServiceAvailability({
+    serviceQuery: service.id,
+    orderType: 'banho_tosa',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: 8,
+    coatType: 'longo',
+    date: '2026-07-27',
+    preferredTime: '10:00',
+    services: [service],
+    appointments: [{ scheduled_at: '2026-07-27T10:00:00-03:00', duration_min: 60, status: 'confirmado' }],
+    settings: {
+      petbotTimezone: 'America/Sao_Paulo',
+      storeBusinessHours: { 1: [{ open: '08:00', close: '18:00' }] },
+      petbotBusinessHours: { 1: [{ open: '08:00', close: '17:00' }] },
+      petbotSlotIntervalMin: 30,
+      petbotBookingCapacity: 1,
+    },
+    now: new Date('2026-07-26T08:00:00-03:00'),
+  })
+
+  assert.equal(result.requested_slot.available, false)
+  assert.equal(result.day_schedule.find((row) => row.time === '10:00').status, 'ocupado')
+  assert.equal(result.day_schedule.find((row) => row.time === '10:30').status, 'ocupado')
+  assert.equal(result.day_schedule.find((row) => row.time === '17:00').status, 'disponivel')
+  assert.ok(result.available_slots.some((row) => row.time === '17:00'))
+})
+
+test('serviço adicional vira item estruturado e altera o total', () => {
+  const addon = {
+    id: 'dental',
+    code: 'escovacao_dentaria',
+    name: 'ESCOVACAO DENTARIA PET (MATERIAL EMPRESA)',
+    group_type: 'banho_tosa',
+    default_price: 10,
+    default_duration_min: 10,
+    active: true,
+  }
+  const prepared = preparePetshopOrderDraft({
+    args: {
+      customer_name: 'Rai', pet_name: 'Nina', species: 'dog', breed: 'Yorkshire', weight_kg: 4,
+      coat_type: 'longo', order_type: 'banho_tosa', appointment_id: null,
+      scheduled_at: '2026-07-27T10:00:00-03:00', service_code: service.code,
+      service_type: service.code, service_transport_mode: 'cliente_leva',
+      additional_service_ids: ['dental'],
+    },
+    services: [service, addon],
+    appointments: [],
+    settings: {
+      petbotTimezone: 'America/Sao_Paulo',
+      storeBusinessHours: { 1: [{ open: '08:00', close: '18:00' }] },
+      petbotBusinessHours: { 1: [{ open: '08:00', close: '17:00' }] },
+    },
+    now: new Date('2026-07-26T08:00:00-03:00'),
+  })
+
+  assert.equal(prepared.ok, true)
+  assert.equal(prepared.order.items.length, 2)
+  assert.equal(prepared.order.total, 100)
+  assert.match(prepared.summary, /ESCOVACAO DENTARIA/i)
+})
+
+test('modalidade específica de tosa não volta para o tipo genérico nas mensagens seguintes', () => {
+  const firstTurn = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_type: 'tosa tesoura', pet_name: 'Lola' },
+    previousFacts: {},
+  })
+  const nextTurn = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_type: 'tosa', service_date: '2026-07-27' },
+    previousFacts: firstTurn,
+  })
+
+  assert.equal(nextTurn.service_type, 'tosa tesoura')
+})

@@ -19,7 +19,7 @@ const DEFAULT_TIMEZONE = 'America/Sao_Paulo'
 const DEFAULT_SLOT_INTERVAL_MINUTES = 30
 const DEFAULT_BOOKING_LEAD_MINUTES = 15
 const DEFAULT_BOOKING_CAPACITY = 1
-const DEFAULT_BUSINESS_HOURS = {
+const DEFAULT_STORE_BUSINESS_HOURS = {
   1: [{ open: '08:00', close: '18:00' }],
   2: [{ open: '08:00', close: '18:00' }],
   3: [{ open: '08:00', close: '18:00' }],
@@ -27,6 +27,15 @@ const DEFAULT_BUSINESS_HOURS = {
   5: [{ open: '08:00', close: '18:00' }],
   6: [{ open: '08:00', close: '18:00' }],
   7: [{ open: '08:00', close: '18:00' }],
+}
+const DEFAULT_BOOKING_HOURS = {
+  1: [{ open: '08:00', close: '17:00' }],
+  2: [{ open: '08:00', close: '17:00' }],
+  3: [{ open: '08:00', close: '17:00' }],
+  4: [{ open: '08:00', close: '17:00' }],
+  5: [{ open: '08:00', close: '17:00' }],
+  6: [{ open: '08:00', close: '17:00' }],
+  7: [{ open: '08:00', close: '17:00' }],
 }
 
 function clean(value = '') {
@@ -69,6 +78,21 @@ function normalizeCode(value = '') {
 
 function isNoServiceNotesValue(value = '') {
   return /^(?:sem_obs|sem_observacao|sem_observacoes|nenhuma|nenhum|nao|nada|normal|tudo_certo)$/.test(normalizeCode(value))
+}
+
+function mergePetbotServiceType(currentValue = '', previousValue = '') {
+  const current = clean(currentValue)
+  const previous = clean(previousValue)
+  if (!current) return previous || null
+  if (!previous) return current
+
+  const currentCode = normalizeCode(current)
+  const previousCode = normalizeCode(previous)
+  const previousIsSpecificGrooming = /^tosa_(?:tesoura|maquina|total|higienica)$/.test(previousCode)
+  if (previousIsSpecificGrooming && ['tosa', 'banho_tosa', 'servico'].includes(currentCode)) {
+    return previous
+  }
+  return current
 }
 
 function formatWeightValue(value) {
@@ -195,7 +219,7 @@ export function mergeInterpretedPetbotServiceFacts({
     coat_type_source: breedClassification?.coat_type
       ? 'breed_catalog'
       : (clean(inheritedPet.coat_type_source) || (coatFromCustomer ? 'customer_unsolicited' : null)),
-    service_type: clean(current.service_type) || clean(previous.service_type) || null,
+    service_type: mergePetbotServiceType(current.service_type, previous.service_type),
     service_date: clean(current.service_date || current.date) || clean(previous.service_date) || null,
     service_preferred_time: clean(current.service_preferred_time || current.preferred_time)
       || clean(previous.service_preferred_time)
@@ -290,11 +314,11 @@ function formatTimeMinutes(value) {
   return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`
 }
 
-function normalizeBusinessHours(value) {
-  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : DEFAULT_BUSINESS_HOURS
+function normalizeBusinessHours(value, fallback = DEFAULT_BOOKING_HOURS) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : fallback
   const normalized = {}
   for (let weekday = 1; weekday <= 7; weekday += 1) {
-    const raw = source[weekday] ?? source[String(weekday)] ?? DEFAULT_BUSINESS_HOURS[weekday] ?? []
+    const raw = source[weekday] ?? source[String(weekday)] ?? fallback[weekday] ?? []
     const periods = (Array.isArray(raw) ? raw : [])
       .map((period) => {
         const open = clean(period?.open)
@@ -315,8 +339,15 @@ export function normalizePetbotSchedulingSettings(settings = {}) {
   const slotIntervalMin = Math.max(5, Math.min(240, Number(settings.slotIntervalMin || settings.petbotSlotIntervalMin || DEFAULT_SLOT_INTERVAL_MINUTES) || DEFAULT_SLOT_INTERVAL_MINUTES))
   const leadTimeMin = Math.max(0, Math.min(10080, Number(settings.bookingLeadTimeMin || settings.petbotBookingLeadTimeMin || DEFAULT_BOOKING_LEAD_MINUTES) || 0))
   const capacity = Math.max(1, Math.min(100, Number(settings.bookingCapacity || settings.petbotBookingCapacity || DEFAULT_BOOKING_CAPACITY) || DEFAULT_BOOKING_CAPACITY))
-  const businessHours = normalizeBusinessHours(settings.businessHours || settings.petbotBusinessHours)
-  return { timezone, slotIntervalMin, leadTimeMin, capacity, businessHours }
+  const businessHours = normalizeBusinessHours(
+    settings.businessHours || settings.petbotBusinessHours,
+    DEFAULT_BOOKING_HOURS,
+  )
+  const storeBusinessHours = normalizeBusinessHours(
+    settings.storeBusinessHours || settings.store_business_hours,
+    DEFAULT_STORE_BUSINESS_HOURS,
+  )
+  return { timezone, slotIntervalMin, leadTimeMin, capacity, businessHours, storeBusinessHours }
 }
 
 const WEEKDAY_BY_NAME = new Map([
@@ -460,6 +491,14 @@ function catalogServiceCode(productId = '') {
   return compact ? `catalog_${compact}` : ''
 }
 
+function isClearlyPhysicalCatalogItem(row = {}) {
+  const name = normalize(row.name)
+  if (/maquina de tosa|maquina.*recarregavel|lamina|pente adaptador|secador|soprador/.test(name)) return true
+  if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|xampu|varinha/.test(name)) return true
+  if (/(?:condicionador|hidratante|mascara).*(?:\b\d+(?:[.,]\d+)?\s*(?:ml|l|litro|litros|g|kg)\b)/.test(name)) return true
+  return false
+}
+
 export function isServiceCatalogProduct(product = {}) {
   const metadata = objectValue(product?.bot_metadata)
   const name = normalize(product.name)
@@ -470,7 +509,7 @@ export function isServiceCatalogProduct(product = {}) {
   // legacy imports. A physical ration must remain sellable even if an old row
   // was accidentally tagged with product_type="servico".
   if (/racao|petisco|medicamento|acessorio|areia|brinquedo/.test(category)) return false
-  if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return false
+  if (isClearlyPhysicalCatalogItem(product)) return false
   if (/pacote.*banho|banho.*pacote/.test(name)) return false
 
   return normalize(metadata.product_type) === 'servico'
@@ -554,7 +593,7 @@ export function mergePetshopServiceCatalogs(dedicatedServices = [], products = [
   const authoritativeKinds = new Set(productServices.map((service) => serviceKind(`${service.code} ${service.name}`)).filter(Boolean))
 
   for (const raw of dedicatedServices || []) {
-    if (!raw || raw.active === false) continue
+    if (!raw || raw.active === false || isClearlyPhysicalCatalogItem(raw)) continue
     const sourceProductId = clean(raw.source_product_id)
     const rawKind = serviceKind(`${raw.code || ''} ${raw.name || ''}`)
     if (!sourceProductId && rawKind && authoritativeKinds.has(rawKind)) continue
@@ -1652,6 +1691,7 @@ export function buildServiceAvailability({
   }
 
   const periods = schedule.businessHours[day.weekday] || []
+  const storePeriods = schedule.storeBusinessHours[day.weekday] || []
   const durationMin = Math.max(15, Number(service.default_duration_min ?? service.duration_min ?? 60) || 60)
   const busyAppointments = (appointments || [])
     .map((row) => normalizeAppointment(row, schedule.timezone))
@@ -1661,6 +1701,7 @@ export function buildServiceAvailability({
     .filter((row) => AVAILABLE_STATUSES.has(normalize(row.status)))
   const nowDateTime = DateTime.fromJSDate(now).setZone(schedule.timezone)
   const slots = []
+  const daySchedule = []
 
   const appointmentInterval = (row) => {
     const source = clean(row.scheduled_at)
@@ -1685,10 +1726,10 @@ export function buildServiceAvailability({
 
   const candidateMinutes = []
   if (requestedMinutes !== null) candidateMinutes.push(requestedMinutes)
-  for (const businessPeriod of periods) {
+  for (const bookingPeriod of periods) {
     for (
-      let minutes = businessPeriod.openMinutes;
-      minutes + durationMin <= businessPeriod.closeMinutes;
+      let minutes = bookingPeriod.openMinutes;
+      minutes <= bookingPeriod.closeMinutes;
       minutes += schedule.slotIntervalMin
     ) {
       if (!candidateMinutes.includes(minutes)) candidateMinutes.push(minutes)
@@ -1696,10 +1737,10 @@ export function buildServiceAvailability({
   }
 
   for (const minutes of candidateMinutes) {
-    const containingPeriod = periods.find((businessPeriod) => (
-      minutes >= businessPeriod.openMinutes && minutes + durationMin <= businessPeriod.closeMinutes
+    const bookingPeriod = periods.find((entry) => (
+      minutes >= entry.openMinutes && minutes <= entry.closeMinutes
     ))
-    if (!containingPeriod) continue
+    if (!bookingPeriod) continue
     if (!periodMatches(minutes) && minutes !== requestedMinutes) continue
 
     const time = formatTimeMinutes(minutes)
@@ -1707,8 +1748,22 @@ export function buildServiceAvailability({
     const end = start.plus({ minutes: durationMin })
     if (!start.isValid || start <= nowDateTime.plus({ minutes: schedule.leadTimeMin })) continue
 
+    const storePeriod = storePeriods.find((entry) => (
+      minutes >= entry.openMinutes && minutes < entry.closeMinutes && minutes + durationMin <= entry.closeMinutes
+    ))
+    if (!storePeriod) {
+      daySchedule.push({ time, status: 'fora_do_funcionamento' })
+      continue
+    }
+
     const overlapCount = busyAppointments.filter((row) => candidateOverlaps(start, end, row)).length
-    if (overlapCount >= schedule.capacity) continue
+    const available = overlapCount < schedule.capacity
+    daySchedule.push({
+      time,
+      status: available ? 'disponivel' : 'ocupado',
+      capacity_remaining: Math.max(0, schedule.capacity - overlapCount),
+    })
+    if (!available) continue
 
     const explicitSlot = explicitAvailable.find((row) => {
       const interval = appointmentInterval(row)
@@ -1729,6 +1784,8 @@ export function buildServiceAvailability({
       capacity_remaining: Math.max(0, schedule.capacity - overlapCount),
     })
   }
+
+  daySchedule.sort((left, right) => (parseTimeMinutes(left.time) ?? 0) - (parseTimeMinutes(right.time) ?? 0))
 
   slots.sort((left, right) => {
     if (requestedMinutes === null) return new Date(left.scheduled_at) - new Date(right.scheduled_at)
@@ -1752,8 +1809,13 @@ export function buildServiceAvailability({
     business_date: requestedDate,
     service: publicService(service),
     requested_slot: requestedScheduledAt
-      ? { scheduled_at: requestedScheduledAt, available: Boolean(requestedSlot) }
+      ? {
+        scheduled_at: requestedScheduledAt,
+        available: Boolean(requestedSlot),
+        status: daySchedule.find((entry) => entry.time === formatTimeMinutes(requestedMinutes))?.status || 'indisponivel',
+      }
       : null,
+    day_schedule: daySchedule,
     available_slots: slots.slice(0, 12).map((slot) => ({
       appointment_id: slot.id,
       service_product_id: slot.service_product_id,
@@ -2103,6 +2165,43 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     : null
   const servicePrice = subscriptionBenefit ? 0 : regularServicePrice
 
+  const additionalServiceIds = [...new Set(
+    (Array.isArray(args.additional_service_ids) ? args.additional_service_ids : [])
+      .map((value) => clean(value))
+      .filter(Boolean),
+  )]
+  const additionalServices = []
+  for (const additionalId of additionalServiceIds) {
+    const additional = (services || [])
+      .map(normalizeService)
+      .find((candidate) => (
+        candidate.active
+        && candidate.group_type === serviceGroupForOrder(orderType)
+        && (
+          clean(candidate.id) === additionalId
+          || clean(candidate.source_product_id) === additionalId
+          || normalizeCode(candidate.code) === normalizeCode(additionalId)
+        )
+      ))
+    if (!additional || clean(additional.id) === clean(serviceDefinition?.id)) {
+      missing.push(`serviço adicional ativo: ${additionalId}`)
+      continue
+    }
+    const additionalPrice = Number(additional.default_price ?? additional.price ?? 0)
+    if (additionalPrice <= 0) {
+      missing.push(`preço confirmado do adicional ${clean(additional.name) || additionalId}`)
+      continue
+    }
+    additionalServices.push({
+      id: clean(additional.id),
+      source_product_id: clean(additional.source_product_id) || null,
+      code: clean(additional.code),
+      name: clean(additional.name),
+      price: additionalPrice,
+      duration_min: Math.max(0, Number(additional.default_duration_min || 0) || 0),
+    })
+  }
+
   const transport = resolvePetTransportSelection({
     args,
     settings,
@@ -2129,15 +2228,25 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
 
   const serviceType = serviceDefinition.code
   const serviceTransportFee = Number(transport.fee || 0)
+  const additionalItems = additionalServices.map((additional) => ({
+    product_id: additional.source_product_id || null,
+    service_id: additional.id,
+    name: additional.name,
+    quantity: 1,
+    unit_price: additional.price,
+    upsell: true,
+  }))
+  const additionalTotal = additionalItems.reduce((sum, item) => sum + Number(item.unit_price || 0), 0)
   const order = {
     ...base,
     items: [{
-      product_id: null,
+      product_id: serviceDefinition.source_product_id || null,
+      service_id: serviceDefinition.id || null,
       name: serviceDefinition.name,
       quantity: 1,
       unit_price: servicePrice,
       upsell: false,
-    }],
+    }, ...additionalItems],
     appointment_id: availableSlot.appointment_id || null,
     scheduled_at: availableSlot.scheduled_at,
     service_product_id: serviceDefinition.source_product_id || null,
@@ -2146,7 +2255,10 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     service_kind: serviceDefinition.service_kind || serviceKind(`${serviceDefinition.code || ''} ${serviceDefinition.name || ''}`),
     regular_service_price: regularServicePrice,
     subscription_benefit: subscriptionBenefit,
-    duration_min: Number(availableSlot.duration_min || serviceDefinition.default_duration_min || 60),
+    duration_min: Number(availableSlot.duration_min || serviceDefinition.default_duration_min || 60)
+      + additionalServices.reduce((sum, item) => sum + Number(item.duration_min || 0), 0),
+    additional_service_ids: additionalServices.map((item) => item.id),
+    additional_services: additionalServices,
     payment_method: null,
     fulfillment_type: 'servico',
     service_transport_fee: serviceTransportFee,
@@ -2157,7 +2269,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     service_transport_neighborhood: transport.requested ? transportNeighborhood : null,
     service_transport_city: transport.requested ? transportCity : null,
     service_transport_reference: transport.requested ? transportReference : null,
-    total: servicePrice + serviceTransportFee,
+    total: servicePrice + additionalTotal + serviceTransportFee,
   }
   const pendingOrderId = buildPendingOrderId(order)
   return {
