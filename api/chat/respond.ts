@@ -4,7 +4,7 @@ export const config = {
   api: {
     bodyParser: false,
   },
-  maxDuration: 30,
+  maxDuration: 120,
 }
 
 export default async function chatRespond(req: IncomingMessage, res: ServerResponse) {
