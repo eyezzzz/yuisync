@@ -1,10 +1,10 @@
 import { useState, useEffect } from 'react'
 import {
   Settings, Save, Store, Printer, MapPin, Phone, RefreshCw, AlertCircle, Check,
-  FileText, Building2, Users2, Plus, Bot, Truck, Clock, FlaskConical, CheckCircle2, XCircle,
+  FileText, Building2, Users2, Plus, Bot, Truck, Clock,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
-import { runPetbotLiveE2E } from '../../lib/api'
+import PetbotDiagnosticSuite from '../components/PetbotDiagnosticSuite'
 import { useAuthCtx } from '../../context/AuthContext'
 import { useModuleCtx } from '../../context/ModuleContext'
 import { MODULES } from '../../config/modules'
@@ -205,9 +205,6 @@ export default function SettingsPage() {
   const [newTenantName, setNewTenantName] = useState('')
   const [tenantSaving, setTenantSaving] = useState(false)
   const [petSettingsTab, setPetSettingsTab] = useState('geral') // geral | fiscal | diagnostico
-  const [diagnosticRunning, setDiagnosticRunning] = useState(false)
-  const [diagnosticReport, setDiagnosticReport] = useState(null)
-  const [diagnosticError, setDiagnosticError] = useState('')
 
   const effectiveModId = activeModuleId === 'system' ? selectedModId : activeModuleId
   const isPet = effectiveModId === 'petshop'
@@ -481,32 +478,6 @@ export default function SettingsPage() {
         [key]: value,
       },
     }))
-  }
-
-  async function handleRunPetbotDiagnostic() {
-    if (!canEdit || !activeTenantId || diagnosticRunning) return
-
-    const confirmed = window.confirm(
-      'Executar agora 3 conversas ficticias no PetBot? O teste criara registros temporarios, validara agenda e ordens e apagara tudo ao final.',
-    )
-    if (!confirmed) return
-
-    setDiagnosticRunning(true)
-    setDiagnosticReport(null)
-    setDiagnosticError('')
-    setMsg({ type: '', text: '' })
-
-    try {
-      const response = await runPetbotLiveE2E({ tenantId: activeTenantId })
-      setDiagnosticReport(response.data || null)
-      if (!response.success) {
-        setDiagnosticError(response.data?.error || response.data?.cleanup_error || 'Um ou mais fluxos falharam.')
-      }
-    } catch (error) {
-      setDiagnosticError(error instanceof Error ? error.message : 'Falha ao executar o diagnostico do PetBot.')
-    } finally {
-      setDiagnosticRunning(false)
-    }
   }
 
   async function handleCreateTenant() {
@@ -788,121 +759,8 @@ export default function SettingsPage() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
             {showDiagnosticSettings && (
-              <div className="col-span-1 md:col-span-2 space-y-5">
-                <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-6">
-                  <div className="flex flex-col md:flex-row md:items-start justify-between gap-5">
-                    <div className="flex items-start gap-4">
-                      <div className="w-12 h-12 rounded-2xl bg-primary/15 text-primary flex items-center justify-center flex-shrink-0">
-                        <FlaskConical size={22} />
-                      </div>
-                      <div>
-                        <h3 className="text-lg font-display font-bold text-text">Teste completo do PetBot</h3>
-                        <p className="text-sm text-muted mt-1 max-w-2xl">
-                          Simula as conversas de banho normal, banho com tosa e consulta veterinaria usando o runtime real. Cada fluxo confirma o atendimento, verifica agenda, venda e ordem, repete a confirmacao para testar duplicidade e remove os dados ficticios ao final.
-                        </p>
-                      </div>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={handleRunPetbotDiagnostic}
-                      disabled={!canEdit || !activeTenantId || diagnosticRunning}
-                      className="btn btn-primary gap-2 whitespace-nowrap"
-                    >
-                      {diagnosticRunning ? <RefreshCw size={16} className="animate-spin" /> : <FlaskConical size={16} />}
-                      {diagnosticRunning ? 'Executando testes...' : 'Executar os 3 testes'}
-                    </button>
-                  </div>
-
-                  {diagnosticRunning && (
-                    <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5">
-                      <p className="text-sm font-bold text-text">A Luna esta percorrendo as conversas ficticias.</p>
-                      <p className="text-xs text-muted mt-1">Mantenha esta tela aberta ate aparecer o relatorio final. Os registros sao auditados antes da limpeza.</p>
-                    </div>
-                  )}
-
-                  {diagnosticError && (
-                    <div className="rounded-2xl border border-red-500/20 bg-red-500/10 p-5 flex items-start gap-3 text-red-300">
-                      <XCircle size={18} className="mt-0.5 flex-shrink-0" />
-                      <div>
-                        <p className="text-sm font-bold">Diagnostico com falha</p>
-                        <p className="text-xs mt-1 break-words">{diagnosticError}</p>
-                      </div>
-                    </div>
-                  )}
-
-                  {diagnosticReport && (
-                    <div className="space-y-5">
-                      <div className={`rounded-2xl border p-5 flex items-start gap-3 ${
-                        diagnosticReport.failed === 0 && !diagnosticReport.cleanup_error
-                          ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300'
-                          : 'border-red-500/20 bg-red-500/10 text-red-300'
-                      }`}>
-                        {diagnosticReport.failed === 0 && !diagnosticReport.cleanup_error
-                          ? <CheckCircle2 size={20} className="mt-0.5 flex-shrink-0" />
-                          : <XCircle size={20} className="mt-0.5 flex-shrink-0" />}
-                        <div>
-                          <p className="text-sm font-bold">
-                            {diagnosticReport.passed} de {diagnosticReport.total} fluxos aprovados
-                          </p>
-                          <p className="text-xs mt-1">
-                            Execucao {diagnosticReport.marker} · {Math.max(1, Math.round(Number(diagnosticReport.duration_ms || 0) / 1000))}s
-                          </p>
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                        {['banho_normal', 'banho_tosa', 'veterinaria'].map((flowId) => {
-                          const result = diagnosticReport.results?.find((item) => item.flow === flowId)
-                          const labels = {
-                            banho_normal: 'Banho normal',
-                            banho_tosa: 'Banho + tosa',
-                            veterinaria: 'Veterinaria',
-                          }
-                          return (
-                            <div key={flowId} className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                              <div className="flex items-center gap-2">
-                                {result ? <CheckCircle2 size={17} className="text-emerald-400" /> : <XCircle size={17} className="text-red-400" />}
-                                <p className="text-sm font-bold text-text">{labels[flowId]}</p>
-                              </div>
-                              {result ? (
-                                <div className="mt-4 space-y-2 text-xs text-muted">
-                                  <p>Agenda: <span className="text-emerald-300 font-bold">salva</span></p>
-                                  <p>Ordem: <span className="text-emerald-300 font-bold">salva</span></p>
-                                  <p>Confirmacao duplicada: <span className="text-emerald-300 font-bold">segura</span></p>
-                                  <p>Servico: <span className="text-text">{result.service_type || '-'}</span></p>
-                                </div>
-                              ) : (
-                                <p className="mt-4 text-xs text-red-300">
-                                  {diagnosticReport.failed_flow === flowId ? diagnosticReport.error : 'Nao executado.'}
-                                </p>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-
-                      <div className="rounded-2xl border border-white/10 bg-white/[0.03] p-5">
-                        <div className="flex items-center justify-between gap-3">
-                          <div>
-                            <p className="text-sm font-bold text-text">Limpeza dos dados ficticios</p>
-                            <p className="text-xs text-muted mt-1">Todos os contadores precisam terminar em zero.</p>
-                          </div>
-                          {diagnosticReport.cleanup && Object.values(diagnosticReport.cleanup.remaining || {}).every((value) => Number(value) === 0)
-                            ? <CheckCircle2 size={20} className="text-emerald-400" />
-                            : <XCircle size={20} className="text-red-400" />}
-                        </div>
-                        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mt-4">
-                          {Object.entries(diagnosticReport.cleanup?.remaining || {}).map(([key, value]) => (
-                            <div key={key} className="rounded-xl bg-black/10 px-3 py-2">
-                              <p className="text-[10px] uppercase tracking-wider text-muted">{key}</p>
-                              <p className={`text-lg font-black ${Number(value) === 0 ? 'text-emerald-300' : 'text-red-300'}`}>{value}</p>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
+              <div className="col-span-1 md:col-span-2">
+                <PetbotDiagnosticSuite tenantId={activeTenantId} canEdit={canEdit} />
               </div>
             )}
             <div className={showGeneralSettings ? 'space-y-4' : 'hidden'}>
