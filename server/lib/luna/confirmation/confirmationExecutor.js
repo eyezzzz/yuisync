@@ -6,6 +6,7 @@ import {
   classifyConfirmationContractChange,
   classifyConfirmationValidationFailure,
   confirmationContractsEqual,
+  diffConfirmationContracts,
   isCommitResultAmbiguous,
   requiredPersistenceIdsPresent,
 } from './confirmationPolicy.js'
@@ -209,6 +210,13 @@ export async function executeLunaConfirmation({
     : JSON.stringify(refreshed.order)
 
   if (!confirmationContractsEqual(pendingOrder.order, refreshed.order)) {
+    const contractChanges = diffConfirmationContracts(
+      pendingOrder.order,
+      refreshed.order,
+    )
+    const contractChangeReason = contractChanges.length
+      ? `confirmation_contract_changed:${contractChanges.join(',')}`
+      : 'confirmation_contract_changed'
     const classification = classifyConfirmationContractChange(
       pendingOrder.order,
       refreshed.order,
@@ -223,9 +231,10 @@ export async function executeLunaConfirmation({
       ok: false,
       status: 'changed',
       classification,
-      reason: 'confirmation_contract_changed',
+      reason: contractChangeReason,
+      contract_changes: contractChanges,
       summary: refreshed.summary || '',
-      state: failedState(state, classification, 'confirmation_contract_changed'),
+      state: failedState(state, classification, contractChangeReason),
       pendingOrder: nextPendingOrder,
       orderResult: null,
     }
