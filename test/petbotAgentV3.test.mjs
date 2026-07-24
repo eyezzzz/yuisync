@@ -27,7 +27,11 @@ import {
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
 import { buildPetbotSearchText, recoverPetbotContextFromHistory } from '../server/lib/petbotContext.js'
-import { inferExplicitPetTransportMode } from '../server/lib/chat.js'
+import {
+  buildPetbotAvailableSlotContinuation,
+  inferExplicitPetTransportMode,
+  sanitizePetbotTransportAddress,
+} from '../server/lib/chat.js'
 
 const service = {
   id: 'service-long-small',
@@ -1440,7 +1444,7 @@ test('MotoDog bloqueia resumo ate escolher modalidade e completar endereco', () 
   assert.equal(missingAddress.ok, false)
   assert.ok(missingAddress.missing.includes('rua e número para transporte do pet'))
   assert.ok(missingAddress.missing.includes('bairro para transporte do pet'))
-  assert.ok(missingAddress.missing.includes('cidade para transporte do pet'))
+  assert.ok(missingAddress.missing.includes('cidade ou distrito para transporte do pet'))
   assert.ok(missingAddress.missing.includes('ponto de referência para transporte do pet'))
 
   const complete = preparePetshopOrderDraft({
@@ -1462,6 +1466,22 @@ test('MotoDog bloqueia resumo ate escolher modalidade e completar endereco', () 
   assert.match(complete.summary, /Buscar e levar.*R\$\s*20,00/i)
   assert.match(complete.summary, /Rua das Flores, 120.*Centro.*Muriaé/i)
   assert.match(complete.summary, /portão azul/i)
+
+  const district = preparePetshopOrderDraft({
+    args: {
+      ...baseArgs,
+      service_transport_mode: 'buscar_e_levar',
+      service_transport_address: 'Rua Principal, 45',
+      service_transport_neighborhood: 'Centro',
+      service_transport_city: 'Distrito de Belisário',
+      service_transport_reference: 'próximo à praça',
+      service_transport_address_confirmed: true,
+    },
+    services: [service], appointments: [], settings,
+    now: new Date('2026-07-23T10:00:00-03:00'),
+  })
+  assert.equal(district.ok, true)
+  assert.match(district.summary, /Distrito de Belisário/i)
 })
 
 test('validador impede resumo antes de modalidade e endereco do MotoDog', () => {
@@ -1634,4 +1654,78 @@ test('modalidade específica de tosa não volta para o tipo genérico nas mensag
   })
 
   assert.equal(nextTurn.service_type, 'tosa tesoura')
+})
+
+test('pedido genérico de MotoDog não pode ser reduzido pelo modelo a modalidade paga', () => {
+  const facts = mergeInterpretedPetbotServiceFacts({
+    interpretation: { service_transport_mode: 'motodog' },
+    previousFacts: {},
+  })
+  const grounded = groundPetbotServiceArgs({ service_transport_mode: 'buscar_e_levar' }, facts)
+  assert.equal(grounded.service_transport_mode, 'motodog')
+})
+
+test('resposta não pode anunciar agendamento antes do commit', () => {
+  const validation = validatePetbotOperationalReply({
+    reply: 'Ótimo, está agendado para hoje às 15:00!',
+    toolRuns: [{
+      name: 'check_petshop_availability',
+      ok: true,
+      result: {
+        status: 'available',
+        requested_slot: { available: true, scheduled_at: '2026-07-24T15:00:00-03:00' },
+      },
+    }],
+  })
+  assert.equal(validation.ok, false)
+  assert.ok(validation.problems.includes('conclusão de pedido sem transação confirmada'))
+})
+
+test('placeholder interno não pode aparecer como nome do cliente', () => {
+  const validation = validatePetbotConversationReply({
+    reply: 'Bom dia, nao confirmado! Como posso ajudar?',
+    facts: {},
+  })
+  assert.equal(validation.ok, false)
+  assert.ok(validation.problems.some((problem) => problem.includes('placeholder interno')))
+})
+
+
+test('horário validado é reconhecido antes da próxima pergunta', () => {
+  const reply = buildPetbotAvailableSlotContinuation({
+    availability: {
+      requested_slot: { available: true, scheduled_at: '2026-07-24T14:00:00-03:00' },
+    },
+    facts: { pet_name: 'Toby' },
+    customerName: 'Gabriela',
+    currentTurnSelectedSchedule: true,
+  })
+  assert.match(reply, /14:00 está disponível/)
+  assert.match(reply, /Como o Toby chegará à loja/)
+  assert.doesNotMatch(reply, /está agendado/)
+})
+
+test('cliente sem nome confirmado é solicitado antes do fechamento', () => {
+  const reply = buildPetbotAvailableSlotContinuation({
+    availability: {
+      requested_slot: { available: true, scheduled_at: '2026-07-24T15:00:00-03:00' },
+    },
+    facts: { pet_name: 'Roberto' },
+    customerName: 'nao confirmado',
+    currentTurnSelectedSchedule: true,
+  })
+  assert.match(reply, /15:00 está disponível/)
+  assert.match(reply, /qual é o seu nome/i)
+  assert.doesNotMatch(reply, /nao confirmado/i)
+})
+
+test('referência informal não é aceita como cidade do MotoDog', () => {
+  const address = sanitizePetbotTransportAddress({
+    service_transport_address: 'av. antonio tureta 339',
+    service_transport_neighborhood: 'sao joaquim',
+    service_transport_city: 'em frente a mercearia',
+    service_transport_reference: 'em frente a mercearia',
+  })
+  assert.equal(address.service_transport_city, null)
+  assert.equal(address.service_transport_reference, 'em frente a mercearia')
 })

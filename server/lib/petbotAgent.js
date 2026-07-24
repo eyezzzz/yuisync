@@ -287,7 +287,9 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
     service_grooming_detail: facts.service_notes_explicit
       ? clean(facts.service_notes) || null
       : null,
-    service_transport_mode: facts.service_transport_mode_explicit && normalizeCode(facts.service_transport_mode) !== 'motodog'
+    // A generic MotoDog request is intentionally unresolved. The model may
+    // not narrow it to a paid modality that the customer did not choose.
+    service_transport_mode: facts.service_transport_mode_explicit
       ? clean(facts.service_transport_mode)
       : clean(args.service_transport_mode) || null,
     service_transport_label: clean(facts.service_transport_label) || clean(args.service_transport_label) || null,
@@ -2222,7 +2224,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   if (transport.ok && transport.requested) {
     if (!transportAddress || !/\d/.test(transportAddress)) missing.push('rua e número para transporte do pet')
     if (!transportNeighborhood) missing.push('bairro para transporte do pet')
-    if (!transportCity) missing.push('cidade para transporte do pet')
+    if (!transportCity) missing.push('cidade ou distrito para transporte do pet')
     if (!transportReference) missing.push('ponto de referência para transporte do pet')
     if (args.service_transport_address_confirmed !== true) missing.push('confirmação do endereço do MotoDog')
   }
