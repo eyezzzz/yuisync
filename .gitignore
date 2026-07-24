@@ -6,7 +6,3 @@ node_modules/
 supabase/.temp/
 backups/
 __pycache__/
-LUNA_SHADOW_ENABLED=true
-LUNA_SHADOW_DOMAINS=bath
-LUNA_SHADOW_SAMPLE_RATE=1
-LUNA_SHADOW_ENABLED=false
