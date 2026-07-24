@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import {
-  Settings, Save, Store, Printer, MapPin, Phone, RefreshCw, AlertCircle, Check,
+  Settings, Save, Store, Printer, Phone, RefreshCw, AlertCircle, Check,
   FileText, Building2, Users2, Plus, Bot, Truck, Clock,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
@@ -11,7 +11,7 @@ import { MODULES } from '../../config/modules'
 import { buildTenantPayload, isTenantSchemaError, runWithTenantFallback } from '../../lib/tenant'
 import { DEFAULT_PETBOT_PROMPT } from '../../../shared/petbotPrompt'
 
-const DEFAULT_PETBOT_BUSINESS_HOURS = {
+const DEFAULT_STORE_BUSINESS_HOURS = {
   1: [{ open: '08:00', close: '18:00' }],
   2: [{ open: '08:00', close: '18:00' }],
   3: [{ open: '08:00', close: '18:00' }],
@@ -19,6 +19,16 @@ const DEFAULT_PETBOT_BUSINESS_HOURS = {
   5: [{ open: '08:00', close: '18:00' }],
   6: [{ open: '08:00', close: '18:00' }],
   7: [{ open: '08:00', close: '18:00' }],
+}
+
+const DEFAULT_PETBOT_BUSINESS_HOURS = {
+  1: [{ open: '08:00', close: '17:00' }],
+  2: [{ open: '08:00', close: '17:00' }],
+  3: [{ open: '08:00', close: '17:00' }],
+  4: [{ open: '08:00', close: '17:00' }],
+  5: [{ open: '08:00', close: '17:00' }],
+  6: [{ open: '08:00', close: '17:00' }],
+  7: [{ open: '08:00', close: '17:00' }],
 }
 
 const PETBOT_WEEKDAYS = [
@@ -73,6 +83,7 @@ const INITIAL_FORM = {
   petbot_autonomy_mode: 'canary',
   petbot_autonomy_allowlist: '',
   petbot_timezone: 'America/Sao_Paulo',
+  store_business_hours: DEFAULT_STORE_BUSINESS_HOURS,
   petbot_business_hours: DEFAULT_PETBOT_BUSINESS_HOURS,
   petbot_slot_interval_min: '30',
   petbot_booking_lead_time_min: '15',
@@ -121,6 +132,7 @@ function isFeeSchemaError(error) {
     || msg.includes('petbot_autonomy_mode')
     || msg.includes('petbot_autonomy_allowlist')
     || msg.includes('petbot_timezone')
+    || msg.includes('store_business_hours')
     || msg.includes('petbot_business_hours')
     || msg.includes('petbot_slot_interval_min')
     || msg.includes('petbot_booking_lead_time_min')
@@ -154,17 +166,45 @@ function normalizeTemplates(value) {
   return { ...DEFAULT_MESSAGE_TEMPLATES, ...(value && typeof value === 'object' ? value : {}) }
 }
 
-function normalizeBusinessHours(value) {
+function normalizeBusinessHours(value, fallback = DEFAULT_PETBOT_BUSINESS_HOURS) {
   const source = value && typeof value === 'object' && !Array.isArray(value)
     ? value
-    : DEFAULT_PETBOT_BUSINESS_HOURS
+    : fallback
   return Object.fromEntries(PETBOT_WEEKDAYS.map(([weekday]) => {
     const rows = Array.isArray(source[weekday] ?? source[String(weekday)])
       ? (source[weekday] ?? source[String(weekday)])
-      : DEFAULT_PETBOT_BUSINESS_HOURS[weekday]
+      : fallback[weekday]
     const first = rows?.[0]
     return [weekday, first?.open && first?.close ? [{ open: first.open, close: first.close }] : []]
   }))
+}
+
+function timeToMinutes(value = '') {
+  const match = String(value || '').match(/^(\d{2}):(\d{2})$/)
+  if (!match) return null
+  return Number(match[1]) * 60 + Number(match[2])
+}
+
+function validateStoreAndBookingHours(storeHours, bookingHours) {
+  const store = normalizeBusinessHours(storeHours, DEFAULT_STORE_BUSINESS_HOURS)
+  const booking = normalizeBusinessHours(bookingHours, DEFAULT_PETBOT_BUSINESS_HOURS)
+  for (const [weekday, label] of PETBOT_WEEKDAYS) {
+    const storePeriod = store[weekday]?.[0]
+    const bookingPeriod = booking[weekday]?.[0]
+    if (!bookingPeriod) continue
+    if (!storePeriod) return `${label}: a agenda está aberta, mas a loja está fechada.`
+    const storeOpen = timeToMinutes(storePeriod.open)
+    const storeClose = timeToMinutes(storePeriod.close)
+    const bookingOpen = timeToMinutes(bookingPeriod.open)
+    const bookingClose = timeToMinutes(bookingPeriod.close)
+    if ([storeOpen, storeClose, bookingOpen, bookingClose].some((value) => value == null)) {
+      return `${label}: revise os horários informados.`
+    }
+    if (bookingOpen < storeOpen || bookingClose >= storeClose) {
+      return `${label}: os agendamentos devem começar dentro do funcionamento da loja e o último horário precisa ser anterior ao fechamento.`
+    }
+  }
+  return ''
 }
 
 function serializeTransportOptions(rows = []) {
@@ -271,7 +311,8 @@ export default function SettingsPage() {
           petbot_autonomy_mode: ['assist', 'canary', 'enabled'].includes(data.petbot_autonomy_mode) ? data.petbot_autonomy_mode : 'canary',
           petbot_autonomy_allowlist: Array.isArray(data.petbot_autonomy_allowlist) ? data.petbot_autonomy_allowlist.join(', ') : '',
           petbot_timezone: data.petbot_timezone || 'America/Sao_Paulo',
-          petbot_business_hours: normalizeBusinessHours(data.petbot_business_hours),
+          store_business_hours: normalizeBusinessHours(data.store_business_hours, DEFAULT_STORE_BUSINESS_HOURS),
+          petbot_business_hours: normalizeBusinessHours(data.petbot_business_hours, DEFAULT_PETBOT_BUSINESS_HOURS),
           petbot_slot_interval_min: data.petbot_slot_interval_min != null ? String(data.petbot_slot_interval_min) : '30',
           petbot_booking_lead_time_min: data.petbot_booking_lead_time_min != null ? String(data.petbot_booking_lead_time_min) : '15',
           petbot_booking_capacity: data.petbot_booking_capacity != null ? String(data.petbot_booking_capacity) : '1',
@@ -354,6 +395,11 @@ export default function SettingsPage() {
 
   async function handleSave() {
     if (!canEdit || !effectiveModId) return
+    const hoursError = validateStoreAndBookingHours(form.store_business_hours, form.petbot_business_hours)
+    if (hoursError) {
+      setMsg({ type: 'error', text: hoursError })
+      return
+    }
     if (effectiveModId === 'petshop' && form.fiscal_provider === 'mock_local' && !isTestTenant) {
       setMsg({ type: 'error', text: 'Mock Local e permitido somente no tenant de testes configurado.' })
       return
@@ -370,7 +416,8 @@ export default function SettingsPage() {
           message_templates: normalizeTemplates(form.message_templates),
           petbot_autonomy_allowlist: String(form.petbot_autonomy_allowlist || '').split(/[,\n]/).map((value) => value.trim()).filter(Boolean),
           petbot_timezone: String(form.petbot_timezone || 'America/Sao_Paulo').trim(),
-          petbot_business_hours: normalizeBusinessHours(form.petbot_business_hours),
+          store_business_hours: normalizeBusinessHours(form.store_business_hours, DEFAULT_STORE_BUSINESS_HOURS),
+          petbot_business_hours: normalizeBusinessHours(form.petbot_business_hours, DEFAULT_PETBOT_BUSINESS_HOURS),
           petbot_slot_interval_min: Math.max(5, Number(form.petbot_slot_interval_min || 30)),
           petbot_booking_lead_time_min: Math.max(0, Number(form.petbot_booking_lead_time_min || 15)),
           petbot_booking_capacity: Math.max(1, Number(form.petbot_booking_capacity || 1)),
@@ -390,6 +437,7 @@ export default function SettingsPage() {
           delete fallbackRow.petbot_autonomy_mode
           delete fallbackRow.petbot_autonomy_allowlist
           delete fallbackRow.petbot_timezone
+          delete fallbackRow.store_business_hours
           delete fallbackRow.petbot_business_hours
           delete fallbackRow.petbot_slot_interval_min
           delete fallbackRow.petbot_booking_lead_time_min
@@ -453,7 +501,7 @@ export default function SettingsPage() {
       }
 
       await auth.refreshSettings(effectiveModId)
-      setMsg({ type: 'success', text: 'Configuracoes salvas com sucesso.' })
+      setMsg({ type: 'success', text: 'Configurações salvas com sucesso.' })
     } catch (error) {
       setMsg({ type: 'error', text: error instanceof Error ? error.message : 'Erro ao salvar configuracoes.' })
     } finally {
@@ -553,10 +601,10 @@ export default function SettingsPage() {
                     ? 'Instancias de Cliente'
                     : systemView === 'modules'
                       ? 'Modulos da Plataforma'
-                      : 'Central de Configuracoes'
+                      : 'Central de Configurações'
                 : isPet
-                  ? 'Configuracoes da Loja'
-                  : 'Configuracoes'}
+                  ? 'Configurações da Loja'
+                  : 'Configurações'}
             </h1>
             <p className="page-sub">
               {activeModuleId === 'system' && !selectedModId
@@ -573,7 +621,7 @@ export default function SettingsPage() {
         {canEdit && (activeModuleId !== 'system' || selectedModId) && !showDiagnosticSettings && (
           <button onClick={handleSave} disabled={saving} className="btn btn-primary gap-2 h-fit">
             {saving ? <RefreshCw size={16} className="animate-spin" /> : <Save size={16} />}
-            Salvar alteracoes
+            Salvar alterações
           </button>
         )}
       </div>
@@ -752,20 +800,20 @@ export default function SettingsPage() {
                     : 'text-muted hover:text-text'
                 }`}
               >
-                Diagnostico
+                Diagnóstico
               </button>
             </div>
           )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div className="grid grid-cols-1 gap-8">
             {showDiagnosticSettings && (
               <div className="col-span-1 md:col-span-2">
                 <PetbotDiagnosticSuite tenantId={activeTenantId} canEdit={canEdit} />
               </div>
             )}
-            <div className={showGeneralSettings ? 'space-y-4' : 'hidden'}>
+            <div className={showGeneralSettings ? 'space-y-4 order-1' : 'hidden'}>
               <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
-                <Store size={14} /> Identificacao do modulo
+                <Store size={14} /> Dados da loja
               </h3>
               <div className="bg-card border border-white/5 rounded-3xl p-8 space-y-6 shadow-sm">
                 <div>
@@ -801,13 +849,27 @@ export default function SettingsPage() {
                     />
                   </div>
                 </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t border-white/5">
+                  <div className="md:col-span-2">
+                    <label className="inp-label">Endereço</label>
+                    <input className="inp" placeholder="Rua, número" disabled={!canEdit} value={form.store_address} onChange={(event) => setForm((prev) => ({ ...prev, store_address: event.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="inp-label">Bairro</label>
+                    <input className="inp" placeholder="Bairro" disabled={!canEdit} value={form.store_neighborhood} onChange={(event) => setForm((prev) => ({ ...prev, store_neighborhood: event.target.value }))} />
+                  </div>
+                  <div>
+                    <label className="inp-label">Cidade</label>
+                    <input className="inp" placeholder="Cidade" disabled={!canEdit} value={form.store_city} onChange={(event) => setForm((prev) => ({ ...prev, store_city: event.target.value }))} />
+                  </div>
+                </div>
               </div>
               <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-5">
                 <div className="flex items-center gap-2">
                   <Clock size={16} />
                   <div>
-                    <h4 className="font-bold">Agenda usada pelo PetBot</h4>
-                    <p className="text-xs text-muted">Esses dados definem os horários que o agente pode oferecer e confirmar.</p>
+                    <h4 className="font-bold">Horários da loja e da agenda</h4>
+                    <p className="text-xs text-muted">Funcionamento define quando a loja está aberta. Agendamentos define os horários de início que a Luna pode oferecer.</p>
                   </div>
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -858,55 +920,53 @@ export default function SettingsPage() {
                     />
                   </div>
                 </div>
-                <div className="space-y-2">
+                <div className="space-y-3">
+                  <div className="hidden lg:grid grid-cols-[110px_90px_repeat(4,minmax(0,1fr))] gap-3 px-3 text-[11px] font-black uppercase tracking-wider text-muted">
+                    <span>Dia</span><span>Status</span><span>Loja abre</span><span>Loja fecha</span><span>Agenda inicia</span><span>Último horário</span>
+                  </div>
                   {PETBOT_WEEKDAYS.map(([weekday, label]) => {
-                    const periods = normalizeBusinessHours(form.petbot_business_hours)[weekday] || []
-                    const open = periods[0]?.open || '08:00'
-                    const close = periods[0]?.close || '18:00'
-                    const enabled = periods.length > 0
-                    const updateDay = (next) => setForm((prev) => ({
-                      ...prev,
-                      petbot_business_hours: {
-                        ...normalizeBusinessHours(prev.petbot_business_hours),
-                        [weekday]: next,
-                      },
-                    }))
+                    const storePeriods = normalizeBusinessHours(form.store_business_hours, DEFAULT_STORE_BUSINESS_HOURS)[weekday] || []
+                    const bookingPeriods = normalizeBusinessHours(form.petbot_business_hours, DEFAULT_PETBOT_BUSINESS_HOURS)[weekday] || []
+                    const storeOpen = storePeriods[0]?.open || '08:00'
+                    const storeClose = storePeriods[0]?.close || '18:00'
+                    const bookingOpen = bookingPeriods[0]?.open || '08:00'
+                    const bookingClose = bookingPeriods[0]?.close || '17:00'
+                    const enabled = storePeriods.length > 0
+                    const updateHours = (field, value) => setForm((prev) => {
+                      const nextStore = normalizeBusinessHours(prev.store_business_hours, DEFAULT_STORE_BUSINESS_HOURS)
+                      const nextBooking = normalizeBusinessHours(prev.petbot_business_hours, DEFAULT_PETBOT_BUSINESS_HOURS)
+                      if (field === 'enabled') {
+                        nextStore[weekday] = value ? [{ open: storeOpen, close: storeClose }] : []
+                        nextBooking[weekday] = value ? [{ open: bookingOpen, close: bookingClose }] : []
+                      } else if (field.startsWith('store_')) {
+                        nextStore[weekday] = [{ open: field === 'store_open' ? value : storeOpen, close: field === 'store_close' ? value : storeClose }]
+                      } else {
+                        nextBooking[weekday] = [{ open: field === 'booking_open' ? value : bookingOpen, close: field === 'booking_close' ? value : bookingClose }]
+                      }
+                      return { ...prev, store_business_hours: nextStore, petbot_business_hours: nextBooking }
+                    })
                     return (
-                      <div key={weekday} className="grid grid-cols-[110px_80px_1fr_1fr] items-center gap-3 rounded-xl border border-white/5 p-3">
-                        <span className="text-sm font-medium">{label}</span>
-                        <label className="flex items-center gap-2 text-xs text-muted">
-                          <input
-                            type="checkbox"
-                            disabled={!canEdit}
-                            checked={enabled}
-                            onChange={(event) => updateDay(event.target.checked ? [{ open, close }] : [])}
-                          />
-                          Aberto
+                      <div key={weekday} className="grid grid-cols-1 lg:grid-cols-[110px_90px_repeat(4,minmax(0,1fr))] items-end lg:items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                        <span className="text-sm font-bold text-text">{label}</span>
+                        <label className="flex items-center gap-2 text-xs text-muted pb-2 lg:pb-0">
+                          <input type="checkbox" disabled={!canEdit} checked={enabled} onChange={(event) => updateHours('enabled', event.target.checked)} />
+                          {enabled ? 'Aberto' : 'Fechado'}
                         </label>
-                        <input
-                          className="inp"
-                          type="time"
-                          disabled={!canEdit || !enabled}
-                          value={open}
-                          onChange={(event) => updateDay([{ open: event.target.value, close }])}
-                        />
-                        <input
-                          className="inp"
-                          type="time"
-                          disabled={!canEdit || !enabled}
-                          value={close}
-                          onChange={(event) => updateDay([{ open, close: event.target.value }])}
-                        />
+                        <div><label className="inp-label lg:hidden">Loja abre</label><input className="inp" type="time" disabled={!canEdit || !enabled} value={storeOpen} onChange={(event) => updateHours('store_open', event.target.value)} /></div>
+                        <div><label className="inp-label lg:hidden">Loja fecha</label><input className="inp" type="time" disabled={!canEdit || !enabled} value={storeClose} onChange={(event) => updateHours('store_close', event.target.value)} /></div>
+                        <div><label className="inp-label lg:hidden">Agenda inicia</label><input className="inp" type="time" disabled={!canEdit || !enabled} value={bookingOpen} onChange={(event) => updateHours('booking_open', event.target.value)} /></div>
+                        <div><label className="inp-label lg:hidden">Último horário</label><input className="inp" type="time" disabled={!canEdit || !enabled} value={bookingClose} onChange={(event) => updateHours('booking_close', event.target.value)} /></div>
                       </div>
                     )
                   })}
+                  <p className="text-xs text-muted px-1">Padrão sugerido: loja das 08:00 às 18:00 e agendamentos com início das 08:00 às 17:00.</p>
                 </div>
               </div>
             </div>
 
-            <div className={showGeneralSettings ? 'space-y-4' : 'hidden'}>
+            <div className={showGeneralSettings ? 'space-y-4 order-4' : 'hidden'}>
               <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
-                {isPet ? <Printer size={14} /> : <FileText size={14} />} {isPet ? 'Impressao termica' : 'Preferencias visuais'}
+                {isPet ? <Printer size={14} /> : <FileText size={14} />} {isPet ? 'Impressão térmica' : 'Preferências visuais'}
               </h3>
               <div className="bg-card border border-white/5 rounded-3xl p-8 space-y-6 shadow-sm">
                 {isPet ? (
@@ -936,23 +996,30 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className={showGeneralSettings ? 'col-span-1 md:col-span-2 space-y-4' : 'hidden'}>
+            <div className={showGeneralSettings ? 'space-y-4 order-5' : 'hidden'}>
               <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
-                <Bot size={14} /> Prompt do bot
+                <Bot size={14} /> PetBot e automação
               </h3>
-              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm">
-                <label className="inp-label">Prompt ativo deste tenant</label>
-                <textarea
-                  className="inp min-h-[180px] resize-y"
-                  placeholder="Prompt ativo do PetBot para este tenant..."
-                  disabled={!canEdit}
-                  value={form.bot_prompt}
-                  onChange={(event) => setForm((prev) => ({ ...prev, bot_prompt: event.target.value }))}
-                />
-                <p className="text-xs text-muted mt-3">
-                  Este e o prompt ativo do PetBot para este tenant. Edite apenas ajustes pontuais; o bot continua usando dados reais do banco para loja, estoque, agenda e historico.
-                </p>
-              </div>
+              <details className="bg-card border border-white/5 rounded-3xl p-6 shadow-sm group">
+                <summary className="cursor-pointer list-none flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-bold text-text">Prompt personalizado</p>
+                    <p className="text-xs text-muted mt-1">Configuração avançada. Deixe fechada durante o uso normal.</p>
+                  </div>
+                  <span className="text-xs font-bold text-muted group-open:rotate-180 transition-transform">⌄</span>
+                </summary>
+                <div className="pt-6 mt-5 border-t border-white/5">
+                  <label className="inp-label">Prompt ativo deste tenant</label>
+                  <textarea
+                    className="inp min-h-[180px] resize-y"
+                    placeholder="Prompt ativo do PetBot para este tenant..."
+                    disabled={!canEdit}
+                    value={form.bot_prompt}
+                    onChange={(event) => setForm((prev) => ({ ...prev, bot_prompt: event.target.value }))}
+                  />
+                  <p className="text-xs text-muted mt-3">Edite apenas ajustes pontuais. Estoque, agenda e dados da loja continuam vindo do banco.</p>
+                </div>
+              </details>
               <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-4">
                 <div>
                   <label className="inp-label">Autonomia do PetBot</label>
@@ -963,7 +1030,7 @@ export default function SettingsPage() {
                     onChange={(event) => setForm((prev) => ({ ...prev, petbot_autonomy_mode: event.target.value }))}
                   >
                     <option value="assist">Somente assistido — equipe conclui todos os pedidos</option>
-                    <option value="canary">Canario — somente contatos autorizados concluem automaticamente</option>
+                    <option value="canary">Canário — somente contatos autorizados concluem automaticamente</option>
                     <option value="enabled">Autônomo — o agente pode concluir pedidos validados</option>
                   </select>
                 </div>
@@ -983,7 +1050,7 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className={showGeneralSettings ? 'space-y-4' : 'hidden'}>
+            <div className={showGeneralSettings ? 'space-y-4 order-3' : 'hidden'}>
               <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
                 <Truck size={14} /> Entrega
               </h3>
@@ -1042,64 +1109,29 @@ export default function SettingsPage() {
               </div>
             </div>
 
-            <div className={showGeneralSettings ? 'col-span-1 md:col-span-2 space-y-4' : 'hidden'}>
+            <div className={showGeneralSettings ? 'space-y-4 order-6' : 'hidden'}>
               <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
-                <FileText size={14} /> Mensagens padrao
+                <FileText size={14} /> Mensagens padrão
               </h3>
-              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm grid grid-cols-1 md:grid-cols-2 gap-5">
-                {Object.entries(normalizeTemplates(form.message_templates)).map(([key, value]) => (
-                  <div key={key} className="space-y-2">
-                    <label className="inp-label">{key.replaceAll('_', ' ')}</label>
-                    <textarea
-                      className="inp min-h-[110px] resize-y"
-                      disabled={!canEdit}
-                      value={value}
-                      onChange={(event) => updateTemplate(key, event.target.value)}
-                    />
+              <details className="bg-card border border-white/5 rounded-3xl p-6 shadow-sm group">
+                <summary className="cursor-pointer list-none flex items-center justify-between gap-4">
+                  <div>
+                    <p className="text-sm font-bold text-text">Editar mensagens automáticas</p>
+                    <p className="text-xs text-muted mt-1">Banho, consulta, MotoDog, confirmações e demais textos aprovados.</p>
                   </div>
-                ))}
-              </div>
+                  <span className="text-xs font-bold text-muted group-open:rotate-180 transition-transform">⌄</span>
+                </summary>
+                <div className="pt-6 mt-5 border-t border-white/5 grid grid-cols-1 md:grid-cols-2 gap-5">
+                  {Object.entries(normalizeTemplates(form.message_templates)).map(([key, value]) => (
+                    <div key={key} className="space-y-2">
+                      <label className="inp-label">{key.replaceAll('_', ' ')}</label>
+                      <textarea className="inp min-h-[110px] resize-y" disabled={!canEdit} value={value} onChange={(event) => updateTemplate(key, event.target.value)} />
+                    </div>
+                  ))}
+                </div>
+              </details>
             </div>
 
-            <div className={showGeneralSettings ? 'col-span-1 md:col-span-2 space-y-4' : 'hidden'}>
-              <h3 className="text-xs font-black text-muted uppercase tracking-[0.2em] flex items-center gap-2">
-                <MapPin size={14} /> Localizacao
-              </h3>
-              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                  <div className="md:col-span-2">
-                    <label className="inp-label">Endereco</label>
-                    <input
-                      className="inp"
-                      placeholder="Rua, numero"
-                      disabled={!canEdit}
-                      value={form.store_address}
-                      onChange={(event) => setForm((prev) => ({ ...prev, store_address: event.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="inp-label">Bairro</label>
-                    <input
-                      className="inp"
-                      placeholder="Bairro"
-                      disabled={!canEdit}
-                      value={form.store_neighborhood}
-                      onChange={(event) => setForm((prev) => ({ ...prev, store_neighborhood: event.target.value }))}
-                    />
-                  </div>
-                  <div>
-                    <label className="inp-label">Cidade</label>
-                    <input
-                      className="inp"
-                      placeholder="Cidade"
-                      disabled={!canEdit}
-                      value={form.store_city}
-                      onChange={(event) => setForm((prev) => ({ ...prev, store_city: event.target.value }))}
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
 
             {showFiscalSettings && (
               <div className="col-span-1 md:col-span-2 space-y-4">

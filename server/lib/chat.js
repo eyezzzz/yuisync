@@ -50,6 +50,7 @@ import {
   enrichProductQueryFactsFromSavedPet,
   mergeProductQueryFacts,
   prependPetbotConversationOpening,
+  isPetshopServiceKnowledgeQuestion,
   isVeterinaryConsultationQuestion,
   isVeterinaryTreatmentAdviceRequest,
   productFactsSignature,
@@ -912,7 +913,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
   return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
       .from('settings')
-      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist,petbot_timezone,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist,petbot_timezone,store_business_hours,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity')
       .eq('module_id', moduleId)
 
     if (tenantId) {
@@ -920,7 +921,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
     }
 
     let result = await query.maybeSingle()
-    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist|petbot_timezone|petbot_business_hours|petbot_slot_interval_min|petbot_booking_lead_time_min|petbot_booking_capacity)/i.test(String(result.error.message || ''))) {
+    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist|petbot_timezone|store_business_hours|petbot_business_hours|petbot_slot_interval_min|petbot_booking_lead_time_min|petbot_booking_capacity)/i.test(String(result.error.message || ''))) {
       let fallbackQuery = supabase
         .from('settings')
         .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
@@ -954,6 +955,9 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
       autonomyMode: data?.petbot_autonomy_mode || 'canary',
       autonomyAllowlist: Array.isArray(data?.petbot_autonomy_allowlist) ? data.petbot_autonomy_allowlist : [],
       petbotTimezone: data?.petbot_timezone || 'America/Sao_Paulo',
+      storeBusinessHours: data?.store_business_hours && typeof data.store_business_hours === 'object'
+        ? data.store_business_hours
+        : null,
       petbotBusinessHours: data?.petbot_business_hours && typeof data.petbot_business_hours === 'object'
         ? data.petbot_business_hours
         : null,
@@ -1482,6 +1486,7 @@ function buildPetbotOrderTransactionPayload(session, customer, settings, args = 
     change_for: Number(args.change_for || 0),
     notes: cleanText(args.notes),
     items: Array.isArray(args.items) ? args.items : [],
+    additional_services: Array.isArray(args.additional_services) ? args.additional_services : [],
   }
 }
 
@@ -1723,7 +1728,7 @@ function buildVerifiedStoreInformation(settings = {}) {
     7: 'domingo',
   }
   const businessHours = Object.fromEntries(
-    Object.entries(settings.petbotBusinessHours || {}).map(([weekday, periods]) => [
+    Object.entries(settings.storeBusinessHours || settings.petbotBusinessHours || {}).map(([weekday, periods]) => [
       weekdayLabels[weekday] || weekday,
       (Array.isArray(periods) ? periods : [])
         .map((period) => `${cleanText(period?.open)}-${cleanText(period?.close)}`)
@@ -1797,6 +1802,32 @@ function getPendingAgentOrder(context) {
   const pending = parsed?.petbot_agent?.pending_order
   if (!pending || typeof pending !== 'object' || !pending.id || !pending.order) return null
   return pending
+}
+
+function inferSpecificPetbotServiceType(message = '') {
+  const text = normalizeSearchText(message)
+  if (/\btosa\b.{0,24}\btesoura\b|\btesoura\b.{0,24}\btosa\b/.test(text)) return 'tosa tesoura'
+  if (/\btosa\b.{0,24}\bmaquina\b|\bmaquina\b.{0,24}\btosa\b/.test(text)) return 'tosa maquina'
+  if (/\btosa\b.{0,24}\btotal\b|\btosa completa\b/.test(text)) return 'tosa total'
+  if (/\btosa\b.{0,24}\bhigienic/.test(text)) return 'tosa higienica'
+  if (/\bescovacao\b.{0,18}\bdent|\bescovar\b.{0,18}\bdent/.test(text)) return 'escovacao dentaria'
+  if (/\bhidratacao\b|\bhidratar\b.{0,20}\bpelo/.test(text)) return 'hidratacao'
+  if (/\bcorte\b.{0,14}\bunhas?\b|\bcortar\b.{0,14}\bunhas?\b/.test(text)) return 'corte de unha'
+  if (/\bdesembolo\b|\bdesembolar\b/.test(text)) return 'desembolo'
+  return ''
+}
+
+function inferPetbotServiceAddonRequest(message = '') {
+  const text = normalizeSearchText(message)
+  const asksAddition = /\b(?:adicionar|adicione|acrescentar|acrescente|incluir|inclua|colocar|coloque|tambem quero|quero tambem)\b/.test(text)
+  if (!asksAddition) return ''
+  return inferSpecificPetbotServiceType(message)
+}
+
+function samePetbotScheduleInstant(left = '', right = '', timezone = 'America/Sao_Paulo') {
+  const leftDate = DateTime.fromISO(cleanText(left), { setZone: true }).setZone(timezone)
+  const rightDate = DateTime.fromISO(cleanText(right), { setZone: true }).setZone(timezone)
+  return leftDate.isValid && rightDate.isValid && leftDate.toMillis() === rightDate.toMillis()
 }
 
 function inferPetbotServiceOrderType({ interpretation = {}, facts = {}, message = '', history = [] } = {}) {
@@ -1923,6 +1954,32 @@ async function respondToAlreadyCommittedConfirmation({
   return { reply, savedMessage: savedReply }
 }
 
+function buildPetbotDayAgendaReply(availability = {}, timezone = 'America/Sao_Paulo') {
+  const requested = availability?.requested_slot
+  const rows = Array.isArray(availability?.day_schedule) ? availability.day_schedule : []
+  if (!requested || requested.available !== false || !rows.length) return ''
+
+  const requestedDateTime = DateTime.fromISO(cleanText(requested.scheduled_at), { setZone: true }).setZone(timezone)
+  const requestedTime = requestedDateTime.isValid ? requestedDateTime.toFormat('HH:mm') : ''
+  const dateLabel = requestedDateTime.isValid
+    ? requestedDateTime.toFormat('dd/MM/yyyy')
+    : cleanText(availability.business_date)
+  const lines = [
+    requestedTime
+      ? `O horário de ${requestedTime} já está ocupado.`
+      : 'O horário solicitado já está ocupado.',
+    '',
+    `Agenda de ${dateLabel}:`,
+    '',
+    ...rows
+      .filter((row) => row?.status !== 'fora_do_funcionamento')
+      .map((row) => `${cleanText(row.time)} — ${row.status === 'ocupado' ? 'Ocupado' : 'Disponível'}`),
+    '',
+    'Qual horário disponível você prefere?',
+  ]
+  return lines.join('\n')
+}
+
 function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedService = null, settings = {}, timezone = 'America/Sao_Paulo' } = {}) {
   const runs = Array.isArray(toolRuns) ? toolRuns : []
   const availabilityRun = [...runs].reverse().find((run) => (
@@ -1960,6 +2017,9 @@ function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedServ
 
   const transportQualificationReply = buildPetbotTransportQualificationReply({ facts, settings })
   if (transportQualificationReply) return transportQualificationReply
+
+  const rejectedAgendaReply = buildPetbotDayAgendaReply(availability, timezone)
+  if (rejectedAgendaReply) return rejectedAgendaReply
 
   if (availability?.status === 'available') {
     if (availability.requested_slot?.available) {
@@ -2154,8 +2214,17 @@ async function respondWithPetbotAgent({
       symptom: null,
     }
     : previousServiceFacts
+  const explicitServiceAddonAtTurnStart = pendingAtTurnStart?.order?.order_type === 'banho_tosa'
+    ? inferPetbotServiceAddonRequest(trimmedMessage)
+    : ''
+  const explicitSpecificServiceType = productConversationAtTurnStart || explicitServiceAddonAtTurnStart
+    ? ''
+    : inferSpecificPetbotServiceType(trimmedMessage)
+  const informationalServiceQuestion = !productConversationAtTurnStart
+    && isPetshopServiceKnowledgeQuestion(trimmedMessage)
   const interpretationForFacts = {
     ...(llmInterpretation || {}),
+    ...(explicitSpecificServiceType ? { service_type: explicitSpecificServiceType } : {}),
     ...(productConversationAtTurnStart || productBulkQuantityMessage
       ? {
         weight_kg: null,
@@ -2173,7 +2242,12 @@ async function respondWithPetbotAgent({
       : {}),
     ...(isExplicitNoServiceNotesAnswer(trimmedMessage, history)
       ? { service_notes: null, service_notes_resolved: true }
-      : {}),
+      : informationalServiceQuestion
+        ? {
+          service_notes: null,
+          service_notes_resolved: previousServiceFacts.service_notes_resolved === true,
+        }
+        : {}),
     service_transport_mode: inferredTransportMode || null,
     ...currentTransportAddress,
     service_transport_address_reset: resetSavedTransportAddress,
@@ -2432,6 +2506,7 @@ async function respondWithPetbotAgent({
   }
   let preloadedToolRuns = []
   let operationalContext = null
+  let rejectedRequestedSlot = null
   if (serviceOrderType) {
     // Availability shown to the customer must come from a fresh agenda read.
     // The cached load is useful for initial context, but it is not authoritative
@@ -2451,9 +2526,73 @@ async function respondWithPetbotAgent({
       agendaAvailable: appointmentRefresh.ok,
     })
     serviceFacts = preflight.facts
+    rejectedRequestedSlot = preflight.availability?.requested_slot?.available === false
+      ? preflight.availability.requested_slot
+      : null
+    if (rejectedRequestedSlot) {
+      serviceFacts = {
+        ...serviceFacts,
+        service_preferred_time: null,
+        service_time_preference: null,
+      }
+    }
     preloadedToolRuns = preflight.toolRuns
     operationalContext = preflight.context
     if (preflight.resolvedService) resolvedServiceThisTurn = preflight.resolvedService
+  }
+
+  let serviceAddonReply = ''
+  const requestedServiceAddon = explicitServiceAddonAtTurnStart
+  if (requestedServiceAddon) {
+    await refreshServiceCatalog({ required: false })
+    const addonResolution = resolvePetshopService({
+      serviceQuery: requestedServiceAddon,
+      orderType: 'banho_tosa',
+      services: liveServices,
+      weightKg: serviceFacts.weight_kg,
+      coatType: serviceFacts.coat_type,
+      breed: serviceFacts.breed,
+      species: serviceFacts.species,
+    })
+    if (addonResolution?.ok && addonResolution?.status === 'resolved' && addonResolution.service?.id) {
+      const appointmentRefresh = await refreshAppointmentContext()
+      if (appointmentRefresh.ok) {
+        liveSubscriptionBenefits = await loadCustomerSubscriptionBenefits(
+          supabase,
+          sessionForAgent,
+          activeCustomer?.client?.id || sessionForAgent.client_id,
+        )
+        const existingAdditionalIds = Array.isArray(pendingAtTurnStart.order.additional_service_ids)
+          ? pendingAtTurnStart.order.additional_service_ids
+          : []
+        const preparedAddon = preparePetshopOrderDraft({
+          args: groundPetbotServiceArgs({
+            ...pendingAtTurnStart.order,
+            additional_service_ids: [...new Set([...existingAdditionalIds, addonResolution.service.id])],
+          }, serviceFacts),
+          products: liveProducts,
+          services: liveServices,
+          appointments: appointmentRefresh.appointments,
+          subscriptionBenefits: liveSubscriptionBenefits,
+          settings: storeSettings,
+        })
+        if (preparedAddon.ok) {
+          pendingOrder = {
+            id: preparedAddon.pending_order_id,
+            order: preparedAddon.order,
+            summary: preparedAddon.summary,
+            prepared_at: new Date().toISOString(),
+          }
+          serviceAddonReply = preparedAddon.summary
+        } else {
+          serviceAddonReply = `Não consegui adicionar ${requestedServiceAddon} com segurança ao agendamento atual. O serviço principal continua reservado no resumo anterior; escolha outro adicional ativo ou confirme somente o serviço principal.`
+        }
+      } else {
+        serviceAddonReply = 'Não consegui revalidar a agenda agora, então não alterei o agendamento. Tente novamente em instantes sem repetir os outros dados.'
+      }
+    } else {
+      serviceAddonReply = `Não encontrei ${requestedServiceAddon} como serviço adicional ativo e com preço confirmado. Não alterei o agendamento atual.`
+    }
   }
 
   const isProductConversation = !serviceOrderType && Boolean(cleanText(productFacts.product_kind))
@@ -2805,6 +2944,7 @@ async function respondWithPetbotAgent({
         ...availability,
         next_action: nextAction,
         ...(availability?.service ? { service: decoratePrice(availability.service) } : {}),
+        day_schedule: Array.isArray(availability?.day_schedule) ? availability.day_schedule : [],
         available_slots: (availability?.available_slots || []).map(decoratePrice),
       }
     }
@@ -2857,6 +2997,24 @@ async function respondWithPetbotAgent({
           delivery_reference: null,
           change_for: null,
         }),
+      }
+      if (
+        !isProductOrder
+        && rejectedRequestedSlot?.scheduled_at
+        && effectiveArgs.scheduled_at
+        && samePetbotScheduleInstant(
+          effectiveArgs.scheduled_at,
+          rejectedRequestedSlot.scheduled_at,
+          storeSettings.petbotTimezone,
+        )
+      ) {
+        return {
+          ok: false,
+          action: name,
+          status: 'needs_input',
+          missing_fields: ['novo horário disponível'],
+          error_code: 'rejected_occupied_slot',
+        }
       }
       if (isProductOrder) {
         const productIds = (Array.isArray(effectiveArgs.items) ? effectiveArgs.items : [])
@@ -3142,6 +3300,10 @@ async function respondWithPetbotAgent({
       )
     ),
   )
+  const rejectedAgendaReply = buildPetbotDayAgendaReply(
+    operationalContext?.availability || {},
+    storeSettings.petbotTimezone,
+  )
   const initialToolChoice = shouldForceServicePreparation
     ? { type: 'function', function: { name: 'prepare_petshop_service_booking' } }
     : shouldForceProductPreparation
@@ -3211,6 +3373,28 @@ async function respondWithPetbotAgent({
       steps: 1,
       terminal: true,
       durationMs: Date.now() - confirmationStartedAt,
+    }
+  } else if (serviceAddonReply) {
+    agentResult = {
+      reply: serviceAddonReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
+    }
+  } else if (rejectedAgendaReply) {
+    agentResult = {
+      reply: rejectedAgendaReply,
+      toolRuns: preloadedToolRuns,
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 0,
+      terminal: true,
+      durationMs: 0,
     }
   } else if (transportQualificationReply) {
     agentResult = {
