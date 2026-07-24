@@ -19,6 +19,7 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run test:petbot
+      - run: npm run test:luna
       - run: npm run test:transactions
       - run: npm run test:tenant
         env:

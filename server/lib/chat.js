@@ -37,6 +37,13 @@ import {
   shouldForcePetbotServicePreparation,
 } from './petbotAgent.js'
 import {
+  completeLunaTurnTrace,
+  createLunaTurnTrace,
+  deriveLegacyOperationEvent,
+  operationStateFromLegacyContext,
+  verifyOperationTurn,
+} from './luna/index.js'
+import {
   analyzeProductDifferentiation,
   buildPetbotAgentV3Prompt,
   buildProductCheckoutQualificationReply,
@@ -2167,6 +2174,21 @@ async function respondWithPetbotAgent({
   appointments,
   customInstructions,
 }) {
+  const lunaStateBefore = operationStateFromLegacyContext(sessionForAgent.context, {
+    tenantId: session.tenant_id,
+    sessionId,
+    moduleId,
+    customerId: session.client_id,
+    customerName: session.customer_name,
+    intent,
+  })
+  const lunaTraceStart = createLunaTurnTrace({
+    sessionId,
+    tenantId: session.tenant_id,
+    moduleId,
+    message: trimmedMessage,
+    stateBefore: lunaStateBefore,
+  })
   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
   const explicitCurrentMessageConfirmation = Boolean(
     pendingAtTurnStart
@@ -3751,6 +3773,45 @@ async function respondWithPetbotAgent({
     throw new HttpError(500, `Unable to persist PetBot agent state${sessionUpdateError?.message ? `: ${sessionUpdateError.message}` : '.'}`)
   }
 
+  const lunaStateAfter = operationStateFromLegacyContext(nextContext, {
+    tenantId: session.tenant_id,
+    sessionId,
+    moduleId,
+    customerId: activeCustomer?.client?.id || session.client_id,
+    customerName: updatedCustomerName || session.customer_name,
+    intent,
+  })
+  const lunaSemanticEvent = deriveLegacyOperationEvent({
+    message: trimmedMessage,
+    turnSemantics,
+    orderResult,
+    needsHuman,
+    pendingBefore: pendingAtTurnStart,
+    pendingAfter: pendingOrder,
+    toolRuns: agentResult.toolRuns,
+  })
+  const lunaVerification = verifyOperationTurn({
+    stateBefore: lunaStateBefore,
+    stateAfter: lunaStateAfter,
+    orderResult,
+    reply,
+    toolRuns: agentResult.toolRuns,
+  })
+  const lunaTrace = completeLunaTurnTrace(lunaTraceStart, {
+    stateAfter: lunaStateAfter,
+    semanticEvent: lunaSemanticEvent,
+    toolRuns: agentResult.toolRuns,
+    outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : 'ok'),
+    verifier: lunaVerification,
+  })
+  if (!lunaVerification.ok) {
+    logger.warn('Luna passive verifier detected an inconsistent turn', {
+      traceId: lunaTrace.trace_id,
+      sessionId,
+      issues: lunaVerification.issues.map((entry) => entry.code),
+    })
+  }
+
   const primaryImage = mediaMessages.find((item) => item.type === 'image' && item.imageUrl)
   const { data: savedReply, error: replyInsertError } = await supabase
     .from('chat_messages')
@@ -3780,6 +3841,7 @@ async function respondWithPetbotAgent({
           needs_human: needsHuman,
           handoff_target: handoffTarget,
           turn_semantics: turnSemantics,
+          luna_trace: lunaTrace,
         },
       },
       tokens_used: agentResult.tokensUsed,
@@ -3811,6 +3873,7 @@ async function respondWithPetbotAgent({
       pending_order_id: pendingOrder?.id || null,
       source: options.source || 'dashboard_simulation',
       turn_semantics: turnSemantics,
+      luna_trace: lunaTrace,
     },
   })
 

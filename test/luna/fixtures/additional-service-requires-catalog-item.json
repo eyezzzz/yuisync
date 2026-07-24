@@ -1,0 +1,19 @@
+{
+  "name": "additional_service_requires_catalog_item",
+  "initial_state": {
+    "operation_id": "op_addon",
+    "type": "service_booking",
+    "status": "awaiting_confirmation"
+  },
+  "events": [
+    {
+      "type": "ADD_ITEM",
+      "payload": {
+        "kind": "additional_service",
+        "name": "Escovação dental",
+        "unit_price": 15
+      }
+    }
+  ],
+  "expected_error": "CATALOG_ITEM_NOT_FOUND"
+}

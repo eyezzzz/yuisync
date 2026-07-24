@@ -1,0 +1,18 @@
+{
+  "name": "informational_question_is_not_note",
+  "initial_state": {
+    "operation_id": "op_info",
+    "type": "service_booking",
+    "status": "awaiting_confirmation",
+    "version": 2,
+    "notes": []
+  },
+  "events": [
+    { "type": "INFORMATIONAL_QUERY", "payload": { "question": "O banho inclui tosa higiênica?" } }
+  ],
+  "expected": {
+    "status": "awaiting_confirmation",
+    "version": 2,
+    "notes": []
+  }
+}

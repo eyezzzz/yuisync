@@ -1,0 +1,18 @@
+{
+  "name": "note_before_confirmation",
+  "initial_state": {
+    "operation_id": "op_note",
+    "type": "service_booking",
+    "status": "awaiting_confirmation",
+    "version": 3,
+    "notes": []
+  },
+  "events": [
+    { "type": "ADD_NOTE", "payload": { "text": "sem perfume" } }
+  ],
+  "expected": {
+    "status": "awaiting_confirmation",
+    "version": 4,
+    "notes": [{ "text": "sem perfume" }]
+  }
+}

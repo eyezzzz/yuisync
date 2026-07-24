@@ -1,0 +1,34 @@
+{
+  "name": "confirmation_after_motodog",
+  "initial_state": {
+    "operation_id": "op_motodog",
+    "type": "service_booking",
+    "status": "awaiting_confirmation",
+    "version": 4,
+    "transport": { "mode": "buscar_e_levar", "price": 20 },
+    "totals": { "subtotal": 55, "transport": 20, "total": 75 }
+  },
+  "events": [
+    { "type": "CONFIRM_OPERATION" },
+    {
+      "type": "CONFIRM_SUCCEEDED",
+      "payload": {
+        "sale_id": "sale_1",
+        "order_id": "order_1",
+        "appointment_id": "appointment_1",
+        "commit_id": "commit_1"
+      }
+    }
+  ],
+  "expected": {
+    "status": "confirmed",
+    "transport": { "mode": "buscar_e_levar", "price": 20 },
+    "totals": { "total": 75 },
+    "persistence": {
+      "sale_id": "sale_1",
+      "order_id": "order_1",
+      "appointment_id": "appointment_1",
+      "commit_id": "commit_1"
+    }
+  }
+}

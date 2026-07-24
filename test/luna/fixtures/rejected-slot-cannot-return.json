@@ -1,0 +1,13 @@
+{
+  "name": "rejected_slot_cannot_return",
+  "initial_state": {
+    "operation_id": "op_slot_reuse",
+    "type": "service_booking",
+    "status": "selecting_schedule",
+    "rejected_slots": ["2026-07-26T10:00:00-03:00"]
+  },
+  "events": [
+    { "type": "SELECT_TIME", "payload": { "scheduled_at": "2026-07-26T10:00:00-03:00" } }
+  ],
+  "expected_error": "SLOT_UNAVAILABLE"
+}
