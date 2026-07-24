@@ -127,14 +127,33 @@ export function importLegacyRows({ kind, rows, moduleId, tenantId }) {
   })
 }
 
-export function runPetbotLiveE2E({ tenantId }) {
+export function preparePetbotDiagnosticSuite({ tenantId }) {
   return apiRequest('/admin/petbot-e2e', {
     method: 'POST',
     body: JSON.stringify({
       tenantId,
-      confirm: 'RUN_PETBOT_LIVE_E2E',
+      action: 'plan',
+      confirm: 'PREPARE_PETBOT_DIAGNOSTIC_50',
     }),
   })
+}
+
+export function runPetbotDiagnosticCase({ tenantId, scenarioId, suiteId }) {
+  return apiRequest('/admin/petbot-e2e', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId,
+      scenarioId,
+      suiteId,
+      action: 'run_case',
+      confirm: 'RUN_PETBOT_DIAGNOSTIC_CASE',
+    }),
+  })
+}
+
+// Mantido para chamadas antigas. O painel novo usa a suíte em casos individuais.
+export function runPetbotLiveE2E({ tenantId }) {
+  return preparePetbotDiagnosticSuite({ tenantId })
 }
 
 export function searchProductImages({ name, barcode, category, brand, moduleId, tenantId, limit = 8 }) {
