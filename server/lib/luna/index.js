@@ -12,3 +12,4 @@ export * from './scenarioRunner.js'
 export * from './shadow/index.js'
 
 export * from './bath/index.js'
+export * from './confirmation/index.js'

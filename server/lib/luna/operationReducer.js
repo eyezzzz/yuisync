@@ -215,9 +215,40 @@ export function reduceOperation(currentState = {}, eventInput = {}) {
           details: { status: state.status },
         })
       }
-      return withLedger(state, event, { status: 'confirming', last_error: null })
+      return withLedger(state, event, {
+      status: 'confirming',
+      last_error: null,
+      metadata: {
+        ...state.metadata,
+        confirmation: {
+          ...(state.metadata.confirmation || {}),
+          idempotency_key: text(event.payload.idempotency_key, 240) || null,
+          commit_ambiguous: false,
+        },
+      },
+    })
 
-    case LUNA_OPERATION_EVENTS.CONFIRM_SUCCEEDED: {
+    case LUNA_OPERATION_EVENTS.CONFIRM_AMBIGUOUS:
+    return withLedger(state, event, {
+      status: 'confirming',
+      last_error: event.payload.error || {
+        code: LUNA_ERROR_CODES.COMMIT_RESULT_AMBIGUOUS,
+        recoverable: true,
+      },
+      metadata: {
+        ...state.metadata,
+        confirmation: {
+          ...(state.metadata.confirmation || {}),
+          idempotency_key: text(event.payload.idempotency_key, 240)
+            || state.metadata.confirmation?.idempotency_key
+            || null,
+          classification: text(event.payload.classification, 120)
+            || LUNA_ERROR_CODES.COMMIT_RESULT_AMBIGUOUS,
+          commit_ambiguous: true,
+        },
+      },
+    })
+  case LUNA_OPERATION_EVENTS.CONFIRM_SUCCEEDED: {
       const persistence = {
         ...state.persistence,
         sale_id: text(event.payload.sale_id, 160) || state.persistence.sale_id || null,
@@ -234,19 +265,47 @@ export function reduceOperation(currentState = {}, eventInput = {}) {
           details: { operation_type: state.type, persistence },
         })
       }
-      return withLedger(state, event, { status: 'confirmed', persistence, last_error: null })
+      return withLedger(state, event, {
+      status: 'confirmed',
+      persistence,
+      last_error: null,
+      metadata: {
+        ...state.metadata,
+        ...(state.metadata.bath ? {
+          bath: { ...state.metadata.bath, pending_order_active: false },
+        } : {}),
+        confirmation: {
+          ...(state.metadata.confirmation || {}),
+          idempotency_key: text(event.payload.idempotency_key, 240)
+            || state.metadata.confirmation?.idempotency_key
+            || null,
+          classification: text(event.payload.classification, 120) || null,
+          reconciled: event.payload.reconciled === true,
+          commit_ambiguous: false,
+        },
+      },
+    })
     }
 
     case LUNA_OPERATION_EVENTS.CONFIRM_FAILED:
-      return withLedger(state, event, {
-        status: event.payload.recoverable === false ? 'failed' : 'awaiting_confirmation',
-        last_error: event.payload.error || {
-          code: LUNA_ERROR_CODES.TOOL_FAILED,
-          recoverable: event.payload.recoverable !== false,
+    return withLedger(state, event, {
+      status: event.payload.recoverable === false ? 'failed' : 'awaiting_confirmation',
+      last_error: event.payload.error || {
+        code: LUNA_ERROR_CODES.TOOL_FAILED,
+        recoverable: event.payload.recoverable !== false,
+      },
+      metadata: {
+        ...state.metadata,
+        confirmation: {
+          ...(state.metadata.confirmation || {}),
+          classification: text(event.payload.classification, 120)
+            || text(event.payload.error?.code, 120)
+            || null,
+          commit_ambiguous: false,
         },
-      })
-
-    case LUNA_OPERATION_EVENTS.CANCEL_OPERATION:
+      },
+    })
+  case LUNA_OPERATION_EVENTS.CANCEL_OPERATION:
       return withLedger(state, event, { status: 'cancelled', last_error: null })
 
     case LUNA_OPERATION_EVENTS.REQUEST_HUMAN:
