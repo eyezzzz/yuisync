@@ -92,6 +92,43 @@ test('baixa confiança não altera escolhas críticas e mantém o fallback segur
   assert.equal(transport.service_transport_mode, '')
 })
 
+test('intenção de transporte separa pergunta, escolha nominal e escolha ordinal', () => {
+  const request = resolvePetbotTurnSemantics({
+    interpretation: {
+      dialogue_act: 'ask',
+      reply_target: 'service_transport',
+      service_transport_mode: 'buscar_e_levar',
+      confidence: 0.97,
+    },
+  })
+  assert.equal(request.transport_intent, 'request_options')
+  assert.equal(request.service_transport_mode, 'motodog')
+  assert.equal(request.service_transport_option_index, null)
+
+  const ordinal = resolvePetbotTurnSemantics({
+    interpretation: {
+      dialogue_act: 'select',
+      reply_target: 'service_transport',
+      option_index: 1,
+      confidence: 0.97,
+    },
+  })
+  assert.equal(ordinal.transport_intent, 'select_option')
+  assert.equal(ordinal.service_transport_mode, '')
+  assert.equal(ordinal.service_transport_option_index, 1)
+
+  const explicit = resolvePetbotTurnSemantics({
+    interpretation: {
+      dialogue_act: 'select',
+      reply_target: 'service_transport',
+      service_transport_mode: 'somente_buscar',
+      confidence: 0.97,
+    },
+  })
+  assert.equal(explicit.transport_intent, 'select_mode')
+  assert.equal(explicit.service_transport_mode, 'somente_buscar')
+})
+
 test('venda aceita significado estruturado mesmo quando a frase não pertence ao dicionário lexical', () => {
   assert.equal(detectExplicitProductFulfillmentType('manda aki pf'), '')
   assert.equal(detectExplicitProductPaymentMethod('passa no cartau'), '')

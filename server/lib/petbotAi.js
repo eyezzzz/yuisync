@@ -274,6 +274,31 @@ export function resolvePetbotTurnSemantics({
   )
   const slot = (value, ...targets) => acceptsTarget(...targets) ? value : ''
 
+  const rawTransportMode = slot(data.service_transport_mode, 'service_transport')
+  const transportOptionIndex = acceptsTarget('service_transport')
+    && target === 'service_transport'
+    ? data.option_index
+    : null
+  let transportIntent = ''
+  if (confident && !data.negation) {
+    if (
+      (target === 'service_transport' && action === 'ask')
+      || rawTransportMode === 'motodog'
+    ) {
+      transportIntent = 'request_options'
+    } else if (target === 'service_transport' && transportOptionIndex) {
+      transportIntent = 'select_option'
+    } else if (rawTransportMode) {
+      transportIntent = 'select_mode'
+    }
+  }
+
+  const serviceTransportMode = transportIntent === 'request_options'
+    ? 'motodog'
+    : transportIntent === 'select_mode'
+      ? rawTransportMode
+      : ''
+
   return {
     version: 1,
     source: 'llm_semantic',
@@ -308,7 +333,11 @@ export function resolvePetbotTurnSemantics({
     handoff_target: confident ? data.handoff_target : '',
     fulfillment_type: slot(data.fulfillment_type, 'fulfillment'),
     payment_method: slot(data.payment_method, 'payment'),
-    service_transport_mode: slot(data.service_transport_mode, 'service_transport'),
+    transport_intent: transportIntent,
+    service_transport_mode: serviceTransportMode,
+    service_transport_option_index: transportIntent === 'select_option'
+      ? transportOptionIndex
+      : null,
     package_preference: slot(data.package_preference, 'package_preference'),
     package_kg: acceptsTarget('package_preference') ? data.package_kg : null,
     quantity: acceptsTarget('quantity', 'product_option') ? data.quantity : null,
@@ -387,7 +416,10 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Para agendamento, extraia service_date como o texto que o cliente disse ("hoje", "amanha", "20/05", "sexta") e service_time_preference/service_preferred_time como "manha", "tarde", "qualquer horario" ou "14h". Nao invente horario.',
         'Para tosa, se o cliente disser maquina 1/3/5/7, lamina, pente, acabamento ou foto de referencia, extraia service_grooming_detail.',
         'Quando a pergunta anterior for sobre observacoes do servico, extraia qualquer cuidado informado em service_notes. Se o cliente responder apenas que nao ha observacoes, use service_notes="sem observacao".',
-        'Para banho/tosa, quando o cliente disser que ele mesmo vai levar ou trazer o pet, extraia service_transport_mode="cliente_leva". Quando disser apenas MotoDog sem modalidade, use service_transport_mode="motodog". Quando escolher uma modalidade, normalize como buscar_e_levar, somente_buscar ou somente_levar.',
+        'Para banho/tosa, quando o cliente disser que ele mesmo vai levar ou trazer o pet, use dialogue_act="select", reply_target="service_transport" e service_transport_mode="cliente_leva".',
+        'Quando o cliente apenas perguntar se a loja busca, perguntar pelo MotoDog ou pedir para conhecer as opções sem escolher uma modalidade, use dialogue_act="ask", reply_target="service_transport" e service_transport_mode="motodog". Nunca transforme uma pergunta em buscar_e_levar.',
+        'Quando escolher uma modalidade pelo nome, use dialogue_act="select", reply_target="service_transport" e normalize service_transport_mode como buscar_e_levar, somente_buscar ou somente_levar.',
+        'Quando escolher uma das opções de MotoDog por posição, como primeira, segunda ou terceira, use dialogue_act="select", reply_target="service_transport", option_index com a posição escolhida e deixe service_transport_mode nulo se a modalidade não foi dita pelo nome.',
         'Quando o cliente informar o endereço do MotoDog, extraia service_transport_address com rua e número, service_transport_neighborhood, service_transport_city e service_transport_reference. Não use os campos de entrega de produto para esse endereço.',
         'Para banho/tosa, interprete a raca e o peso aproximado quando estiverem presentes na fala, no historico recente ou no estado atual. Nunca deduza peso pela raca.',
         'Separe rigorosamente cliente e pet: "me chamo Ana" informa customer_name; "ele/ela se chama Afonso", "meu cachorro se chama Afonso" ou "o pet se chama Afonso" informa somente pet_name. Nunca copie o nome do pet para customer_name.',

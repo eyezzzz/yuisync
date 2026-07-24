@@ -44,6 +44,8 @@ import {
   verifyOperationTurn,
   isCustomerNamePlaceholder,
   normalizeCustomerDisplayName,
+  recoverCommittedResultFromContext,
+  resolveTransportModeFromSemantics,
   runBathShadowTurn,
 } from './luna/index.js'
 import {
@@ -2244,6 +2246,49 @@ function buildPetbotCommittedReply({ pendingOrder = null, result = {}, timezone 
   return lines.join('\n')
 }
 
+async function reconcilePetbotCommittedConfirmation({
+  supabase,
+  session,
+  pendingOrder,
+  options = {},
+  turnSemantics = {},
+} = {}) {
+  if (!pendingOrder?.id || !session?.id) return null
+
+  const { data: freshSession, error } = await supabase
+    .from('chat_sessions')
+    .select('id, tenant_id, module_id, context, last_message_at')
+    .eq('id', session.id)
+    .maybeSingle()
+  if (error || !freshSession) return null
+
+  const committed = recoverCommittedResultFromContext({
+    context: freshSession.context,
+    pendingOrder,
+    sessionId: session.id,
+  })
+  if (!committed) return null
+
+  logger.warn('PetBot confirmation reconciled after an ambiguous failure', {
+    sessionId: session.id,
+    pendingOrderId: pendingOrder.id,
+    saleId: committed.sale_id,
+    orderId: committed.order_id,
+    appointmentId: committed.appointment_id,
+  })
+
+  return respondToAlreadyCommittedConfirmation({
+    supabase,
+    session: {
+      ...session,
+      ...freshSession,
+    },
+    expectedLastMessageAt: freshSession.last_message_at,
+    options,
+    turnSemantics,
+  })
+}
+
 
 async function respondWithPetbotAgent({
   supabase,
@@ -2297,13 +2342,20 @@ async function respondWithPetbotAgent({
     cleanText(previousProductFacts.product_kind)
     && !['banho_tosa', 'veterinaria'].includes(currentTurnIntent),
   )
+  const semanticTransportMode = productConversationAtTurnStart
+    ? ''
+    : resolveTransportModeFromSemantics({
+      semantics: turnSemantics,
+      options: listPetTransportOptions(storeSettings),
+    })
   const explicitTransportMode = productConversationAtTurnStart
     ? ''
     : inferExplicitPetTransportMode(trimmedMessage, history)
   const inferredTransportMode = productConversationAtTurnStart
     ? ''
     : (
-      explicitTransportMode
+      semanticTransportMode
+      || explicitTransportMode
       || cleanText(turnSemantics?.service_transport_mode)
     )
   const productBulkQuantityMessage = Boolean(
@@ -4357,6 +4409,24 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     })
   } catch (error) {
     if (error?.code === 'PETBOT_STALE_TURN') throw error
+    const pendingOrderAtFailure = getPendingAgentOrder(recoveredContext)
+    const confirmationAtFailure = Boolean(
+      pendingOrderAtFailure
+      && (
+        isExplicitPetbotConfirmation(trimmedMessage)
+        || turnSemantics?.confirms_pending_order
+      )
+    )
+    if (confirmationAtFailure) {
+      const reconciled = await reconcilePetbotCommittedConfirmation({
+        supabase,
+        session: sessionForAgent,
+        pendingOrder: pendingOrderAtFailure,
+        options,
+        turnSemantics,
+      })
+      if (reconciled) return reconciled
+    }
     logger.warn('PetBot agent failed', {
       sessionId,
       moduleId,
