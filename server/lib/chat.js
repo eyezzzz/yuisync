@@ -47,6 +47,8 @@ import {
   normalizeCustomerDisplayName,
   recoverCommittedResultFromContext,
   resolveTransportDecision,
+  isBathSemanticPreparationCandidate,
+  runBathSemanticPreparation,
   runBathShadowTurn,
 } from './luna/index.js'
 import {
@@ -2345,6 +2347,7 @@ async function respondWithPetbotAgent({
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
   const previousProductFacts = initialProductFacts || previousAgentContext.product_facts || {}
   const previousServiceFacts = previousAgentContext.facts || previousAgentContext.explicit_facts || {}
+  let bathKernelState = previousAgentContext.luna_bath_state || null
   const currentTurnIntent = cleanText(llmInterpretation?.intent || intent)
   const productConversationAtTurnStart = Boolean(
     cleanText(previousProductFacts.product_kind)
@@ -2754,6 +2757,35 @@ async function respondWithPetbotAgent({
     preloadedToolRuns = preflight.toolRuns
     operationalContext = preflight.context
     if (preflight.resolvedService) resolvedServiceThisTurn = preflight.resolvedService
+  }
+
+  if (isBathSemanticPreparationCandidate({
+    serviceOrderType,
+    facts: serviceFacts,
+    pendingOrder,
+  })) {
+    const bathPreparation = runBathSemanticPreparation({
+      previousState: bathKernelState,
+      facts: serviceFacts,
+      customer: {
+        id: activeCustomer?.client?.id || session.client_id || null,
+        name: trustedCustomerName() || null,
+        phone: activeCustomer?.phone || session.customer_phone || null,
+      },
+      resolvedService: resolvedServiceThisTurn,
+      pendingOrder,
+      rejectedSlot: rejectedRequestedSlot,
+      toolRuns: preloadedToolRuns,
+      turnSemantics,
+      identifiers: {
+        tenantId: session.tenant_id,
+        sessionId,
+        moduleId,
+      },
+    })
+    bathKernelState = bathPreparation.state
+    serviceFacts = bathPreparation.facts
+    pendingOrder = bathPreparation.pendingOrder
   }
 
   let serviceAddonReply = ''
@@ -3815,6 +3847,35 @@ async function respondWithPetbotAgent({
     },
   })
 
+  if (isBathSemanticPreparationCandidate({
+    serviceOrderType,
+    facts: serviceFacts,
+    pendingOrder,
+  })) {
+    const bathPreparation = runBathSemanticPreparation({
+      previousState: bathKernelState,
+      facts: serviceFacts,
+      customer: {
+        id: activeCustomer?.client?.id || session.client_id || null,
+        name: trustedCustomerName() || null,
+        phone: activeCustomer?.phone || session.customer_phone || null,
+      },
+      resolvedService: resolvedServiceThisTurn,
+      pendingOrder,
+      rejectedSlot: rejectedRequestedSlot,
+      toolRuns: agentResult.toolRuns,
+      turnSemantics,
+      identifiers: {
+        tenantId: session.tenant_id,
+        sessionId,
+        moduleId,
+      },
+    })
+    bathKernelState = bathPreparation.state
+    serviceFacts = bathPreparation.facts
+    pendingOrder = bathPreparation.pendingOrder
+  }
+
   const rawReply = cleanText(agentResult.reply)
   if (!rawReply) throw new HttpError(502, 'The PetBot agent response came back empty.')
   const reply = prependPetbotConversationOpening({
@@ -3896,6 +3957,7 @@ async function respondWithPetbotAgent({
       updatedAt: botSentAt,
       pending_order: pendingOrder,
       facts: serviceFacts,
+      luna_bath_state: bathKernelState,
       product_facts: orderResult ? {} : productFacts,
       last_product_candidates: orderResult
         ? null
