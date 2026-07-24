@@ -33,6 +33,10 @@ import {
   inferExplicitPetTransportMode,
   sanitizePetbotTransportAddress,
 } from '../server/lib/chat.js'
+import {
+  recoverCommittedResultFromContext,
+  resolveTransportModeFromSemantics,
+} from '../server/lib/luna/index.js'
 
 const service = {
   id: 'service-long-small',
@@ -72,6 +76,74 @@ test('fato de horário repetido pelo interpretador não reabre a confirmação d
     previousFacts: { service_preferred_time: '15:00' },
     semantics: { target: 'appointment_time' },
   }), true)
+})
+
+test('escolha ordinal do MotoDog usa o índice sem depender da frase literal', () => {
+  const settings = {
+    petTransportOptions: [
+      { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 20, active: true },
+      { id: 'somente_buscar', label: 'Somente buscar', fee: 15, active: true },
+      { id: 'somente_levar', label: 'Somente levar', fee: 15, active: true },
+    ],
+  }
+
+  assert.equal(resolveTransportModeFromSemantics({
+    semantics: {
+      transport_intent: 'select_option',
+      service_transport_option_index: 1,
+    },
+    options: settings.petTransportOptions,
+  }), 'buscar_e_levar')
+
+  assert.equal(resolveTransportModeFromSemantics({
+    semantics: {
+      transport_intent: 'select_option',
+      service_transport_option_index: 3,
+    },
+    options: settings.petTransportOptions,
+  }), 'somente_levar')
+
+  assert.equal(resolveTransportModeFromSemantics({
+    semantics: {
+      transport_intent: 'request_options',
+      service_transport_mode: 'buscar_e_levar',
+    },
+    options: settings.petTransportOptions,
+  }), 'motodog')
+})
+
+test('confirmação reconciliada reconhece commit transacional pelo idempotency key', () => {
+  const pendingOrder = {
+    id: 'pending-123',
+    order: { total: 75 },
+  }
+  const result = recoverCommittedResultFromContext({
+    sessionId: 'session-abc',
+    pendingOrder,
+    context: {
+      last_petbot_idempotency_key: 'session-abc:pending-123',
+      last_sale_id: 'sale-1',
+      last_order_id: 'order-1',
+      last_appointment_id: 'appointment-1',
+      last_total: 75,
+      last_payment_status: 'a_receber',
+    },
+  })
+
+  assert.equal(result.status, 'already_committed')
+  assert.equal(result.sale_id, 'sale-1')
+  assert.equal(result.order_id, 'order-1')
+  assert.equal(result.appointment_id, 'appointment-1')
+  assert.equal(result.total, 75)
+
+  assert.equal(recoverCommittedResultFromContext({
+    sessionId: 'session-abc',
+    pendingOrder,
+    context: {
+      last_petbot_idempotency_key: 'session-abc:outro-pedido',
+      last_sale_id: 'sale-1',
+    },
+  }), null)
 })
 
 test('prompt v3 entrega autonomia conversacional sem despejar catalogo ou frase pronta', () => {
