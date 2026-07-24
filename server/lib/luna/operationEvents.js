@@ -1,3 +1,5 @@
+import { randomUUID } from 'node:crypto'
+
 export const LUNA_OPERATION_EVENTS = Object.freeze({
   START_OPERATION: 'START_OPERATION',
   SET_CUSTOMER: 'SET_CUSTOMER',
@@ -33,9 +35,21 @@ export function createOperationEvent(type, payload = {}, metadata = {}) {
   if (!isLunaOperationEvent(normalizedType)) {
     throw new TypeError(`Unknown Luna operation event: ${normalizedType || '<empty>'}`)
   }
+  const normalizedMetadata = metadata && typeof metadata === 'object' && !Array.isArray(metadata)
+    ? metadata
+    : {}
   return {
     type: normalizedType,
     payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
-    metadata: metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {},
+    metadata: {
+      ...normalizedMetadata,
+      event_id: String(
+        normalizedMetadata.event_id
+          || normalizedMetadata.eventId
+          || `evt_${randomUUID()}`,
+      ).trim(),
+      expected_version: normalizedMetadata.expected_version ?? normalizedMetadata.expectedVersion ?? null,
+      trace_id: String(normalizedMetadata.trace_id || normalizedMetadata.traceId || '').trim() || null,
+    },
   }
 }

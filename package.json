@@ -11,7 +11,7 @@
     "audit": "npm audit --audit-level=high",
     "test": "vitest run",
     "test:watch": "vitest",
-    "test:petbot": "node --test test/petbotAgent.test.mjs test/petbotAgentV3.test.mjs test/petbotFlowMatrix.test.mjs test/petbotModes.test.mjs test/petbotSemantics.test.mjs test/petbotStatic.test.mjs",
+    "test:petbot": "node scripts/run-node-tests.mjs test/petbotAgent.test.mjs test/petbotAgentV3.test.mjs test/petbotFlowMatrix.test.mjs test/petbotModes.test.mjs test/petbotSemantics.test.mjs test/petbotStatic.test.mjs",
     "test:transactions": "node --test test/transactionalStatic.test.mjs",
     "test:e2e": "playwright test",
     "test:tenant": "node scripts/test-tenant-isolation.mjs",
@@ -25,7 +25,11 @@
     "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs",
     "test:luna:unit": "node --test test/luna/*.test.mjs",
     "test:luna:regressions": "node scripts/run-luna-scenarios.mjs",
-    "test:luna": "npm run test:luna:unit && npm run test:luna:regressions"
+    "test:luna": "npm run test:luna:unit && npm run test:luna:regressions",
+    "audit:ci": "node scripts/check-npm-audit.mjs",
+    "luna:fixture:export": "node scripts/export-luna-trace-fixture.mjs",
+    "luna:trace:replay": "node scripts/replay-luna-trace.mjs",
+    "test:luna:foundation": "node --test test/luna/errors.test.mjs test/luna/toolRegistry.test.mjs test/luna/runtime.test.mjs test/luna/traceFixture.test.mjs test/luna/temporaryOperationStore.test.mjs test/luna/factualRenderer.test.mjs test/luna/foundationIntegration.test.mjs test/luna/ciPolicy.test.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",

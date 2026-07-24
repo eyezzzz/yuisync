@@ -1,6 +1,6 @@
 import { LunaError, LUNA_ERROR_CODES } from './errors.js'
 import { LUNA_OPERATION_EVENTS, createOperationEvent } from './operationEvents.js'
-import { createOperationState } from './operationState.js'
+import { assertOperationState, createOperationState } from './operationState.js'
 
 const TERMINAL = new Set(['confirmed', 'cancelled', 'human_handoff'])
 
@@ -18,23 +18,49 @@ function assertMutable(state, eventType) {
   )
 }
 
+function assertExpectedVersion(state, event) {
+  const expected = event.metadata?.expected_version
+  if (expected === null || expected === undefined || expected === '') return
+  if (Number(expected) === state.version) return
+  throw new LunaError(LUNA_ERROR_CODES.STALE_OPERATION_VERSION, 'Operation version is stale.', {
+    recoverable: true,
+    retryable: true,
+    details: { expected_version: Number(expected), actual_version: state.version },
+  })
+}
+
+function isDuplicateEvent(state, event) {
+  const eventId = text(event.metadata?.event_id, 180)
+  return Boolean(eventId && state.ledger.some((entry) => entry.event_id === eventId))
+}
+
 function withLedger(state, event, patch = {}, options = {}) {
   const changed = options.changed !== false
   const nextVersion = changed ? state.version + 1 : state.version
-  return createOperationState({
+  const occurredAt = text(event.metadata?.at, 80) || new Date().toISOString()
+  const candidate = createOperationState({
     ...state,
     ...patch,
     version: nextVersion,
     ledger: [
       ...state.ledger,
       {
+        event_id: text(event.metadata?.event_id, 180) || null,
         event: event.type,
+        operation_id: state.operation_id || null,
+        previous_version: state.version,
+        next_version: nextVersion,
         version: nextVersion,
+        previous_status: state.status,
+        next_status: patch.status || state.status,
+        changed,
         source: text(event.metadata?.source, 80) || null,
-        at: text(event.metadata?.at, 80) || null,
+        trace_id: text(event.metadata?.trace_id, 180) || null,
+        occurred_at: occurredAt,
       },
-    ].slice(-100),
+    ].slice(-200),
   })
+  return assertOperationState(candidate)
 }
 
 function totalsForItems(items = [], currentTotals = {}) {
@@ -82,6 +108,8 @@ function validateItemForState(state, item = {}) {
 export function reduceOperation(currentState = {}, eventInput = {}) {
   const state = createOperationState(currentState)
   const event = createOperationEvent(eventInput.type, eventInput.payload, eventInput.metadata)
+  assertExpectedVersion(state, event)
+  if (isDuplicateEvent(state, event)) return state
   assertMutable(state, event.type)
 
   switch (event.type) {
@@ -150,8 +178,19 @@ export function reduceOperation(currentState = {}, eventInput = {}) {
       })
     }
 
-    case LUNA_OPERATION_EVENTS.SET_TRANSPORT:
-      return withLedger(state, event, { transport: { ...state.transport, ...event.payload } })
+    case LUNA_OPERATION_EVENTS.SET_TRANSPORT: {
+      const transport = { ...state.transport, ...event.payload }
+      const fee = Number(event.payload.fee ?? event.payload.price ?? event.payload.transport_price)
+      const transportTotal = Number.isFinite(fee) ? Math.max(0, fee) : state.totals.transport
+      return withLedger(state, event, {
+        transport,
+        totals: {
+          ...state.totals,
+          transport: transportTotal,
+          total: Math.max(0, state.totals.subtotal + transportTotal - state.totals.discounts),
+        },
+      })
+    }
 
     case LUNA_OPERATION_EVENTS.SET_ADDRESS:
       return withLedger(state, event, {
