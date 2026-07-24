@@ -29,6 +29,7 @@ import {
 import { buildPetbotSearchText, recoverPetbotContextFromHistory } from '../server/lib/petbotContext.js'
 import {
   buildPetbotAvailableSlotContinuation,
+  didCurrentTurnSelectPetbotSchedule,
   inferExplicitPetTransportMode,
   sanitizePetbotTransportAddress,
 } from '../server/lib/chat.js'
@@ -54,7 +55,23 @@ test('pedido generico de busca apresenta opcoes do MotoDog sem escolher modalida
 
   assert.equal(inferExplicitPetTransportMode('consegue buscar aqui?', history), 'motodog')
   assert.equal(inferExplicitPetTransportMode('vocês podem buscar em casa?', history), 'motodog')
+  assert.equal(inferExplicitPetTransportMode('vocês buscam ele aqui?', history), 'motodog')
+  assert.equal(inferExplicitPetTransportMode('buscam ela em casa?', history), 'motodog')
   assert.equal(inferExplicitPetTransportMode('buscar e levar', history), 'buscar_e_levar')
+})
+
+test('fato de horário repetido pelo interpretador não reabre a confirmação de disponibilidade', () => {
+  assert.equal(didCurrentTurnSelectPetbotSchedule({
+    interpretation: { service_preferred_time: '16:00' },
+    previousFacts: { service_preferred_time: '16:00' },
+    semantics: { target: 'service_transport' },
+  }), false)
+
+  assert.equal(didCurrentTurnSelectPetbotSchedule({
+    interpretation: { service_preferred_time: '16:00' },
+    previousFacts: { service_preferred_time: '15:00' },
+    semantics: { target: 'appointment_time' },
+  }), true)
 })
 
 test('prompt v3 entrega autonomia conversacional sem despejar catalogo ou frase pronta', () => {

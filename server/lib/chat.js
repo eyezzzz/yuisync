@@ -328,8 +328,8 @@ export function inferExplicitPetTransportMode(message = '', history = []) {
   if (/\b(?:somente levar|so levar|apenas levar|levar apenas|levar de volta|trazer de volta)\b/.test(answer)) return 'somente_levar'
 
   const genericPickupQuestion = (
-    /\b(?:consegue|conseguem|pode|podem|tem como|voces|vcs)\b.*\b(?:buscar|pegar|recolher)\b/.test(answer)
-    || /^(?:buscam|busca|buscar|pegar|vir buscar)(?: aqui| em casa| no endereco| no meu endereco)?$/.test(answer)
+    /\b(?:consegue|conseguem|pode|podem|tem como|voces|vcs)\b.*\b(?:buscar|buscam|busca|pegar|pegam|pega|recolher|recolhem)\b/.test(answer)
+    || /^(?:buscam|busca|buscar|pegam|pega|pegar|recolhem|recolhe|recolher|vir buscar)(?: (?:ele|ela|o pet|a pet|meu pet|minha pet))?(?: aqui| em casa| no endereco| no meu endereco)?$/.test(answer)
   )
   if (!selectingMotodogOption && genericPickupQuestion) return 'motodog'
 
@@ -345,6 +345,23 @@ export function inferExplicitPetTransportMode(message = '', history = []) {
     return 'cliente_leva'
   }
   return ''
+}
+
+export function didCurrentTurnSelectPetbotSchedule({ interpretation = {}, previousFacts = {}, semantics = {} } = {}) {
+  const target = cleanText(semantics?.target)
+  if (['appointment_time', 'service_time'].includes(target)) return true
+
+  const interpretedTime = cleanText(
+    interpretation?.service_preferred_time
+    || interpretation?.service_time_preference,
+  )
+  if (!interpretedTime) return false
+
+  const previousTime = cleanText(
+    previousFacts?.service_preferred_time
+    || previousFacts?.service_time_preference,
+  )
+  return interpretedTime !== previousTime
 }
 
 function isPetbotCustomerBringsMode(value = '') {
@@ -3374,11 +3391,11 @@ async function respondWithPetbotAgent({
     && pendingAtTurnStart.order?.order_type !== 'produto'
     && explicitServiceNoteUpdate
   )
-  const currentTurnSelectedSchedule = Boolean(
-    cleanText(llmInterpretation?.service_preferred_time)
-    || cleanText(llmInterpretation?.service_time_preference)
-    || ['appointment_time', 'service_time'].includes(cleanText(turnSemantics?.target)),
-  )
+  const currentTurnSelectedSchedule = didCurrentTurnSelectPetbotSchedule({
+    interpretation: llmInterpretation,
+    previousFacts: previousServiceFacts,
+    semantics: turnSemantics,
+  })
   const transportQualificationReply = serviceOrderType === 'banho_tosa'
     ? (
       buildPetbotAvailableSlotContinuation({
