@@ -1451,6 +1451,7 @@ test('MotoDog bloqueia resumo ate escolher modalidade e completar endereco', () 
       service_transport_neighborhood: 'Centro',
       service_transport_city: 'Muriaé',
       service_transport_reference: 'portão azul',
+      service_transport_address_confirmed: true,
     },
     services: [service], appointments: [], settings,
     now: new Date('2026-07-23T10:00:00-03:00'),
@@ -1561,7 +1562,31 @@ test('agenda do dia marca horários ocupados e aceita último início às 17h', 
   assert.equal(result.day_schedule.find((row) => row.time === '10:00').status, 'ocupado')
   assert.equal(result.day_schedule.find((row) => row.time === '10:30').status, 'ocupado')
   assert.equal(result.day_schedule.find((row) => row.time === '17:00').status, 'disponivel')
-  assert.ok(result.available_slots.some((row) => row.time === '17:00'))
+
+  const lastStartResult = buildServiceAvailability({
+    serviceQuery: service.id,
+    orderType: 'banho_tosa',
+    species: 'dog',
+    breed: 'Shih Tzu',
+    weightKg: 8,
+    coatType: 'longo',
+    date: '2026-07-27',
+    preferredTime: '17:00',
+    services: [service],
+    appointments: [{ scheduled_at: '2026-07-27T10:00:00-03:00', duration_min: 60, status: 'confirmado' }],
+    settings: {
+      petbotTimezone: 'America/Sao_Paulo',
+      storeBusinessHours: { 1: [{ open: '08:00', close: '18:00' }] },
+      petbotBusinessHours: { 1: [{ open: '08:00', close: '17:00' }] },
+      petbotSlotIntervalMin: 30,
+      petbotBookingCapacity: 1,
+    },
+    now: new Date('2026-07-26T08:00:00-03:00'),
+  })
+
+  assert.equal(lastStartResult.requested_slot.available, true)
+  assert.equal(lastStartResult.requested_slot.status, 'disponivel')
+  assert.ok(lastStartResult.available_slots.some((row) => row.time === '17:00'))
 })
 
 test('serviço adicional vira item estruturado e altera o total', () => {

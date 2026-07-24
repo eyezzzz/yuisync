@@ -116,7 +116,9 @@ test('prepara serviço somente com horário disponível e preço real', () => {
       service_transport_label: 'Buscar e levar',
       service_transport_address: 'Rua A, 10',
       service_transport_neighborhood: 'Centro',
+      service_transport_city: 'Muriaé',
       service_transport_reference: 'Portão azul',
+      service_transport_address_confirmed: true,
     },
     services: [{ id: 's1', code: 'banho', name: 'Banho', group_type: 'banho_tosa', default_price: 80, default_duration_min: 60, active: true }],
     appointments: [{
