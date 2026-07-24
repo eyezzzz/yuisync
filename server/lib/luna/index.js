@@ -10,3 +10,5 @@ export * from './transportSemantics.js'
 export * from './verifier.js'
 export * from './scenarioRunner.js'
 export * from './shadow/index.js'
+
+export * from './bath/index.js'

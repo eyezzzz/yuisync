@@ -165,16 +165,20 @@ export function mergeInterpretedPetbotServiceFacts({
   )
   const currentTransportModeRaw = clean(current.service_transport_mode)
   const inheritedTransportModeRaw = clean(inheritedPet.service_transport_mode)
-  const currentTransportMode = currentTransportModeRaw === 'motodog' ? '' : currentTransportModeRaw
+  const currentLegacyTransportOptionsRequest = currentTransportModeRaw === 'motodog'
+  const currentTransportMode = currentLegacyTransportOptionsRequest ? '' : currentTransportModeRaw
   const inheritedTransportMode = inheritedTransportModeRaw === 'motodog' ? '' : inheritedTransportModeRaw
-  const currentTransportOptionsDecision = typeof current.service_transport_options_requested === 'boolean'
+  const currentTransportOptionsDecision = Boolean(
+    typeof current.service_transport_options_requested === 'boolean'
+    || currentLegacyTransportOptionsRequest
+  )
   const inheritedTransportOptionsRequested = Boolean(
     inheritedPet.service_transport_options_requested === true
     || inheritedTransportModeRaw === 'motodog'
   )
   const requestsTransportOptionsNow = Boolean(
-    currentTransportOptionsDecision
-    && current.service_transport_options_requested === true
+    currentLegacyTransportOptionsRequest
+    || current.service_transport_options_requested === true
   )
   const serviceTransportMode = currentTransportMode
     || (requestsTransportOptionsNow ? '' : inheritedTransportMode)
@@ -307,9 +311,11 @@ export function groundPetbotServiceArgs(args = {}, facts = {}) {
       : null,
     // A generic MotoDog request is intentionally unresolved. The model may
     // not narrow it to a paid modality that the customer did not choose.
-    service_transport_mode: facts.service_transport_mode_explicit
-      ? clean(facts.service_transport_mode)
-      : clean(args.service_transport_mode) || null,
+    service_transport_mode: facts.service_transport_options_requested === true
+      ? 'motodog'
+      : facts.service_transport_mode_explicit
+        ? clean(facts.service_transport_mode)
+        : clean(args.service_transport_mode) || null,
     service_transport_label: clean(facts.service_transport_label) || clean(args.service_transport_label) || null,
     service_transport_address: clean(facts.service_transport_address) || clean(args.service_transport_address) || null,
     service_transport_neighborhood: clean(facts.service_transport_neighborhood) || clean(args.service_transport_neighborhood) || null,
