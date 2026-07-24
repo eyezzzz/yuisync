@@ -163,10 +163,27 @@ export function mergeInterpretedPetbotServiceFacts({
     || inheritedPet.service_notes_resolved
     || inheritedPet.service_notes_explicit,
   )
-  const currentTransportMode = clean(current.service_transport_mode)
+  const currentTransportModeRaw = clean(current.service_transport_mode)
+  const inheritedTransportModeRaw = clean(inheritedPet.service_transport_mode)
+  const currentTransportMode = currentTransportModeRaw === 'motodog' ? '' : currentTransportModeRaw
+  const inheritedTransportMode = inheritedTransportModeRaw === 'motodog' ? '' : inheritedTransportModeRaw
+  const currentTransportOptionsDecision = typeof current.service_transport_options_requested === 'boolean'
+  const inheritedTransportOptionsRequested = Boolean(
+    inheritedPet.service_transport_options_requested === true
+    || inheritedTransportModeRaw === 'motodog'
+  )
+  const requestsTransportOptionsNow = Boolean(
+    currentTransportOptionsDecision
+    && current.service_transport_options_requested === true
+  )
   const serviceTransportMode = currentTransportMode
-    || clean(inheritedPet.service_transport_mode)
+    || (requestsTransportOptionsNow ? '' : inheritedTransportMode)
     || null
+  const serviceTransportOptionsRequested = currentTransportMode
+    ? false
+    : currentTransportOptionsDecision
+      ? requestsTransportOptionsNow
+      : inheritedTransportOptionsRequested
   const resetTransportAddress = current.service_transport_address_reset === true
   const inheritedTransport = resetTransportAddress ? {} : inheritedPet
   const serviceTransportLabel = clean(current.service_transport_label)
@@ -232,6 +249,7 @@ export function mergeInterpretedPetbotServiceFacts({
     service_notes_explicit: serviceNotesResolved,
     service_transport_mode: serviceTransportMode,
     service_transport_mode_explicit: Boolean(serviceTransportMode),
+    service_transport_options_requested: serviceTransportOptionsRequested,
     service_transport_label: serviceTransportLabel,
     service_transport_address: serviceTransportAddress,
     service_transport_neighborhood: serviceTransportNeighborhood,

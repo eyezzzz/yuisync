@@ -252,6 +252,7 @@ export function normalizePetbotInterpretation(input = {}) {
 export function resolvePetbotTurnSemantics({
   interpretation = {},
   hasPendingOrder = false,
+  expectedReplyTarget = '',
 } = {}) {
   const data = normalizePetbotInterpretation(interpretation)
   const confidence = Number(data.confidence || 0)
@@ -261,7 +262,14 @@ export function resolvePetbotTurnSemantics({
   if (data.wants_human) action = 'request_human'
   if (data.confirmation && !data.negation && !['correct', 'cancel'].includes(action)) action = 'affirm'
 
+  const contextualTarget = pickEnum(expectedReplyTarget, REPLY_TARGETS)
   const target = data.reply_target
+    || (
+      contextualTarget
+      && ['ask', 'inform', 'select', 'affirm', 'other'].includes(action)
+        ? contextualTarget
+        : ''
+    )
     || (hasPendingOrder && (data.confirmation || action === 'affirm') ? 'final_confirmation' : '')
   const acceptsSlotUpdates = Boolean(
     confident

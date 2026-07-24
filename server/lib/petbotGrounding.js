@@ -509,6 +509,10 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   const asksConfirmationAgain = /(?:confirma(?:r)?|voce confirma|pode confirmar).{0,50}(?:agendamento|pedido|horario)/.test(normalized)
     || /(?:para finalizar|so preciso confirmar).{0,80}/.test(normalized)
   const transportMode = normalizeCatalogText(facts.service_transport_mode)
+  const transportOptionsRequested = Boolean(
+    facts.service_transport_options_requested === true
+    || transportMode === 'motodog'
+  )
   const customerBringsPet = /^(?:cliente leva|cliente_leva|sem transporte|sem_transporte|tutor leva|tutor_leva)$/.test(transportMode)
   const exactMotodogMode = Boolean(transportMode && transportMode !== 'motodog' && !customerBringsPet)
   const transportAddressComplete = Boolean(
@@ -580,7 +584,7 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
   if (productContext && clean(facts.payment_method) && (asksPaymentMethod || asksPaymentConfirmation)) {
     problems.push('forma de pagamento já registrada; não peça confirmação novamente')
   }
-  if (isBathConversation && transportMode === 'motodog') {
+  if (isBathConversation && transportOptionsRequested && !exactMotodogMode) {
     if (offersPrematureSummary || asksConfirmationAgain) {
       problems.push('MotoDog ainda precisa de modalidade; não apresente resumo nem peça confirmação final')
     }

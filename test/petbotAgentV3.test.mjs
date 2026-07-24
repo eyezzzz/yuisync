@@ -35,7 +35,9 @@ import {
   sanitizePetbotTransportAddress,
 } from '../server/lib/chat.js'
 import {
+  inferSemanticOptionIndex,
   recoverCommittedResultFromContext,
+  resolveTransportDecision,
   resolveTransportModeFromSemantics,
 } from '../server/lib/luna/index.js'
 
@@ -170,7 +172,80 @@ test('escolha ordinal do MotoDog usa o índice sem depender da frase literal', (
       service_transport_mode: 'buscar_e_levar',
     },
     options: settings.petTransportOptions,
-  }), 'motodog')
+  }), '')
+
+  assert.equal(inferSemanticOptionIndex('a primeira', 3), 1)
+  assert.equal(inferSemanticOptionIndex('1', 3), 1)
+  assert.equal(inferSemanticOptionIndex('a última', 3), 3)
+  assert.equal(inferSemanticOptionIndex('1', 0), null)
+
+  const configuredOptions = listPetTransportOptions(settings)
+  assert.deepEqual(resolveTransportDecision({
+    semantics: {
+      transport_intent: 'request_options',
+      service_transport_mode: 'motodog',
+    },
+    options: configuredOptions,
+    message: 'buscar e levar',
+    optionsPending: true,
+    explicitMode: 'buscar_e_levar',
+  }), {
+    handled: true,
+    intent: 'select_mode',
+    mode: 'buscar_e_levar',
+    optionIndex: null,
+    requestOptions: false,
+  })
+
+  assert.equal(resolveTransportDecision({
+    semantics: {
+      transport_intent: 'request_options',
+      service_transport_mode: 'motodog',
+    },
+    options: configuredOptions,
+    message: 'a primeira',
+    optionsPending: true,
+  }).mode, 'buscar_e_levar')
+
+  assert.equal(resolveTransportDecision({
+    semantics: { transport_intent: 'request_options' },
+    options: configuredOptions,
+    message: '1',
+    optionsPending: false,
+  }).mode, '')
+})
+
+test('estado de opções do MotoDog não vira modalidade e é encerrado pela seleção', () => {
+  const requesting = mergeInterpretedPetbotServiceFacts({
+    interpretation: {
+      service_transport_options_requested: true,
+    },
+    previousFacts: {},
+  })
+  assert.equal(requesting.service_transport_mode, null)
+  assert.equal(requesting.service_transport_options_requested, true)
+
+  const selected = mergeInterpretedPetbotServiceFacts({
+    interpretation: {
+      service_transport_mode: 'buscar_e_levar',
+      service_transport_options_requested: false,
+    },
+    previousFacts: requesting,
+  })
+  assert.equal(selected.service_transport_mode, 'buscar_e_levar')
+  assert.equal(selected.service_transport_options_requested, false)
+
+  const migratedLegacy = mergeInterpretedPetbotServiceFacts({
+    interpretation: {
+      service_transport_mode: 'somente_buscar',
+      service_transport_options_requested: false,
+    },
+    previousFacts: {
+      service_transport_mode: 'motodog',
+    },
+  })
+  assert.equal(migratedLegacy.service_transport_mode, 'somente_buscar')
+  assert.equal(migratedLegacy.service_transport_options_requested, false)
 })
 
 test('confirmação reconciliada reconhece commit transacional pelo idempotency key', () => {

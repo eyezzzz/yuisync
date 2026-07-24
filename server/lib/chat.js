@@ -46,7 +46,7 @@ import {
   isCustomerNamePlaceholder,
   normalizeCustomerDisplayName,
   recoverCommittedResultFromContext,
-  resolveTransportModeFromSemantics,
+  resolveTransportDecision,
   runBathShadowTurn,
 } from './luna/index.js'
 import {
@@ -503,12 +503,18 @@ function inferPetbotTransportAddressConfirmation(message = '', history = []) {
 }
 
 function buildPetbotTransportQualificationReply({ facts = {}, settings = {} } = {}) {
-  const mode = cleanText(facts.service_transport_mode)
-  if (!mode || isPetbotCustomerBringsMode(mode)) return ''
+  const rawMode = cleanText(facts.service_transport_mode)
+  const legacyOptionsRequest = rawMode === 'motodog'
+  const mode = legacyOptionsRequest ? '' : rawMode
+  const optionsRequested = Boolean(
+    facts.service_transport_options_requested === true
+    || legacyOptionsRequest
+  )
+  if ((!mode && !optionsRequested) || isPetbotCustomerBringsMode(mode)) return ''
   const options = listPetTransportOptions(settings)
   const formatOption = (option) => `• ${option.label} — ${formatPetbotCurrency(option.fee)}`
 
-  if (mode === 'motodog') {
+  if (optionsRequested && !mode) {
     if (!options.length) {
       return 'O MotoDog ainda não está configurado para esta loja. Você consegue levar o pet até a unidade?'
     }
@@ -2338,32 +2344,32 @@ async function respondWithPetbotAgent({
   )
   const previousAgentContext = parseJsonObject(sessionForAgent.context)?.petbot_agent || {}
   const previousProductFacts = initialProductFacts || previousAgentContext.product_facts || {}
+  const previousServiceFacts = previousAgentContext.facts || previousAgentContext.explicit_facts || {}
   const currentTurnIntent = cleanText(llmInterpretation?.intent || intent)
   const productConversationAtTurnStart = Boolean(
     cleanText(previousProductFacts.product_kind)
     && !['banho_tosa', 'veterinaria'].includes(currentTurnIntent),
   )
-  const semanticTransportMode = productConversationAtTurnStart
-    ? ''
-    : resolveTransportModeFromSemantics({
-      semantics: turnSemantics,
-      options: listPetTransportOptions(storeSettings),
-    })
   const explicitTransportMode = productConversationAtTurnStart
     ? ''
     : inferExplicitPetTransportMode(trimmedMessage, history)
-  const inferredTransportMode = productConversationAtTurnStart
-    ? ''
-    : (
-      semanticTransportMode
-      || explicitTransportMode
-      || cleanText(turnSemantics?.service_transport_mode)
-    )
+  const transportOptionsPending = Boolean(
+    previousServiceFacts.service_transport_options_requested === true
+    || cleanText(previousServiceFacts.service_transport_mode) === 'motodog'
+  )
+  const transportDecision = productConversationAtTurnStart
+    ? { handled: false, mode: '', requestOptions: false }
+    : resolveTransportDecision({
+      semantics: turnSemantics,
+      options: listPetTransportOptions(storeSettings),
+      message: trimmedMessage,
+      optionsPending: transportOptionsPending,
+      explicitMode: explicitTransportMode,
+    })
   const productBulkQuantityMessage = Boolean(
     cleanText(previousProductFacts.package_preference) === 'granel'
     && Number(detectExplicitProductQuantity(trimmedMessage, 'granel') || 0) > 0,
   )
-  const previousServiceFacts = previousAgentContext.facts || previousAgentContext.explicit_facts || {}
   const inferredTransportAddress = productConversationAtTurnStart
     ? {}
     : inferPetbotTransportAddress(trimmedMessage, history)
@@ -2400,6 +2406,7 @@ async function respondWithPetbotAgent({
       service_notes: null,
       service_notes_resolved: false,
       service_transport_mode: null,
+      service_transport_options_requested: false,
       service_transport_label: null,
       service_transport_address: null,
       service_transport_neighborhood: null,
@@ -2451,7 +2458,12 @@ async function respondWithPetbotAgent({
     ...(explicitServiceNoteUpdate
       ? { service_notes: explicitServiceNoteUpdate, service_notes_resolved: true }
       : {}),
-    service_transport_mode: inferredTransportMode || null,
+    ...(transportDecision.handled
+      ? {
+        service_transport_mode: transportDecision.mode || null,
+        service_transport_options_requested: transportDecision.requestOptions === true,
+      }
+      : {}),
     ...currentTransportAddress,
     service_transport_address_reset: resetSavedTransportAddress,
     service_transport_address_confirmed: transportAddressConfirmation === true || currentTurnProvidesTransportAddress,
@@ -4346,9 +4358,15 @@ export async function respondToChatMessage(supabase, sessionId, message, options
     customInstructions,
   })
   const recoveredAgentContext = parseJsonObject(recoveredContext)?.petbot_agent || {}
+  const recoveredServiceFacts = recoveredAgentContext.facts || recoveredAgentContext.explicit_facts || {}
+  const expectedReplyTarget = (
+    recoveredServiceFacts.service_transport_options_requested === true
+    || cleanText(recoveredServiceFacts.service_transport_mode) === 'motodog'
+  ) ? 'service_transport' : ''
   const turnSemantics = resolvePetbotTurnSemantics({
     interpretation: llmInterpretation || {},
     hasPendingOrder: Boolean(getPendingAgentOrder(recoveredContext)),
+    expectedReplyTarget,
   })
   const repeatsCompletedConfirmation = Boolean(
     hasConfirmedOrderContext(sessionForAgent)

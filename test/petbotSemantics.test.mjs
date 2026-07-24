@@ -129,6 +129,32 @@ test('intenção de transporte separa pergunta, escolha nominal e escolha ordina
   assert.equal(explicit.service_transport_mode, 'somente_buscar')
 })
 
+
+test('contexto pendente de transporte completa alvo sem transformar pergunta em seleção', () => {
+  const ordinal = resolvePetbotTurnSemantics({
+    interpretation: {
+      dialogue_act: 'select',
+      option_index: 1,
+      confidence: 0.97,
+    },
+    expectedReplyTarget: 'service_transport',
+  })
+  assert.equal(ordinal.target, 'service_transport')
+  assert.equal(ordinal.transport_intent, 'select_option')
+  assert.equal(ordinal.service_transport_option_index, 1)
+
+  const question = resolvePetbotTurnSemantics({
+    interpretation: {
+      dialogue_act: 'ask',
+      service_transport_mode: 'buscar_e_levar',
+      confidence: 0.97,
+    },
+    expectedReplyTarget: 'service_transport',
+  })
+  assert.equal(question.transport_intent, 'request_options')
+  assert.equal(question.service_transport_option_index, null)
+})
+
 test('venda aceita significado estruturado mesmo quando a frase não pertence ao dicionário lexical', () => {
   assert.equal(detectExplicitProductFulfillmentType('manda aki pf'), '')
   assert.equal(detectExplicitProductPaymentMethod('passa no cartau'), '')
