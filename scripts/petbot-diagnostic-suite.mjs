@@ -3,7 +3,7 @@ import { respondToChatMessage } from '../server/lib/chat.js'
 import { adminSupabase } from '../server/lib/supabase.js'
 
 const MODULE_ID = 'petshop'
-const SUITE_VERSION = '2026-07-23.1'
+const SUITE_VERSION = '2026-07-24.2'
 const CATEGORY_ORDER = ['banho', 'servicos', 'produtos', 'racao', 'veterinaria']
 const CATEGORY_LABELS = {
   banho: 'Banho',
@@ -110,6 +110,171 @@ async function loadSettings(tenantId) {
   return rows[0]
 }
 
+function productText(item) {
+  return normalize(`${item?.name || ''} ${item?.category || ''} ${item?.description || ''} ${JSON.stringify(item?.bot_metadata || {})}`)
+}
+
+function serviceText(item) {
+  return normalize(`${item?.name || ''} ${item?.group_type || ''} ${item?.code || ''}`)
+}
+
+function uniqueById(rows = []) {
+  const seen = new Set()
+  return rows.filter((row) => {
+    const id = clean(row?.id) || clean(row?.name)
+    if (!id || seen.has(id)) return false
+    seen.add(id)
+    return true
+  })
+}
+
+function firstMatching(rows, predicate, usedIds = new Set()) {
+  return rows.find((row) => !usedIds.has(clean(row.id)) && predicate(row))
+    || rows.find((row) => predicate(row))
+    || null
+}
+
+const VETERINARY_EXCLUSION = /consulta|veterin|cirurg|anest|exame|analise|acompanhamento|piometra|castr|vacina|ultrassom|hemograma|internacao|retorno|coleta|sutura|laborat|raio|radiograf|eletro|hernia|masectomia|cistocentese/
+const GROOMING_SIGNAL = /tosa|hidrat|escov|dental|unha|ouvido|desemb|trim|groom|higien/
+const PRODUCT_SERVICE_SIGNAL = /servico|servicos|banho|tosa|consulta|veterin|escovacao|hidratacao/
+const FEED_SIGNAL = /racao|alimento completo|bionatural|premier|golden|granplus|special dog|royal canin|pedigree|whiskas|friskies|formula natural|quatree|origens|magnus/
+const FEED_EXCLUSION = /bifinho|petisco|snack|ossinho|biscoito|palito|pate|sache|bebida|agua mineral/
+
+const SERVICE_INTENTS = [
+  {
+    key: 'tosa_maquina',
+    label: 'Tosa na máquina',
+    request: 'uma tosa na máquina',
+    matches: (row) => /tosa/.test(serviceText(row)) && /maquin/.test(serviceText(row)),
+  },
+  {
+    key: 'tosa_tesoura',
+    label: 'Tosa na tesoura',
+    request: 'uma tosa na tesoura',
+    matches: (row) => /tosa/.test(serviceText(row)) && /tesour/.test(serviceText(row)),
+  },
+  {
+    key: 'hidratacao',
+    label: 'Hidratação do pelo',
+    request: 'uma hidratação para o pelo',
+    matches: (row) => /hidrat/.test(serviceText(row)),
+  },
+  {
+    key: 'escovacao_dental',
+    label: 'Escovação dental',
+    request: 'uma escovação dos dentes',
+    matches: (row) => /dental|escov.*dent|dent.*escov/.test(serviceText(row)),
+  },
+  {
+    key: 'corte_unhas',
+    label: 'Corte de unhas',
+    request: 'um corte de unhas',
+    matches: (row) => /unha/.test(serviceText(row)),
+  },
+  {
+    key: 'limpeza_ouvidos',
+    label: 'Limpeza de ouvidos',
+    request: 'uma limpeza de ouvidos',
+    matches: (row) => /ouvido/.test(serviceText(row)),
+  },
+  {
+    key: 'desembolo',
+    label: 'Desembolo do pelo',
+    request: 'um desembolo do pelo',
+    matches: (row) => /desemb/.test(serviceText(row)),
+  },
+]
+
+const PRODUCT_INTENTS = [
+  {
+    key: 'antiparasitario',
+    label: 'Antipulgas ou antiparasitário',
+    noun: 'um antipulgas',
+    matches: (row) => /antipul|antiparas|advocate|bravecto|simparic|nexgard|frontline/.test(productText(row)),
+  },
+  {
+    key: 'shampoo',
+    label: 'Shampoo',
+    noun: 'um shampoo',
+    matches: (row) => /shampoo|xampu/.test(productText(row)),
+  },
+  {
+    key: 'condicionador',
+    label: 'Condicionador',
+    noun: 'um condicionador para o pelo',
+    matches: (row) => /condicionador/.test(productText(row)),
+  },
+  {
+    key: 'brinquedo',
+    label: 'Brinquedo',
+    noun: 'um brinquedo para cachorro',
+    matches: (row) => /brinquedo|mordedor|bolinha|bola pet|corda/.test(productText(row)),
+  },
+  {
+    key: 'higiene',
+    label: 'Produto de higiene',
+    noun: 'um produto de higiene para pet',
+    matches: (row) => /tapete higien|areia|granulado|limpador|afasta|desinfet|eliminador de odor/.test(productText(row)),
+  },
+  {
+    key: 'petisco',
+    label: 'Petisco',
+    noun: 'um petisco para cachorro',
+    matches: (row) => /petisco|bifinho|snack|ossinho|biscoito|palito/.test(productText(row)),
+  },
+  {
+    key: 'acessorio',
+    label: 'Acessório',
+    noun: 'um acessório para passeio',
+    matches: (row) => /coleira|guia|peitoral|comedouro|bebedouro|escova/.test(productText(row)),
+  },
+]
+
+function extractBrand(name = '') {
+  const ignored = new Set(['racao', 'ração', 'pet', 'para', 'caes', 'cães', 'gatos', 'adulto', 'adultos', 'shampoo', 'condicionador'])
+  const token = clean(name).split(/\s+/).find((part) => {
+    const normalized = normalize(part).replace(/[^a-z0-9]/g, '')
+    return normalized.length >= 3 && !ignored.has(normalized) && !/^\d/.test(normalized)
+  })
+  return token ? token.replace(/[^\p{L}\p{N}-]/gu, '') : ''
+}
+
+function extractPackageLabel(name = '') {
+  const match = clean(name).match(/\b(\d+(?:[.,]\d+)?)\s*(kg|g|ml|l)\b/i)
+  return match ? `${match[1]} ${match[2]}`.replace('.', ',') : ''
+}
+
+function productSemanticRequest(item, intent) {
+  const text = productText(item)
+  const brand = extractBrand(item?.name)
+  const pack = extractPackageLabel(item?.name)
+  const audience = /gato/.test(text)
+    ? ' para gato'
+    : /cachorro|cao|caes|dog/.test(text)
+      ? ' para cachorro'
+      : ''
+  const weight = clean(item?.name).match(/(?:ate|até)\s*(\d+(?:[.,]\d+)?)\s*kg/i)
+  const details = [brand ? `da ${brand}` : '', audience, weight ? ` de até ${weight[1]} kg` : '', pack ? `, embalagem de ${pack}` : '']
+    .filter(Boolean)
+    .join('')
+  return `quero comprar ${intent.noun}${details}`.replace(/\s+/g, ' ').trim()
+}
+
+function feedSemanticRequest(item) {
+  const text = productText(item)
+  const brand = extractBrand(item?.name)
+  const pack = extractPackageLabel(item?.name)
+  const species = /gato/.test(text) ? 'gato' : 'cachorro'
+  const age = /filhote|junior|puppy|kitten/.test(text) ? 'filhote' : /senior|sênior/.test(text) ? 'sênior' : 'adulto'
+  const size = /pequen|small|rp\b/.test(text) ? ' de porte pequeno' : /medio|médio|grande|rg\b/.test(text) ? ' de porte médio ou grande' : ''
+  const flavor = clean(item?.name).match(/\b(frango|cordeiro|carne|salm[aã]o|peixe|peru)\b/i)
+  return [
+    `quero uma ração${brand ? ` da ${brand}` : ''} para ${species} ${age}${size}`,
+    flavor ? `sabor ${flavor[1]}` : '',
+    pack ? `pacote de ${pack}` : '',
+  ].filter(Boolean).join(', ')
+}
+
 async function loadCatalog(tenantId) {
   const [products, services] = await Promise.all([
     queryWithColumnFallback({
@@ -146,10 +311,8 @@ async function loadCatalog(tenantId) {
   ])
 
   const productRows = products.filter((item) => clean(item.name))
-  const productText = (item) => normalize(`${item.name} ${item.category || ''} ${item.description || ''} ${JSON.stringify(item.bot_metadata || {})}`)
-  const serviceLikeProduct = (item) => /\b(servico|servicos|banho|tosa|consulta|veterin|escovacao|hidratacao)\b/.test(productText(item))
   const fallbackServices = productRows
-    .filter(serviceLikeProduct)
+    .filter((item) => PRODUCT_SERVICE_SIGNAL.test(productText(item)))
     .map((item, index) => ({
       id: item.id,
       code: `product_service_${index + 1}`,
@@ -160,38 +323,39 @@ async function loadCatalog(tenantId) {
       active: item.active !== false,
       source_product_id: item.id,
     }))
-  const serviceRows = (services.length ? services : fallbackServices).filter((item) => clean(item.name))
-  const serviceText = (item) => normalize(`${item.name} ${item.group_type || ''} ${item.code || ''}`)
-  const feedLikeProduct = (item) => /\b(racao|alimento|food|premier|golden|granplus|special dog|royal canin|pedigree|whiskas)\b/.test(productText(item))
+  const serviceRows = uniqueById((services.length ? services : fallbackServices).filter((item) => clean(item.name)))
+  const bathServices = serviceRows.filter((item) => /\bbanho\b/.test(serviceText(item)) && !VETERINARY_EXCLUSION.test(serviceText(item)))
+  const groomingServices = serviceRows.filter((item) => GROOMING_SIGNAL.test(serviceText(item)) && !VETERINARY_EXCLUSION.test(serviceText(item)) && !/\bbanho\b/.test(serviceText(item)))
+  const consultationService = serviceRows.find((item) => /consulta/.test(serviceText(item)) && /veterin/.test(serviceText(item)) && !/retorno|acompanhamento|cirurg|exame|analise/.test(serviceText(item)))
+    || serviceRows.find((item) => /consulta/.test(serviceText(item)) && !/retorno|acompanhamento|cirurg|exame|analise/.test(serviceText(item)))
+    || null
 
-  const bathServices = serviceRows.filter((item) => /banho/.test(serviceText(item)) && !/consulta|veterin/.test(serviceText(item)))
-  const veterinaryServices = serviceRows.filter((item) => /consulta|veterin/.test(serviceText(item)))
-  const secondaryServices = serviceRows.filter((item) => (
-    !/consulta|veterin/.test(serviceText(item))
-    && (/tosa|hidrat|escova|unha|ouvido|dental|higien/.test(serviceText(item)) || !/banho/.test(serviceText(item)))
-  ))
+  const sellableProducts = productRows.filter((item) => {
+    const text = productText(item)
+    return !PRODUCT_SERVICE_SIGNAL.test(text) && Number(item.stock_quantity || 0) > 0
+  })
+  const feedProducts = sellableProducts.filter((item) => FEED_SIGNAL.test(productText(item)) && !FEED_EXCLUSION.test(productText(item)))
+  const generalProducts = sellableProducts.filter((item) => !feedProducts.some((feed) => feed.id === item.id))
 
-  const sellableProducts = productRows.filter((item) => !serviceLikeProduct(item) && Number(item.stock_quantity || 0) > 0)
-  const feedProducts = sellableProducts.filter(feedLikeProduct)
-  const generalProducts = sellableProducts.filter((item) => !feedLikeProduct(item))
-  const addOnProduct = generalProducts.find((item) => /petisco|bifinho|sache|sache|brinquedo|ossinho|dental/.test(productText(item)))
-    || generalProducts[1]
-    || generalProducts[0]
-  const addOnService = secondaryServices.find((item) => /dental|escova|unha|ouvido|hidrat/.test(serviceText(item)))
-    || secondaryServices[0]
-    || bathServices[1]
-    || bathServices[0]
+  const serviceIntents = SERVICE_INTENTS.map((intent) => ({
+    ...intent,
+    item: firstMatching(groomingServices, intent.matches),
+  })).filter((intent) => intent.item)
+  const productIntents = PRODUCT_INTENTS.map((intent) => ({
+    ...intent,
+    item: firstMatching(generalProducts, intent.matches),
+  })).filter((intent) => intent.item)
 
   return {
     products: productRows,
     services: serviceRows,
     bathServices,
-    secondaryServices,
-    veterinaryServices,
+    groomingServices,
+    consultationService,
     generalProducts,
     feedProducts,
-    addOnProduct,
-    addOnService,
+    serviceIntents,
+    productIntents,
   }
 }
 
@@ -213,10 +377,19 @@ function scenarioBase(category, index, title, extra = {}) {
 
 function buildScenarioPlan(catalog) {
   assert(catalog.bathServices.length > 0, 'Nenhum serviço de banho ativo foi encontrado no catálogo.')
-  assert(catalog.secondaryServices.length > 0, 'Nenhum serviço de tosa ou serviço complementar ativo foi encontrado no catálogo.')
-  assert(catalog.generalProducts.length > 0, 'Nenhum produto geral ativo com estoque foi encontrado.')
+  assert(catalog.serviceIntents.length > 0, 'Nenhum serviço comum de tosa, hidratação ou cuidados foi encontrado no catálogo.')
+  assert(catalog.productIntents.length > 0, 'Nenhuma categoria segura de produto geral com estoque foi encontrada.')
   assert(catalog.feedProducts.length > 0, 'Nenhuma ração ativa com estoque foi encontrada.')
-  assert(catalog.veterinaryServices.length > 0, 'Nenhuma consulta veterinária ativa foi encontrada no catálogo.')
+  assert(catalog.consultationService, 'Nenhuma consulta veterinária ativa e inequívoca foi encontrada no catálogo.')
+
+  const addServiceA = catalog.serviceIntents.find((intent) => intent.key === 'hidratacao') || catalog.serviceIntents[0]
+  const addServiceB = catalog.serviceIntents.find((intent) => intent.key === 'escovacao_dental')
+    || catalog.serviceIntents.find((intent) => intent.key !== addServiceA?.key)
+    || addServiceA
+  const addProductA = catalog.productIntents.find((intent) => intent.key === 'petisco') || catalog.productIntents[0]
+  const addProductB = catalog.productIntents.find((intent) => intent.key === 'brinquedo')
+    || catalog.productIntents.find((intent) => intent.key !== addProductA?.key)
+    || addProductA
 
   const baths = Array.from({ length: 10 }, (_, index) => scenarioBase('banho', index, [
     'Banho direto com retirada na loja',
@@ -225,78 +398,102 @@ function buildScenarioPlan(catalog) {
     'Peso informado por último',
     'Pergunta sobre o que o banho inclui',
     'Alteração de horário antes da confirmação',
-    'Observação sem perfume',
+    'Observação sem perfume antes de confirmar',
     'Pergunta sobre MotoDog e escolha de levar à loja',
-    'Inclusão de serviço adicional antes da confirmação',
-    'Inclusão adicional com dados em ordem diferente',
+    'Inclusão de hidratação antes da confirmação',
+    'Inclusão de outro cuidado antes da confirmação',
   ][index], {
     outcome: 'booking',
     order_type: 'banho_tosa',
-    service: cycle(catalog.bathServices, index),
-    add_service: [8, 9].includes(index) ? catalog.addOnService : null,
+    request_label: 'banho por porte e pelagem',
+    add_service_intent: index === 8 ? addServiceA : index === 9 ? addServiceB : null,
+    pre_confirmation_note: index === 6 ? 'sem perfume' : null,
+    test_duplicate_confirmation: index === 0,
     variation: index,
   }))
 
-  const services = Array.from({ length: 10 }, (_, index) => scenarioBase('servicos', index, [
-    'Tosa ou serviço direto',
-    'Serviço com observação simples',
-    'Serviço com MotoDog',
-    'Serviço com peso informado depois',
-    'Serviço para pet de outra raça',
-    'Alteração de horário',
-    'Confirmação curta',
-    'Escolha de levar à loja',
-    'Serviço complementar com detalhes separados',
-    'Segundo serviço do catálogo',
-  ][index], {
-    outcome: 'booking',
-    order_type: 'banho_tosa',
-    service: cycle(catalog.secondaryServices, index),
-    variation: index,
-  }))
-
-  const products = Array.from({ length: 10 }, (_, index) => {
-    const product = cycle(catalog.generalProducts, index)
-    const addition = [3, 8].includes(index)
-      ? catalog.generalProducts.find((item) => item.id !== product?.id) || catalog.addOnProduct
-      : null
-    return scenarioBase('produtos', index, [
-    'Produto com retirada',
-    'Produto com entrega e Pix',
-    'Produto com entrega e cartão',
-    'Inclusão de segundo produto antes da confirmação',
-    'Duas unidades com retirada',
-    'Produto com entrega e dinheiro',
-    'Produto pedido pelo nome exato',
-    'Retirada com pagamento a combinar',
-    'Inclusão adicional antes da confirmação',
-    'Produto com endereço informado em uma frase',
-  ][index], {
-      outcome: 'product_order',
-      order_type: 'produto',
-      product,
-      add_product: addition,
+  const services = Array.from({ length: 10 }, (_, index) => {
+    const intent = cycle(catalog.serviceIntents, index)
+    return scenarioBase('servicos', index, [
+      'Serviço direto por intenção',
+      'Serviço com observação simples',
+      'Serviço com MotoDog',
+      'Peso informado depois',
+      'Pedido em linguagem natural',
+      'Alteração de horário',
+      'Confirmação curta',
+      'Escolha de levar à loja',
+      'Dados do pet em mensagens separadas',
+      'Variação sem copiar o nome do catálogo',
+    ][index], {
+      outcome: 'booking',
+      order_type: 'banho_tosa',
+      service_intent: intent,
+      service: intent.item,
+      request_label: intent.label,
+      test_duplicate_confirmation: index === 0,
       variation: index,
     })
   })
 
-  const feeds = Array.from({ length: 10 }, (_, index) => scenarioBase('racao', index, [
-    'Ração com retirada',
-    'Ração com entrega',
-    'Duas unidades de ração',
-    'Ração para cachorro',
-    'Ração para gato',
-    'Ração com Pix',
-    'Ração com cartão',
-    'Ração com pagamento em dinheiro',
-    'Ração pedida pelo nome exato',
-    'Ração com endereço completo',
-  ][index], {
-    outcome: 'product_order',
-    order_type: 'produto',
-    product: cycle(catalog.feedProducts, index),
-    variation: index,
-  }))
+  const products = Array.from({ length: 10 }, (_, index) => {
+    const intent = cycle(catalog.productIntents, index)
+    const preferredAddition = index === 3 ? addProductA : index === 8 ? addProductB : null
+    const additionIntent = preferredAddition && preferredAddition.item?.id !== intent.item?.id
+      ? preferredAddition
+      : [3, 8].includes(index)
+        ? catalog.productIntents.find((candidate) => candidate.item?.id !== intent.item?.id) || null
+        : null
+    return scenarioBase('produtos', index, [
+      'Produto com retirada',
+      'Produto com entrega e Pix',
+      'Produto com entrega e cartão',
+      'Inclusão de segundo produto antes da confirmação',
+      'Duas unidades com retirada',
+      'Produto com entrega e dinheiro',
+      'Pedido por categoria e característica',
+      'Retirada com pagamento na loja',
+      'Inclusão de outro produto antes da confirmação',
+      'Endereço informado em uma frase',
+    ][index], {
+      outcome: 'product_order',
+      order_type: 'produto',
+      product_intent: intent,
+      product: intent.item,
+      request_phrase: productSemanticRequest(intent.item, intent),
+      request_label: intent.label,
+      add_product_intent: additionIntent,
+      add_product: additionIntent?.item || null,
+      test_duplicate_confirmation: index === 0,
+      variation: index,
+    })
+  })
+
+  const dogFeeds = catalog.feedProducts.filter((item) => !/gato/.test(productText(item)))
+  const catFeeds = catalog.feedProducts.filter((item) => /gato/.test(productText(item)))
+  const feeds = Array.from({ length: 10 }, (_, index) => {
+    const preferred = index === 4 && catFeeds.length ? cycle(catFeeds, index) : cycle(dogFeeds.length ? dogFeeds : catalog.feedProducts, index)
+    return scenarioBase('racao', index, [
+      'Ração com retirada',
+      'Ração com entrega',
+      'Duas unidades de ração',
+      'Ração para cachorro por perfil',
+      'Ração para gato por perfil',
+      'Ração com Pix',
+      'Ração com cartão',
+      'Ração com pagamento em dinheiro',
+      'Pedido por espécie, idade e embalagem',
+      'Ração com endereço completo',
+    ][index], {
+      outcome: 'product_order',
+      order_type: 'produto',
+      product: preferred,
+      request_phrase: feedSemanticRequest(preferred),
+      request_label: 'ração por espécie, idade, porte e embalagem',
+      test_duplicate_confirmation: index === 0,
+      variation: index,
+    })
+  })
 
   const veterinary = Array.from({ length: 10 }, (_, index) => scenarioBase('veterinaria', index, [
     'Pergunta de preço e agendamento',
@@ -312,7 +509,9 @@ function buildScenarioPlan(catalog) {
   ][index], {
     outcome: index === 7 ? 'emergency' : index === 8 ? 'human_handoff' : 'booking',
     order_type: 'veterinaria',
-    service: cycle(catalog.veterinaryServices, index),
+    service: catalog.consultationService,
+    request_label: 'consulta veterinária',
+    test_duplicate_confirmation: index === 0,
     variation: index,
   }))
 
@@ -326,9 +525,10 @@ function publicScenario(scenario) {
     category_label: scenario.category_label,
     index: scenario.index,
     title: scenario.title,
+    request_label: clean(scenario.request_label) || null,
     service_name: clean(scenario.service?.name) || null,
     product_name: clean(scenario.product?.name) || null,
-    addition_name: clean(scenario.add_service?.name || scenario.add_product?.name) || null,
+    addition_name: clean(scenario.add_service_intent?.label || scenario.add_product_intent?.label) || null,
     expected_outcome: scenario.outcome,
   }
 }
@@ -353,10 +553,12 @@ export async function getPetbotDiagnosticPlan({ tenantId }) {
     scenarios: scenarios.map(publicScenario),
     catalog_summary: {
       baths: catalog.bathServices.length,
-      services: catalog.secondaryServices.length,
+      services: catalog.groomingServices.length,
+      service_intents: catalog.serviceIntents.length,
       products: catalog.generalProducts.length,
+      product_intents: catalog.productIntents.length,
       feeds: catalog.feedProducts.length,
-      veterinary: catalog.veterinaryServices.length,
+      veterinary_consultation: catalog.consultationService ? 1 : 0,
     },
     duration_ms: Date.now() - started,
   }
@@ -432,8 +634,6 @@ function addressMessage() {
 function scenarioMessages(scenario, slots) {
   const slot = slots[0]
   const alternateSlot = slots[1] || slot
-  const serviceName = clean(scenario.service?.name)
-  const productName = clean(scenario.product?.name)
   const index = scenario.variation
 
   if (scenario.category === 'banho') {
@@ -442,54 +642,53 @@ function scenarioMessages(scenario, slots) {
       breed: ['Yorkshire', 'Shih Tzu', 'Maltês', 'Poodle', 'Lhasa Apso', 'SRD', 'Yorkshire', 'Shih Tzu', 'Poodle', 'Maltês'][index],
       weight: [4, 8, 5, 7, 6, 9, 4, 8, 6, 5][index],
     }
-    if (index === 0) return [`Olá, quero agendar um banho para ${common.pet}, minha ${common.breed} de ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar até a loja', 'sem observações']
-    if (index === 1) return [`Quero agendar um banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vocês conseguem buscar aqui?', 'buscar e levar', addressMessage(), 'sem observações']
-    if (index === 2) return ['Boa tarde, quero marcar um banho.', `o nome dela é ${common.pet}`, 'é cachorro', `a raça é ${common.breed}`, `ela tem ${common.weight} kg`, formatRequestedSlot(slot), 'vou levar', 'sem observações']
+    if (index === 0) return [`Olá, quero agendar um banho para ${common.pet}, minha ${common.breed} de ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar até a loja']
+    if (index === 1) return [`Quero agendar um banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vocês conseguem buscar aqui?', 'buscar e levar', addressMessage()]
+    if (index === 2) return ['Boa tarde, quero marcar um banho.', `o nome dela é ${common.pet}`, 'é cachorro', `a raça é ${common.breed}`, `ela tem ${common.weight} kg`, formatRequestedSlot(slot), 'vou levar']
     if (index === 3) return [`Quero banho para ${common.pet}, meu ${common.breed}.`, formatRequestedSlot(slot), 'vou levar', 'sem perfume', `ele tem ${common.weight} kg`]
-    if (index === 4) return ['O banho inclui tosa higiênica?', `Então quero agendar um banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar', 'sem observações']
-    if (index === 5) return [`Quero agendar banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), `Antes de confirmar, prefiro ${alternateSlot.toFormat('dd/MM/yyyy')} às ${alternateSlot.toFormat('HH:mm')}.`, 'vou levar', 'sem observações']
-    if (index === 6) return [`Quero banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar', 'por favor, sem perfume']
-    if (index === 7) return [`Quero agendar banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'tem como buscar aqui?', 'na verdade eu vou levar até a loja', 'sem observações']
-    return [`Quero agendar um banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar', 'sem observações']
+    if (index === 4) return ['O banho inclui tosa higiênica?', `Então quero agendar um banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar']
+    if (index === 5) return [`Quero agendar banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), `Antes de confirmar, prefiro ${alternateSlot.toFormat('dd/MM/yyyy')} às ${alternateSlot.toFormat('HH:mm')}.`, 'vou levar']
+    if (index === 6) return [`Quero banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar']
+    if (index === 7) return [`Quero agendar banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'tem como buscar aqui?', 'na verdade eu vou levar até a loja']
+    return [`Quero agendar um banho para ${common.pet}, ${common.breed}, ${common.weight} kg.`, formatRequestedSlot(slot), 'vou levar']
   }
 
   if (scenario.category === 'servicos') {
     const pet = ['Bento', 'Lola', 'Zeca', 'Amora', 'Max', 'Cacau', 'Luke', 'Meg', 'Theo', 'Jade'][index]
     const breed = ['Shih Tzu', 'Yorkshire', 'Poodle', 'Maltês', 'Lhasa Apso', 'SRD', 'Shih Tzu', 'Yorkshire', 'Poodle', 'Maltês'][index]
     const weight = [6, 4, 7, 5, 8, 9, 6, 4, 7, 5][index]
-    if (index === 2) return [`Quero agendar ${serviceName} para ${pet}, ${breed}, ${weight} kg.`, formatRequestedSlot(slot), 'motodog', 'somente buscar', addressMessage(), 'sem observações']
-    if (index === 3) return [`Quero marcar ${serviceName} para ${pet}, meu ${breed}.`, formatRequestedSlot(slot), 'vou levar', 'sem observações', `ele pesa ${weight} kg`]
-    if (index === 5) return [`Quero agendar ${serviceName} para ${pet}, ${breed}, ${weight} kg.`, formatRequestedSlot(slot), `prefiro mudar para ${alternateSlot.toFormat('dd/MM/yyyy')} às ${alternateSlot.toFormat('HH:mm')}`, 'vou levar', 'sem observações']
-    if (index === 8) return [`Quero marcar ${serviceName}.`, `o pet é ${pet}`, 'é cachorro', `raça ${breed}`, `${weight} kg`, formatRequestedSlot(slot), 'vou levar', 'sem observações']
-    return [`Quero agendar ${serviceName} para ${pet}, ${breed}, ${weight} kg.`, formatRequestedSlot(slot), 'vou levar', index === 1 ? 'aparar com cuidado' : 'sem observações']
+    const request = clean(scenario.service_intent?.request) || 'um cuidado para o pelo'
+    if (index === 2) return [`Quero agendar ${request} para ${pet}, ${breed}, ${weight} kg.`, formatRequestedSlot(slot), 'quero usar o MotoDog', 'somente buscar', addressMessage()]
+    if (index === 3) return [`Quero marcar ${request} para ${pet}, meu ${breed}.`, formatRequestedSlot(slot), 'vou levar', `ele pesa ${weight} kg`]
+    if (index === 5) return [`Quero agendar ${request} para ${pet}, ${breed}, ${weight} kg.`, formatRequestedSlot(slot), `prefiro mudar para ${alternateSlot.toFormat('dd/MM/yyyy')} às ${alternateSlot.toFormat('HH:mm')}`, 'vou levar']
+    if (index === 8) return [`Quero marcar ${request}.`, `o pet é ${pet}`, 'é cachorro', `raça ${breed}`, `${weight} kg`, formatRequestedSlot(slot), 'vou levar']
+    return [`Quero agendar ${request} para ${pet}, ${breed}, ${weight} kg.`, formatRequestedSlot(slot), 'vou levar', ...(index === 1 ? ['faça com bastante cuidado'] : [])]
   }
 
   if (scenario.category === 'produtos' || scenario.category === 'racao') {
     const requestedQuantity = [1, 1, 2, 1, 2, 1, 1, 1, 1, 1][index]
     const availableUnits = Math.max(1, Math.floor(Number(scenario.product?.stock_quantity || 1)))
     const quantity = Math.min(requestedQuantity, availableUnits)
-    const opening = scenario.category === 'racao'
-      ? `Quero comprar ${quantity} unidade${quantity > 1 ? 's' : ''} da ração ${productName}.`
-      : `Quero comprar ${quantity} unidade${quantity > 1 ? 's' : ''} de ${productName}.`
+    const opening = `${scenario.request_phrase}. Quero ${quantity} unidade${quantity > 1 ? 's' : ''}.`
     if ([1, 2, 5, 9].includes(index)) {
-      const payment = index === 1 ? 'vou pagar por pix' : index === 2 ? 'vou pagar no cartão' : index === 5 ? 'vou pagar em dinheiro, não preciso de troco' : 'pix'
-      return [opening, 'quero entrega', addressMessage(), payment, 'sem observações']
+      const payment = index === 1 ? 'vou pagar por Pix' : index === 2 ? 'vou pagar no cartão' : index === 5 ? 'vou pagar em dinheiro e não preciso de troco' : 'Pix'
+      return [opening, 'quero entrega', addressMessage(), payment]
     }
-    return [opening, 'vou retirar na loja', 'sem observações']
+    return [opening, 'vou retirar na loja']
   }
 
   if (scenario.category === 'veterinaria') {
-    const appointment = [formatRequestedSlot(slot), 'o pet é o Bob, cachorro, sem raça definida, 9 kg']
-    if (index === 0) return ['Quanto custa a consulta veterinária de vocês?', 'sim, quero agendar', ...appointment]
-    if (index === 1) return ['Vocês têm consulta veterinária?', 'sim, pode marcar', ...appointment]
-    if (index === 2) return ['Meu cachorro está vomitando bastante, quanto é a consulta veterinária?', 'sim, quero o primeiro horário disponível', ...appointment]
-    if (index === 3) return ['Qual dose de dipirona posso dar para meu cachorro?', 'sim, quero marcar a consulta', ...appointment]
-    if (index === 4) return ['Meu cachorro está coçando muito, o que ele tem?', 'sim, quero agendar uma consulta', ...appointment]
-    if (index === 5) return ['Que tratamento eu faço para meu cachorro que está sem comer?', 'sim, quero marcar uma consulta', ...appointment]
-    if (index === 6) return ['Minha cachorra está com dor e quero agendar uma consulta veterinária.', 'o nome dela é Mel, pesa 7 kg', formatRequestedSlot(slot)]
     if (index === 7) return ['Meu cachorro está inconsciente e com dificuldade para respirar.']
     if (index === 8) return ['Qual remédio posso dar para meu cachorro?', 'não quero consulta', 'sim, pode chamar um atendente']
-    return ['Quero agendar uma consulta veterinária.', 'o pet é a Luna', 'é uma gata sem raça definida, 4 kg', 'ela está sem comer desde ontem, mas está consciente e respirando normalmente', formatRequestedSlot(slot)]
+    const slotMessage = formatRequestedSlot(slot)
+    if (index === 0) return ['Quanto custa a consulta veterinária de vocês?', 'sim, quero agendar', 'é para o Bob, um cachorro sem raça definida de 9 kg', slotMessage, 'vou levar']
+    if (index === 1) return ['Vocês têm consulta veterinária?', 'sim, pode marcar', 'é para a Nina, uma Yorkshire de 4 kg', slotMessage, 'vou levar']
+    if (index === 2) return ['Meu cachorro está vomitando bastante, quanto é a consulta veterinária?', 'sim, quero agendar o quanto antes', 'o nome dele é Thor, Shih Tzu, 8 kg', slotMessage, 'vou levar']
+    if (index === 3) return ['Qual dose de dipirona posso dar para meu cachorro?', 'sim, quero marcar a consulta', 'é para o Bob, cachorro sem raça definida, 9 kg', slotMessage, 'vou levar']
+    if (index === 4) return ['Meu cachorro está coçando muito, o que ele tem?', 'sim, quero agendar uma consulta', 'o nome dele é Fred, Shih Tzu, 8 kg', slotMessage, 'vou levar']
+    if (index === 5) return ['Que tratamento eu faço para meu cachorro que está sem comer?', 'sim, quero marcar uma consulta', 'o nome dela é Mel, Maltês, 5 kg', slotMessage, 'vou levar']
+    if (index === 6) return ['Minha cachorra está com dor e quero agendar uma consulta veterinária.', 'o nome dela é Luna, Lhasa Apso, 6 kg', slotMessage, 'vou levar']
+    return ['Quero agendar uma consulta veterinária.', 'o pet é a Jade', 'é uma gata sem raça definida, 4 kg', 'ela está sem comer desde ontem, mas está consciente e respirando normalmente', slotMessage, 'vou levar']
   }
 
   return []
@@ -561,6 +760,44 @@ async function sendTurn({ scenario, sessionId, message, suiteId, transcript }) {
   return loadSession(sessionId)
 }
 
+function stateFingerprint(session) {
+  const facts = extractFacts(session?.context)
+  const agent = extractAgentContext(session?.context)
+  return JSON.stringify({
+    pet_name: facts.pet_name || '',
+    species: facts.species || '',
+    breed: facts.breed || '',
+    weight_kg: facts.weight_kg || null,
+    service_type: facts.service_type || '',
+    service_date: facts.service_date || '',
+    service_time: facts.service_preferred_time || facts.service_time_preference || '',
+    service_transport_mode: facts.service_transport_mode || '',
+    service_transport_address: facts.service_transport_address || '',
+    service_notes: facts.service_notes || '',
+    fulfillment_type: facts.fulfillment_type || '',
+    payment_method: facts.payment_method || '',
+    delivery_address: facts.delivery_address || '',
+    pending_id: agent.pending_order?.id || '',
+    status: session?.status || '',
+    intent: session?.intent || '',
+  })
+}
+
+function isUnavailableReply(reply) {
+  return /nao (?:encontrei|consegui|temos)|não (?:encontrei|consegui|temos)|indisponivel|indisponível|revise o catalogo|revise o catálogo|servico nao esta disponivel|serviço não está disponível|produto nao esta disponivel|produto não está disponível/i.test(clean(reply))
+}
+
+function isRepeatedReply(transcript) {
+  if (transcript.length < 2) return false
+  const last = normalize(transcript.at(-1)?.assistant)
+  const previous = normalize(transcript.at(-2)?.assistant)
+  return Boolean(last && previous && last === previous)
+}
+
+function assistantRequestsSimpleConfirmation(reply) {
+  return /(?:confirma|posso adicionar|deseja adicionar|quer adicionar|pode incluir|você quer incluir|voce quer incluir)/i.test(clean(reply))
+}
+
 function nextServiceSupplement(scenario, session, slot) {
   const facts = extractFacts(session.context)
   if (!clean(facts.pet_name)) return 'o nome do pet é Teste'
@@ -568,15 +805,16 @@ function nextServiceSupplement(scenario, session, slot) {
   if (!clean(facts.breed) && !clean(facts.size)) return 'é sem raça definida e porte pequeno'
   if (!(Number(facts.weight_kg || 0) > 0)) return 'ele pesa 7 kg'
   if (!clean(facts.service_date) || !clean(facts.service_preferred_time || facts.service_time_preference)) return formatRequestedSlot(slot)
-  if (scenario.order_type === 'banho_tosa' && !clean(facts.service_transport_mode)) return 'vou levar até a loja'
-  if (scenario.order_type === 'banho_tosa' && normalize(facts.service_transport_mode) === 'motodog') return 'buscar e levar'
-  if (scenario.order_type === 'banho_tosa' && /buscar|levar/.test(normalize(facts.service_transport_mode))) {
-    const address = clean(facts.service_transport_address || facts.delivery_address || facts.address)
-    if (!address) return addressMessage()
+  if (!clean(facts.service_type)) {
+    if (scenario.category === 'servicos') return `quero ${clean(scenario.service_intent?.request) || 'o serviço de cuidados'}`
+    if (scenario.category === 'veterinaria') return 'quero agendar a consulta veterinária'
+    return 'quero agendar o banho'
   }
-  if (scenario.order_type === 'banho_tosa' && !facts.service_notes_resolved) return 'sem observações'
-  if (!clean(facts.service_type)) return `quero o serviço ${clean(scenario.service?.name) || 'consulta veterinária'}`
-  return 'Pode preparar o resumo final com esses dados, por favor.'
+  if (!clean(facts.service_transport_mode)) return 'vou levar até a loja'
+  if (normalize(facts.service_transport_mode) === 'motodog') return 'buscar e levar'
+  if (/buscar|levar/.test(normalize(facts.service_transport_mode)) && !clean(facts.service_transport_address)) return addressMessage()
+  if (!facts.service_notes_resolved) return scenario.category === 'veterinaria' ? 'é uma avaliação geral' : 'sem observações'
+  return null
 }
 
 function nextProductSupplement(scenario, session) {
@@ -584,51 +822,132 @@ function nextProductSupplement(scenario, session) {
   if (!clean(facts.fulfillment_type)) return [1, 2, 5, 9].includes(scenario.variation) ? 'quero entrega' : 'vou retirar na loja'
   if (clean(facts.fulfillment_type) === 'entrega') {
     if (!clean(facts.delivery_address)) return addressMessage()
-    if (!clean(facts.payment_method)) return scenario.variation === 2 ? 'cartão' : scenario.variation === 5 ? 'dinheiro, sem troco' : 'pix'
+    if (!clean(facts.payment_method)) return scenario.variation === 2 ? 'cartão' : scenario.variation === 5 ? 'dinheiro, sem troco' : 'Pix'
   }
-  return `Quero ${scenario.variation === 4 ? 2 : 1} unidade de ${scenario.product.name}. Pode preparar o resumo final.`
+  if (!(Number(facts.quantity || 0) > 0)) return `quero ${scenario.variation === 4 ? 2 : 1} unidade`
+  return null
+}
+
+function pendingOrderText(pending) {
+  return normalize((pending?.order?.items || []).map((item) => `${item.name || ''} ${item.description || ''}`).join(' '))
+}
+
+
+function pendingMatchesIntent(pending, intent) {
+  if (!intent?.matches) return false
+  return intent.matches({ name: pendingOrderText(pending), category: '', description: '' })
+}
+
+function feedSemanticMatch(pending, target) {
+  const pendingText = pendingOrderText(pending)
+  const targetText = productText(target)
+  const brand = normalize(extractBrand(target?.name))
+  const pack = normalize(extractPackageLabel(target?.name))
+  const speciesSignal = /gato/.test(targetText)
+    ? /gato/.test(pendingText)
+    : /cachorro|cao|caes/.test(targetText)
+      ? /cachorro|cao|caes/.test(pendingText)
+      : ''
+  const signals = [
+    brand && pendingText.includes(brand),
+    pack && pendingText.includes(pack),
+    speciesSignal,
+  ].filter((value) => value !== '')
+  return FEED_SIGNAL.test(pendingText) && signals.filter(Boolean).length >= Math.min(2, signals.length)
+}
+
+function assertRequestedItemResolved(scenario, pending) {
+  if (scenario.category === 'banho') return
+  if (scenario.category === 'servicos') {
+    assert(pendingMatchesIntent(pending, scenario.service_intent), `${scenario.id}: o resumo não corresponde à intenção de serviço solicitada.`)
+  }
+  if (scenario.category === 'veterinaria') {
+    assert(/consulta|veterin/.test(pendingOrderText(pending)), `${scenario.id}: o resumo não corresponde a uma consulta veterinária.`)
+  }
+  if (scenario.category === 'produtos') {
+    assert(pendingMatchesIntent(pending, scenario.product_intent), `${scenario.id}: o resumo não corresponde à categoria de produto solicitada.`)
+  }
+  if (scenario.category === 'racao') {
+    assert(feedSemanticMatch(pending, scenario.product), `${scenario.id}: o resumo não corresponde ao perfil de ração solicitado.`)
+  }
 }
 
 async function reachPendingOrder({ scenario, session, suiteId, transcript, slots }) {
   let current = session
-  for (const message of scenarioMessages(scenario, slots)) {
+  const messages = scenarioMessages(scenario, slots)
+  for (const message of messages) {
+    if (extractPendingOrder(current.context) && !scenario.pre_confirmation_note && !scenario.add_service_intent && !scenario.add_product_intent) break
+    const before = stateFingerprint(current)
     current = await sendTurn({ scenario, sessionId: session.id, message, suiteId, transcript })
     if (scenario.outcome === 'emergency' || scenario.outcome === 'human_handoff') continue
+    if (extractPendingOrder(current.context)) break
+    if (isUnavailableReply(transcript.at(-1)?.assistant)) {
+      throw new Error(`${scenario.id}: o catálogo não resolveu a solicitação semântica. Última resposta: ${compact(transcript.at(-1)?.assistant, 240)}`)
+    }
+    if (isRepeatedReply(transcript)) {
+      throw new Error(`${scenario.id}: a Luna repetiu a mesma resposta; o cenário foi encerrado para não gastar créditos.`)
+    }
+    const after = stateFingerprint(current)
+    if (before === after && transcript.length >= 2 && normalize(transcript.at(-1)?.assistant) === normalize(transcript.at(-2)?.assistant)) break
   }
 
   if (scenario.outcome === 'emergency' || scenario.outcome === 'human_handoff') return { session: current, pending: null }
 
-  for (let attempt = 0; attempt < 8 && !extractPendingOrder(current.context); attempt += 1) {
+  const sentSupplements = new Set(messages.map(normalize))
+  for (let attempt = 0; attempt < 2 && !extractPendingOrder(current.context); attempt += 1) {
     const supplement = scenario.order_type === 'produto'
       ? nextProductSupplement(scenario, current)
       : nextServiceSupplement(scenario, current, slots[0])
+    if (!supplement || sentSupplements.has(normalize(supplement))) break
+    sentSupplements.add(normalize(supplement))
+    const before = stateFingerprint(current)
     current = await sendTurn({ scenario, sessionId: session.id, message: supplement, suiteId, transcript })
+    if (extractPendingOrder(current.context)) break
+    if (isUnavailableReply(transcript.at(-1)?.assistant) || isRepeatedReply(transcript) || before === stateFingerprint(current)) break
   }
 
   let pending = extractPendingOrder(current.context)
-  assert(pending, `${scenario.id}: o chat não chegou ao resumo final.`)
+  assert(pending, `${scenario.id}: o chat não chegou ao resumo final após ${transcript.length} mensagens; nenhuma frase foi repetida automaticamente.`)
   assert(clean(pending.order.order_type) === scenario.order_type,
     `${scenario.id}: tipo preparado incorreto (${clean(pending.order.order_type) || 'vazio'}).`)
+  assertRequestedItemResolved(scenario, pending)
 
-  const addition = scenario.add_service || scenario.add_product
-  if (addition) {
-    const additionMessage = scenario.add_service
-      ? `Antes de confirmar, acrescente também o serviço ${addition.name}.`
-      : `Antes de confirmar, acrescente também 1 unidade de ${addition.name}.`
-    current = await sendTurn({ scenario, sessionId: session.id, message: additionMessage, suiteId, transcript })
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      pending = extractPendingOrder(current.context)
-      const itemText = normalize((pending?.order?.items || []).map((item) => item.name).join(' '))
-      if (pending && itemText.includes(normalize(addition.name).slice(0, 24))) break
-      const supplement = scenario.order_type === 'produto'
-        ? `Sim, adicione 1 unidade de ${addition.name} ao mesmo pedido e prepare o novo resumo.`
-        : `Sim, adicione ${addition.name} ao mesmo agendamento e prepare o novo resumo.`
-      current = await sendTurn({ scenario, sessionId: session.id, message: supplement, suiteId, transcript })
-    }
+  if (scenario.pre_confirmation_note) {
+    current = await sendTurn({
+      scenario,
+      sessionId: session.id,
+      message: `Antes de confirmar, deixe ${scenario.pre_confirmation_note}.`,
+      suiteId,
+      transcript,
+    })
     pending = extractPendingOrder(current.context)
-    const itemText = normalize((pending?.order?.items || []).map((item) => item.name).join(' '))
-    assert(pending && itemText.includes(normalize(addition.name).slice(0, 24)),
-      `${scenario.id}: o item adicional não apareceu no resumo atualizado.`)
+    assert(pending, `${scenario.id}: a observação removeu o pedido pendente antes da confirmação.`)
+    const facts = extractFacts(current.context)
+    assert(normalize(facts.service_notes).includes(normalize(scenario.pre_confirmation_note)), `${scenario.id}: a observação não ficou salva na memória.`)
+  }
+
+  const additionIntent = scenario.add_service_intent || scenario.add_product_intent
+  const additionItem = scenario.add_service_intent?.item || scenario.add_product_intent?.item
+  if (additionIntent && additionItem) {
+    const naturalRequest = scenario.add_service_intent
+      ? `Antes de confirmar, pode acrescentar ${additionIntent.request}?`
+      : `Antes de confirmar, acrescente também ${productSemanticRequest(additionItem, additionIntent)}.`
+    current = await sendTurn({ scenario, sessionId: session.id, message: naturalRequest, suiteId, transcript })
+    pending = extractPendingOrder(current.context)
+    let additionResolved = scenario.add_service_intent
+      ? pendingMatchesIntent(pending, scenario.add_service_intent)
+      : pendingMatchesIntent(pending, scenario.add_product_intent)
+
+    if ((!pending || !additionResolved) && assistantRequestsSimpleConfirmation(transcript.at(-1)?.assistant) && !isUnavailableReply(transcript.at(-1)?.assistant)) {
+      current = await sendTurn({ scenario, sessionId: session.id, message: 'sim, pode acrescentar', suiteId, transcript })
+      pending = extractPendingOrder(current.context)
+      additionResolved = scenario.add_service_intent
+        ? pendingMatchesIntent(pending, scenario.add_service_intent)
+        : pendingMatchesIntent(pending, scenario.add_product_intent)
+    }
+
+    assert(!isUnavailableReply(transcript.at(-1)?.assistant), `${scenario.id}: o adicional semântico não está disponível no catálogo.`)
+    assert(pending && additionResolved, `${scenario.id}: o adicional não apareceu no resumo após no máximo duas mensagens.`)
   }
 
   return { session: current, pending }
@@ -679,22 +998,32 @@ async function verifyCommittedRows({ scenario, session, pending }) {
 }
 
 async function runBookingScenario({ scenario, session, suiteId, transcript, slots }) {
-  const { session: preparedSession, pending } = await reachPendingOrder({ scenario, session, suiteId, transcript, slots })
-  const committedSession = await sendTurn({ scenario, sessionId: session.id, message: 'sim, confirmo', suiteId, transcript })
-  const rows = await verifyCommittedRows({ scenario, session: committedSession, pending })
-  const beforeDuplicate = await countArtifacts(committedSession)
-  const afterDuplicateSession = await sendTurn({ scenario, sessionId: session.id, message: 'sim, confirmo novamente', suiteId, transcript })
-  const afterDuplicate = await countArtifacts(afterDuplicateSession)
-  assert(JSON.stringify(beforeDuplicate) === JSON.stringify(afterDuplicate), `${scenario.id}: a confirmação repetida criou duplicidade.`)
+  const { pending } = await reachPendingOrder({ scenario, session, suiteId, transcript, slots })
+  let finalSession = await sendTurn({ scenario, sessionId: session.id, message: 'sim, confirmo', suiteId, transcript })
+  const rows = await verifyCommittedRows({ scenario, session: finalSession, pending })
+  let counts = await countArtifacts(finalSession)
+  let duplicateConfirmationSafe = null
+
+  // Uma confirmação duplicada por categoria é suficiente para validar idempotência
+  // sem gastar uma chamada adicional de LLM em todos os 50 cenários.
+  if (scenario.test_duplicate_confirmation) {
+    const beforeDuplicate = counts
+    finalSession = await sendTurn({ scenario, sessionId: session.id, message: 'sim, confirmo novamente', suiteId, transcript })
+    counts = await countArtifacts(finalSession)
+    assert(JSON.stringify(beforeDuplicate) === JSON.stringify(counts), `${scenario.id}: a confirmação repetida criou duplicidade.`)
+    duplicateConfirmationSafe = true
+  }
+
   return {
-    session: afterDuplicateSession,
+    session: finalSession,
     pending,
     rows,
-    counts: afterDuplicate,
+    counts,
     assertions: {
       pending_order_created: true,
       persisted: true,
-      duplicate_confirmation_safe: true,
+      duplicate_confirmation_tested: Boolean(scenario.test_duplicate_confirmation),
+      duplicate_confirmation_safe: duplicateConfirmationSafe,
     },
   }
 }
