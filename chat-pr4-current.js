@@ -20,6 +20,7 @@ import {
   PETBOT_AGENT_TOOLS,
   acceptedPetbotHandoffOffer,
   buildPetbotOperationalPreflight,
+  buildPetshopConfirmationFingerprint,
   buildServiceAvailability,
   explicitPetbotHandoffTarget,
   findPetshopSubscriptionBenefit,
@@ -37,12 +38,9 @@ import {
   shouldForcePetbotServicePreparation,
 } from './petbotAgent.js'
 import {
-  beginLegacyBackedConfirmation,
-  completeLegacyBackedConfirmation,
   completeLunaTurnTrace,
   createLunaTurnTrace,
   deriveLegacyOperationEvent,
-  diffConfirmationContracts,
   operationStateFromLegacyContext,
   verifyOperationTurn,
   isCustomerNamePlaceholder,
@@ -2489,7 +2487,6 @@ async function respondWithPetbotAgent({
   })
   let pendingOrder = pendingAtTurnStart
   let orderResult = null
-  let bathConfirmationCommittedThisTurn = false
   let needsHuman = false
   let handoffTarget = null
   let updatedCustomerName = normalizeCustomerDisplayName(session.customer_name)
@@ -3394,11 +3391,9 @@ async function respondWithPetbotAgent({
         }
       }
 
-      const confirmationContractChanges = diffConfirmationContracts(
-        pendingAtTurnStart.order,
-        revalidated.order,
-      )
-      if (confirmationContractChanges.length) {
+      const confirmedContract = buildPetshopConfirmationFingerprint(pendingAtTurnStart.order)
+      const refreshedContract = buildPetshopConfirmationFingerprint(revalidated.order)
+      if (refreshedContract !== confirmedContract) {
         pendingOrder = {
           id: revalidated.pending_order_id,
           order: revalidated.order,
@@ -3409,8 +3404,7 @@ async function respondWithPetbotAgent({
           ok: false,
           action: name,
           status: 'changed',
-          reason: `confirmation_contract_changed:${confirmationContractChanges.join(',')}`,
-          contract_changes: confirmationContractChanges,
+          reason: 'confirmation_contract_changed',
           changed: true,
           pending_order_id: pendingOrder.id,
           summary: revalidated.summary,
@@ -3625,93 +3619,7 @@ async function respondWithPetbotAgent({
         arguments: JSON.stringify({ confirmation: true }),
       },
     }
-    const isBathConfirmation = pendingAtTurnStart.order?.order_type === 'banho_tosa'
-    const confirmationIdempotencyKey = `${sessionId}:${pendingAtTurnStart.id}`
-    const reconcileBathConfirmation = async () => {
-      const { data: freshSession, error: freshSessionError } = await supabase
-        .from('chat_sessions')
-        .select('context')
-        .eq('id', sessionId)
-        .maybeSingle()
-      if (freshSessionError || !freshSession) return null
-      return recoverCommittedResultFromContext({
-        context: freshSession.context,
-        pendingOrder: pendingAtTurnStart,
-        sessionId,
-      })
-    }
-
-    let confirmationResult
-    if (isBathConfirmation) {
-      const kernelAuthorization = await beginLegacyBackedConfirmation({
-        state: bathKernelState,
-        pendingOrder: pendingAtTurnStart,
-        explicitConfirmation: true,
-        idempotencyKey: confirmationIdempotencyKey,
-        reconcile: reconcileBathConfirmation,
-      })
-      bathKernelState = kernelAuthorization.state
-
-      if (
-        kernelAuthorization.status === 'already_committed'
-        && kernelAuthorization.orderResult
-      ) {
-        orderResult = kernelAuthorization.orderResult
-        pendingOrder = null
-        bathConfirmationCommittedThisTurn = true
-        confirmationResult = {
-          ok: true,
-          status: 'already_committed',
-          ...kernelAuthorization.orderResult,
-        }
-      } else if (!kernelAuthorization.ok || !kernelAuthorization.authorized) {
-        confirmationResult = {
-          ok: false,
-          status: kernelAuthorization.status,
-          reason: kernelAuthorization.reason || kernelAuthorization.classification,
-          classification: kernelAuthorization.classification,
-        }
-      } else {
-        const legacyConfirmationResult = await executeTool(confirmationToolCall)
-        const kernelCompletion = await completeLegacyBackedConfirmation({
-          state: bathKernelState,
-          pendingOrder: pendingAtTurnStart,
-          legacyResult: legacyConfirmationResult,
-          legacyStatus: cleanText(legacyConfirmationResult?.status),
-          idempotencyKey: confirmationIdempotencyKey,
-          reconcile: reconcileBathConfirmation,
-        })
-
-        bathKernelState = kernelCompletion.state
-        pendingOrder = kernelCompletion.pendingOrder
-        if (kernelCompletion.orderResult) orderResult = kernelCompletion.orderResult
-        bathConfirmationCommittedThisTurn = Boolean(
-          kernelCompletion.ok
-          && ['committed', 'already_committed'].includes(kernelCompletion.status),
-        )
-
-        confirmationResult = {
-          ...legacyConfirmationResult,
-          ok: kernelCompletion.ok,
-          status: kernelCompletion.status,
-          reason: kernelCompletion.reason || legacyConfirmationResult?.reason || null,
-          classification: kernelCompletion.classification
-            || legacyConfirmationResult?.classification
-            || null,
-          summary: kernelCompletion.summary || legacyConfirmationResult?.summary || null,
-          pending_order_id: kernelCompletion.pendingOrder?.id
-            || legacyConfirmationResult?.pending_order_id
-            || null,
-          order: kernelCompletion.pendingOrder?.order
-            || legacyConfirmationResult?.order
-            || null,
-          ...(kernelCompletion.orderResult || {}),
-        }
-      }
-    } else {
-      confirmationResult = await executeTool(confirmationToolCall)
-    }
-
+    const confirmationResult = await executeTool(confirmationToolCall)
     const confirmationRun = {
       name: 'create_confirmed_petshop_order',
       ok: confirmationResult?.ok !== false,
@@ -3719,59 +3627,31 @@ async function respondWithPetbotAgent({
       duration_ms: Date.now() - confirmationStartedAt,
       result: confirmationResult,
     }
-    if (confirmationRun.status === 'changed' && cleanText(confirmationResult?.summary)) {
-      agentResult = {
-        reply: cleanText(confirmationResult.summary),
-        toolRuns: [...preloadedToolRuns, confirmationRun],
-        tokensUsed: 0,
-        messages: [],
-        validationRetries: 0,
-        steps: 1,
-        terminal: true,
-        durationMs: Date.now() - confirmationStartedAt,
-      }
-    } else if (confirmationRun.status === 'commit_ambiguous') {
-      agentResult = {
-        reply: [
-          'Não consegui determinar com segurança se a gravação terminou.',
-          'Para evitar duplicação, não vou executar a confirmação novamente enquanto confiro a mesma chave de idempotência.',
-          'Envie “confirmo” novamente para eu apenas reconciliar o resultado já existente.',
-        ].join(' '),
-        toolRuns: [...preloadedToolRuns, confirmationRun],
-        tokensUsed: 0,
-        messages: [],
-        validationRetries: 0,
-        steps: 1,
-        terminal: true,
-        durationMs: Date.now() - confirmationStartedAt,
-      }
-    } else {
-      if (!['committed', 'already_committed'].includes(confirmationRun.status)) {
-        const failureDetail = [
-          cleanText(confirmationRun.status),
-          cleanText(confirmationResult?.reason),
-          ...(Array.isArray(confirmationResult?.missing_fields) ? confirmationResult.missing_fields : []),
-        ].map((value) => cleanText(value)).filter(Boolean).join(': ')
-        throw new HttpError(
-          409,
-          cleanText(confirmationResult?.error)
-            || `Não foi possível confirmar o agendamento com os dados atuais${failureDetail ? ` (${failureDetail})` : ''}.`,
-        )
-      }
-      agentResult = {
-        reply: buildPetbotCommittedReply({
-          pendingOrder: pendingAtTurnStart,
-          result: confirmationResult,
-          timezone: storeSettings.petbotTimezone,
-        }),
-        toolRuns: [...preloadedToolRuns, confirmationRun],
-        tokensUsed: 0,
-        messages: [],
-        validationRetries: 0,
-        steps: 1,
-        terminal: true,
-        durationMs: Date.now() - confirmationStartedAt,
-      }
+    if (!['committed', 'already_committed'].includes(confirmationRun.status)) {
+      const failureDetail = [
+        cleanText(confirmationRun.status),
+        cleanText(confirmationResult?.reason),
+        ...(Array.isArray(confirmationResult?.missing_fields) ? confirmationResult.missing_fields : []),
+      ].map((value) => cleanText(value)).filter(Boolean).join(': ')
+      throw new HttpError(
+        409,
+        cleanText(confirmationResult?.error)
+          || `Não foi possível confirmar o agendamento com os dados atuais${failureDetail ? ` (${failureDetail})` : ''}.`,
+      )
+    }
+    agentResult = {
+      reply: buildPetbotCommittedReply({
+        pendingOrder: pendingAtTurnStart,
+        result: confirmationResult,
+        timezone: storeSettings.petbotTimezone,
+      }),
+      toolRuns: [...preloadedToolRuns, confirmationRun],
+      tokensUsed: 0,
+      messages: [],
+      validationRetries: 0,
+      steps: 1,
+      terminal: true,
+      durationMs: Date.now() - confirmationStartedAt,
     }
   } else if (currentMessageUpdatesServiceNotes) {
     const noteUpdateStartedAt = Date.now()
@@ -3967,7 +3847,7 @@ async function respondWithPetbotAgent({
     },
   })
 
-  if (!bathConfirmationCommittedThisTurn && isBathSemanticPreparationCandidate({
+  if (isBathSemanticPreparationCandidate({
     serviceOrderType,
     facts: serviceFacts,
     pendingOrder,
