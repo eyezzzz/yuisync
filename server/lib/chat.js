@@ -20,6 +20,7 @@ import {
   PETBOT_AGENT_TOOLS,
   acceptedPetbotHandoffOffer,
   buildPetbotOperationalPreflight,
+  buildPetshopConfirmationFingerprint,
   buildServiceAvailability,
   explicitPetbotHandoffTarget,
   findPetshopSubscriptionBenefit,
@@ -3346,7 +3347,9 @@ async function respondWithPetbotAgent({
         }
       }
 
-      if (revalidated.pending_order_id !== pendingAtTurnStart.id) {
+      const confirmedContract = buildPetshopConfirmationFingerprint(pendingAtTurnStart.order)
+      const refreshedContract = buildPetshopConfirmationFingerprint(revalidated.order)
+      if (refreshedContract !== confirmedContract) {
         pendingOrder = {
           id: revalidated.pending_order_id,
           order: revalidated.order,
@@ -3357,6 +3360,7 @@ async function respondWithPetbotAgent({
           ok: false,
           action: name,
           status: 'changed',
+          reason: 'confirmation_contract_changed',
           changed: true,
           pending_order_id: pendingOrder.id,
           summary: revalidated.summary,
@@ -3580,7 +3584,16 @@ async function respondWithPetbotAgent({
       result: confirmationResult,
     }
     if (!['committed', 'already_committed'].includes(confirmationRun.status)) {
-      throw new HttpError(409, cleanText(confirmationResult?.error) || 'Não foi possível confirmar o agendamento com os dados atuais.')
+      const failureDetail = [
+        cleanText(confirmationRun.status),
+        cleanText(confirmationResult?.reason),
+        ...(Array.isArray(confirmationResult?.missing_fields) ? confirmationResult.missing_fields : []),
+      ].map((value) => cleanText(value)).filter(Boolean).join(': ')
+      throw new HttpError(
+        409,
+        cleanText(confirmationResult?.error)
+          || `Não foi possível confirmar o agendamento com os dados atuais${failureDetail ? ` (${failureDetail})` : ''}.`,
+      )
     }
     agentResult = {
       reply: buildPetbotCommittedReply({

@@ -1184,6 +1184,54 @@ function sameScheduledInstant(left = '', right = '') {
   return leftDate.isValid && rightDate.isValid && leftDate.toMillis() === rightDate.toMillis()
 }
 
+export function buildPetshopConfirmationFingerprint(order = {}) {
+  const normalizedItems = (Array.isArray(order.items) ? order.items : [])
+    .map((item) => ({
+      product_id: clean(item?.product_id) || null,
+      service_id: clean(item?.service_id) || null,
+      quantity: positiveNumber(item?.quantity, 0) || 0,
+      unit_price: Number(Number(item?.unit_price || 0).toFixed(2)),
+      upsell: Boolean(item?.upsell),
+    }))
+    .sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)))
+
+  const contract = {
+    customer_name: clean(order.customer_name),
+    pet_name: clean(order.pet_name) || null,
+    species: clean(order.species) || null,
+    breed: clean(order.breed) || null,
+    size: clean(order.size) || null,
+    weight_kg: positiveNumber(order.weight_kg, 0) || null,
+    order_type: clean(order.order_type),
+    items: normalizedItems,
+    scheduled_at: clean(order.scheduled_at) || null,
+    service_type: clean(order.service_type) || null,
+    duration_min: positiveNumber(order.duration_min, 0) || null,
+    additional_service_ids: [...new Set(
+      (Array.isArray(order.additional_service_ids) ? order.additional_service_ids : [])
+        .map((value) => clean(value))
+        .filter(Boolean),
+    )].sort(),
+    notes: clean(order.notes) || null,
+    payment_method: clean(order.payment_method) || null,
+    fulfillment_type: clean(order.fulfillment_type) || null,
+    service_transport_mode: clean(order.service_transport_mode) || null,
+    service_transport_customer_brings: Boolean(order.service_transport_customer_brings),
+    service_transport_fee: Number(Number(order.service_transport_fee || 0).toFixed(2)),
+    service_transport_address: clean(order.service_transport_address) || null,
+    service_transport_neighborhood: clean(order.service_transport_neighborhood) || null,
+    service_transport_city: clean(order.service_transport_city) || null,
+    service_transport_reference: clean(order.service_transport_reference) || null,
+    delivery_address: clean(order.delivery_address) || null,
+    delivery_neighborhood: clean(order.delivery_neighborhood) || null,
+    delivery_city: clean(order.delivery_city) || null,
+    delivery_reference: clean(order.delivery_reference) || null,
+    total: Number(Number(order.total || 0).toFixed(2)),
+  }
+
+  return createHash('sha256').update(JSON.stringify(contract)).digest('hex').slice(0, 24)
+}
+
 function buildPendingOrderId(order) {
   return createHash('sha256').update(JSON.stringify(order)).digest('hex').slice(0, 20)
 }
@@ -2095,6 +2143,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     return {
       ok: true,
       pending_order_id: pendingOrderId,
+      confirmation_fingerprint: buildPetshopConfirmationFingerprint(order),
       order,
       summary: formatOrderSummary(order, settings),
     }
@@ -2280,6 +2329,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   return {
     ok: true,
     pending_order_id: pendingOrderId,
+    confirmation_fingerprint: buildPetshopConfirmationFingerprint(order),
     order,
     summary: formatOrderSummary(order, settings),
   }

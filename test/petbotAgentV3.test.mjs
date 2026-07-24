@@ -4,6 +4,7 @@ import test from 'node:test'
 import {
   PETBOT_AGENT_TOOLS,
   buildPetbotOperationalPreflight,
+  buildPetshopConfirmationFingerprint,
   buildServiceAvailability,
   findPetshopSubscriptionBenefit,
   groundPetbotServiceArgs,
@@ -50,6 +51,66 @@ const service = {
   coat_type: 'longo',
   species: 'dog',
 }
+
+test('confirmação compara contrato comercial e ignora metadados derivados', () => {
+  const original = {
+    customer_name: 'Fernando',
+    pet_name: 'Adalto',
+    species: 'dog',
+    breed: 'Yorkshire Terrier',
+    size: 'pequeno',
+    weight_kg: 4,
+    order_type: 'banho_tosa',
+    items: [{
+      product_id: 'product-bath-small',
+      service_id: 'service-bath-small',
+      name: 'Banho pequeno',
+      quantity: 1,
+      unit_price: 55,
+      upsell: false,
+    }],
+    appointment_id: null,
+    scheduled_at: '2026-07-24T16:00:00-03:00',
+    service_type: 'banho_pequeno',
+    service_label: 'Banho Pet Porte Pequeno',
+    service_grooming_detail: 'banho',
+    duration_min: 60,
+    notes: null,
+    service_transport_mode: 'buscar_e_levar',
+    service_transport_label: 'Buscar e levar',
+    service_transport_customer_brings: false,
+    service_transport_fee: 20,
+    service_transport_address: 'Av. da Silva, 123',
+    service_transport_neighborhood: 'Centro',
+    service_transport_city: 'Muriaé',
+    service_transport_reference: 'Ao lado da escola',
+    total: 75,
+  }
+  const refreshed = {
+    ...original,
+    appointment_id: 'derived-slot-id',
+    service_label: 'BANHO PET PORTE PEQUENO',
+    service_grooming_detail: null,
+    items: [{ ...original.items[0], name: 'BANHO PET PORTE PEQUENO' }],
+  }
+
+  assert.equal(
+    buildPetshopConfirmationFingerprint(original),
+    buildPetshopConfirmationFingerprint(refreshed),
+  )
+  assert.notEqual(
+    buildPetshopConfirmationFingerprint(original),
+    buildPetshopConfirmationFingerprint({ ...refreshed, scheduled_at: '2026-07-24T16:30:00-03:00' }),
+  )
+  assert.notEqual(
+    buildPetshopConfirmationFingerprint(original),
+    buildPetshopConfirmationFingerprint({ ...refreshed, total: 80 }),
+  )
+  assert.notEqual(
+    buildPetshopConfirmationFingerprint(original),
+    buildPetshopConfirmationFingerprint({ ...refreshed, service_transport_mode: 'somente_buscar' }),
+  )
+})
 
 test('pedido generico de busca apresenta opcoes do MotoDog sem escolher modalidade', () => {
   const history = [{
