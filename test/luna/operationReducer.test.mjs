@@ -95,3 +95,45 @@ test('confirmação repetida é idempotente', () => {
   assert.equal(next.version, 7)
   assert.equal(next.metadata.duplicate_confirmation_ignored, true)
 })
+
+test('reducer rejeita versão obsoleta antes de aplicar evento', () => {
+  assert.throws(() => reduceOperation({
+    operation_id: 'op_version',
+    type: 'service_booking',
+    status: 'awaiting_confirmation',
+    version: 4,
+  }, {
+    type: LUNA_OPERATION_EVENTS.ADD_NOTE,
+    payload: { text: 'sem perfume' },
+    metadata: { expected_version: 3 },
+  }), (error) => error instanceof LunaError && error.code === LUNA_ERROR_CODES.STALE_OPERATION_VERSION)
+})
+
+test('reducer ignora repetição do mesmo event_id e mantém ledger auditável', () => {
+  const event = {
+    type: LUNA_OPERATION_EVENTS.ADD_NOTE,
+    payload: { text: 'sem perfume' },
+    metadata: { event_id: 'evt_same', trace_id: 'trace_1', source: 'test' },
+  }
+  const first = reduceOperation({
+    operation_id: 'op_event',
+    type: 'service_booking',
+    status: 'awaiting_confirmation',
+  }, event)
+  const duplicate = reduceOperation(first, event)
+
+  assert.equal(duplicate.version, 1)
+  assert.equal(duplicate.ledger.length, 1)
+  assert.deepEqual(duplicate.ledger[0], {
+    event_id: 'evt_same',
+    event: 'ADD_NOTE',
+    previous_version: 0,
+    version: 1,
+    previous_status: 'awaiting_confirmation',
+    next_status: 'awaiting_confirmation',
+    changed: true,
+    source: 'test',
+    trace_id: 'trace_1',
+    occurred_at: duplicate.ledger[0].occurred_at,
+  })
+})

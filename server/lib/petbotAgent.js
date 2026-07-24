@@ -2489,6 +2489,7 @@ export async function runPetbotAgent({
   callModel,
   executeTool,
   maxSteps = MAX_AGENT_STEPS,
+  maxValidationRetries = 2,
   initialToolChoice = 'auto',
   validateReply = null,
   responseFormat = null,
@@ -2602,13 +2603,18 @@ export async function runPetbotAgent({
           messages,
         })
         if (validation?.ok === false) {
+          const retryLimit = Math.max(0, Math.trunc(Number(maxValidationRetries || 0) || 0))
+          if (validationRetries >= retryLimit) {
+            messages.push({ role: 'assistant', content: rawContent || content })
+            messages.push({ role: 'system', content: clean(validation.instruction) })
+            return finalizeOrFallback(validation.error || `limite de correções atingido: ${(validation.problems || []).join('; ')}`)
+          }
+          validationRetries += 1
           if (step >= Math.max(1, maxSteps) - 1) {
             messages.push({ role: 'assistant', content: rawContent || content })
             messages.push({ role: 'system', content: clean(validation.instruction) })
-            validationRetries += 1
             return finalizeOrFallback(validation.error || `resposta operacional inválida: ${(validation.problems || []).join('; ')}`)
           }
-          validationRetries += 1
           messages.push({ role: 'assistant', content })
           messages.push({
             role: 'system',
@@ -2641,15 +2647,27 @@ export async function runPetbotAgent({
       try {
         result = await executeTool(toolCall)
       } catch (error) {
-        result = { ok: false, error: error instanceof Error ? error.message : String(error) }
+        result = {
+          ok: false,
+          error: error instanceof Error ? error.message : String(error),
+          error_code: clean(error?.code) || null,
+          error_details: error?.details && typeof error.details === 'object' ? error.details : null,
+        }
       }
       const toolName = clean(toolCall?.function?.name)
       const toolStatus = clean(result?.status) || null
+      let traceArguments = null
+      try {
+        traceArguments = JSON.parse(clean(toolCall?.function?.arguments) || '{}')
+      } catch {
+        traceArguments = { parse_error: true }
+      }
       toolRuns.push({
         name: toolName,
         ok: result?.ok !== false,
         status: toolStatus,
         duration_ms: Date.now() - toolStartedAt,
+        arguments: traceArguments,
         result,
       })
       messages.push({

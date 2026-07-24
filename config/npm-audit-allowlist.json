@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "policy": "Known high-severity dependency debt is time-boxed. New or expired findings fail CI.",
+  "entries": [
+    {
+      "package": "body-parser",
+      "review_by": "2026-08-31",
+      "reason": "Pre-existing advisory in main; update separately from the Luna foundation PR."
+    },
+    {
+      "package": "express",
+      "review_by": "2026-08-31",
+      "reason": "Transitive exposure through the pre-existing body-parser advisory."
+    },
+    {
+      "package": "react-router",
+      "review_by": "2026-08-31",
+      "reason": "Pre-existing advisory in main; requires a dedicated dependency upgrade PR."
+    },
+    {
+      "package": "react-router-dom",
+      "review_by": "2026-08-31",
+      "reason": "Transitive exposure through the pre-existing react-router advisory."
+    },
+    {
+      "package": "concurrently",
+      "via_only": [
+        "shell-quote"
+      ],
+      "review_by": "2026-08-31",
+      "reason": "Transitive exposure only through the allowlisted shell-quote advisory; concurrently has no separately accepted direct advisory."
+    },
+    {
+      "package": "shell-quote",
+      "review_by": "2026-08-31",
+      "reason": "Pre-existing development dependency advisory; update in a dedicated PR."
+    }
+  ]
+}

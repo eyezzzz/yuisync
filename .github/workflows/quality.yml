@@ -15,13 +15,31 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run audit
+      - run: npm run audit:ci
       - run: npm run typecheck
       - run: npm run test
       - run: npm run test:petbot
       - run: npm run test:luna
       - run: npm run test:transactions
-      - run: npm run test:tenant
+      - id: tenant-readiness
+        name: Check tenant isolation credentials
+        run: >-
+          node scripts/check-ci-secrets.mjs tenant-isolation
+          SUPABASE_URL SUPABASE_ANON_KEY
+          TENANT_A_EMAIL TENANT_A_PASSWORD TENANT_A_ID
+          TENANT_B_EMAIL TENANT_B_PASSWORD TENANT_B_ID
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
+          TENANT_A_EMAIL: ${{ secrets.TENANT_A_EMAIL }}
+          TENANT_A_PASSWORD: ${{ secrets.TENANT_A_PASSWORD }}
+          TENANT_A_ID: ${{ secrets.TENANT_A_ID }}
+          TENANT_B_EMAIL: ${{ secrets.TENANT_B_EMAIL }}
+          TENANT_B_PASSWORD: ${{ secrets.TENANT_B_PASSWORD }}
+          TENANT_B_ID: ${{ secrets.TENANT_B_ID }}
+      - name: Tenant isolation
+        if: steps.tenant-readiness.outputs.configured == 'true'
+        run: npm run test:tenant
         env:
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY }}
@@ -43,8 +61,27 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npx playwright install --with-deps chromium
-      - run: npm run test:e2e -- --project=desktop
+      - id: e2e-readiness
+        name: Check E2E credentials
+        run: >-
+          node scripts/check-ci-secrets.mjs e2e
+          E2E_BASE_URL E2E_EMAIL E2E_PASSWORD
+          E2E_COMMON_EMAIL E2E_COMMON_PASSWORD
+          E2E_MANAGER_EMAIL E2E_MANAGER_PASSWORD
+        env:
+          E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
+          E2E_EMAIL: ${{ secrets.E2E_EMAIL }}
+          E2E_PASSWORD: ${{ secrets.E2E_PASSWORD }}
+          E2E_COMMON_EMAIL: ${{ secrets.E2E_COMMON_EMAIL }}
+          E2E_COMMON_PASSWORD: ${{ secrets.E2E_COMMON_PASSWORD }}
+          E2E_MANAGER_EMAIL: ${{ secrets.E2E_MANAGER_EMAIL }}
+          E2E_MANAGER_PASSWORD: ${{ secrets.E2E_MANAGER_PASSWORD }}
+      - name: Install Playwright Chromium
+        if: steps.e2e-readiness.outputs.configured == 'true'
+        run: npx playwright install --with-deps chromium
+      - name: Desktop E2E
+        if: steps.e2e-readiness.outputs.configured == 'true'
+        run: npm run test:e2e -- --project=desktop
         env:
           E2E_BASE_URL: ${{ secrets.E2E_BASE_URL }}
           E2E_EMAIL: ${{ secrets.E2E_EMAIL }}

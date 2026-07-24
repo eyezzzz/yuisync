@@ -40,9 +40,11 @@ import {
   beginLegacyBackedConfirmation,
   completeLegacyBackedConfirmation,
   completeLunaTurnTrace,
+  createLunaAgentRuntime,
   createLunaTurnTrace,
   deriveLegacyOperationEvent,
   diffConfirmationContracts,
+  enforceVerifiedReply,
   operationStateFromLegacyContext,
   verifyOperationTurn,
   isCustomerNamePlaceholder,
@@ -52,6 +54,9 @@ import {
   isBathSemanticPreparationCandidate,
   runBathSemanticPreparation,
   runBathShadowTurn,
+  normalizeLunaError,
+  buildRuntimeRecoveryDecision,
+  renderLunaRecoveryMessage,
 } from './luna/index.js'
 import {
   analyzeProductDifferentiation,
@@ -2931,7 +2936,7 @@ async function respondWithPetbotAgent({
     timezone: storeSettings.petbotTimezone,
   })
 
-  const executeTool = async (toolCall) => {
+  const executeLegacyTool = async (toolCall) => {
     const name = cleanText(toolCall?.function?.name)
     const args = parseAgentToolArguments(toolCall)
 
@@ -3587,6 +3592,28 @@ async function respondWithPetbotAgent({
       : selectedRecentProductCandidate
         ? { type: 'function', function: { name: 'search_petshop_products' } }
         : 'auto'
+  const lunaRuntime = createLunaAgentRuntime({
+    tools: PETBOT_AGENT_TOOLS,
+    executeLegacyTool,
+    traceId: lunaTraceStart.trace_id,
+    goal: currentTurnIntent || intent || 'respond',
+    operationType: lunaStateBefore.type,
+    initialToolChoice,
+    limits: {
+      maxDurationMs: serverEnv.lunaRuntimeMaxDurationMs,
+      maxToolCalls: serverEnv.lunaRuntimeMaxToolCalls,
+      maxTokens: serverEnv.lunaRuntimeMaxTokens,
+      maxValidationRetries: serverEnv.lunaRuntimeMaxValidationRetries,
+      defaultToolTimeoutMs: serverEnv.lunaToolDefaultTimeoutMs,
+      confirmationTimeoutMs: serverEnv.lunaConfirmationTimeoutMs,
+      estimatedCostPerMillionTokens: serverEnv.lunaEstimatedCostPerMillionTokens,
+    },
+  })
+  const executeTool = (toolCall) => lunaRuntime.executeToolCall(toolCall, {
+    session_id: sessionId,
+    tenant_id: session.tenant_id,
+    module_id: moduleId,
+  })
 
   let agentResult
   if (requestedHandoffTarget) {
@@ -3891,9 +3918,14 @@ async function respondWithPetbotAgent({
     systemPrompt,
     history,
     message: trimmedMessage,
-    tools: PETBOT_AGENT_TOOLS,
-    callModel: (params) => callOpenAIWithTimeout(params, serverEnv.openAiTimeoutMs),
+    tools: lunaRuntime.tools,
+    callModel: (params) => lunaRuntime.callModel(
+      params,
+      (runtimeParams) => callOpenAIWithTimeout(runtimeParams, serverEnv.openAiTimeoutMs),
+    ),
     executeTool,
+    maxSteps: serverEnv.lunaRuntimeMaxSteps,
+    maxValidationRetries: serverEnv.lunaRuntimeMaxValidationRetries,
     initialToolChoice,
     // A one-field JSON response format added an unnecessary compatibility
     // surface to multi-turn function calling. Tool arguments remain strict;
@@ -3967,6 +3999,11 @@ async function respondWithPetbotAgent({
     },
   })
 
+  lunaRuntime.recordValidationRetries(agentResult.validationRetries || 0)
+  agentResult.runtime = lunaRuntime.complete({
+    outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : (agentResult.recovered ? 'recovered' : 'ok')),
+  })
+
   if (!bathConfirmationCommittedThisTurn && isBathSemanticPreparationCandidate({
     serviceOrderType,
     facts: serviceFacts,
@@ -3998,7 +4035,7 @@ async function respondWithPetbotAgent({
 
   const rawReply = cleanText(agentResult.reply)
   if (!rawReply) throw new HttpError(502, 'The PetBot agent response came back empty.')
-  const reply = prependPetbotConversationOpening({
+  let reply = prependPetbotConversationOpening({
     reply: rawReply,
     message: trimmedMessage,
     history,
@@ -4157,18 +4194,31 @@ async function respondWithPetbotAgent({
     pendingAfter: pendingOrder,
     toolRuns: agentResult.toolRuns,
   })
-  const lunaVerification = verifyOperationTurn({
+  let lunaVerification = verifyOperationTurn({
     stateBefore: lunaStateBefore,
     stateAfter: lunaStateAfter,
     orderResult,
     reply,
     toolRuns: agentResult.toolRuns,
+    toolResults: agentResult.runtime?.tool_runs || [],
   })
+  const verifiedReply = enforceVerifiedReply({ reply, verification: lunaVerification })
+  if (verifiedReply.enforced) {
+    reply = verifiedReply.reply
+    lunaVerification = {
+      ...lunaVerification,
+      enforced: true,
+      enforcement_reason: verifiedReply.reason,
+    }
+  }
   const lunaTrace = completeLunaTurnTrace(lunaTraceStart, {
     stateAfter: lunaStateAfter,
     semanticEvent: lunaSemanticEvent,
     toolRuns: agentResult.toolRuns,
-    outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : 'ok'),
+    runtime: agentResult.runtime,
+    model: serverEnv.openAiModel,
+    tokensUsed: agentResult.tokensUsed,
+    outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : (agentResult.recovered ? 'recovered' : 'ok')),
     verifier: lunaVerification,
   })
   if (!lunaVerification.ok) {
@@ -4303,9 +4353,9 @@ async function respondWithPetbotRecoverableFailure({
   customerName = '',
 }) {
   const serviceConversation = isPetbotServiceConversation(intent)
-  const rawReply = serviceConversation
-    ? 'Desculpe, não consegui concluir a consulta dos serviços e da agenda agora. As informações que você enviou continuam na conversa; posso tentar novamente sem você repetir os dados.'
-    : 'Desculpe, não consegui concluir a consulta agora. As informações que você enviou continuam na conversa; posso tentar novamente sem você repetir os dados.'
+  const lunaError = normalizeLunaError(error)
+  const recoveryDecision = buildRuntimeRecoveryDecision(lunaError)
+  const rawReply = renderLunaRecoveryMessage(recoveryDecision, { serviceConversation })
   const reply = prependPetbotConversationOpening({
     reply: rawReply,
     message,
@@ -4313,6 +4363,26 @@ async function respondWithPetbotRecoverableFailure({
     customerName,
   })
   const botSentAt = new Date().toISOString()
+  const recoveryState = operationStateFromLegacyContext(session.context, {
+    tenantId: session.tenant_id,
+    sessionId,
+    moduleId,
+    customerId: session.client_id,
+    customerName: normalizeCustomerDisplayName(customerName || session.customer_name),
+    intent,
+  })
+  const recoveryTraceStart = createLunaTurnTrace({
+    sessionId,
+    tenantId: session.tenant_id,
+    moduleId,
+    message,
+    stateBefore: recoveryState,
+  })
+  const recoveryTrace = completeLunaTurnTrace(recoveryTraceStart, {
+    stateAfter: recoveryState,
+    outcome: 'error',
+    error: lunaError,
+  })
   const existingContext = parseJsonObject(session.context)
   const previousAgentState = existingContext.petbot_agent && typeof existingContext.petbot_agent === 'object'
     ? existingContext.petbot_agent
@@ -4330,7 +4400,9 @@ async function respondWithPetbotRecoverableFailure({
       needs_human: false,
       handoff_target: null,
       order_saved: false,
-      failure: cleanText(error instanceof Error ? error.message : error).slice(0, 300),
+      failure: cleanText(lunaError.message).slice(0, 300),
+      failure_details: lunaError.toJSON(),
+      recovery_decision: recoveryDecision,
     },
   }
 
@@ -4361,6 +4433,8 @@ async function respondWithPetbotRecoverableFailure({
         source: options.source || 'dashboard_simulation',
         engine_version: 'petbot_agent_v3',
         recoverable_agent_error: true,
+        luna_trace: recoveryTrace,
+        recovery_decision: recoveryDecision,
         ...(options.assistantMetadata || {}),
       },
       tokens_used: 0,
@@ -4383,7 +4457,9 @@ async function respondWithPetbotRecoverableFailure({
     handoff_target: null,
     metadata: {
       source: options.source || 'dashboard_simulation',
-      error: cleanText(error instanceof Error ? error.message : error).slice(0, 300),
+      error: lunaError.toJSON(),
+      recovery_decision: recoveryDecision,
+      luna_trace: recoveryTrace,
       openai: error?.openai || null,
     },
   })
