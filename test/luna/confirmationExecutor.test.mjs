@@ -319,3 +319,121 @@ test('o mesmo instante com outra representação ISO mantém o contrato', async 
   assert.equal(result.status, 'committed')
   assert.equal(commits, 1)
 })
+
+test('cliente leva permanece igual após hidratar flag e aliases de transporte', async () => {
+  let commits = 0
+  const refreshed = order({
+    service_transport_mode: 'sem transporte',
+    service_transport_customer_brings: true,
+    service_transport_address: 'Rua ignorada, 10',
+    transport: {
+      mode: 'tutor_leva',
+      customer_brings: true,
+      address: 'Outra rua ignorada, 20',
+    },
+  })
+  const result = await executeLunaConfirmation({
+    state: state(),
+    pendingOrder: pending(),
+    explicitConfirmation: true,
+    idempotencyKey: 'session-1:pending-1',
+    fingerprint,
+    revalidate: async () => ({ ok: true, order: refreshed }),
+    commit: async () => {
+      commits += 1
+      return successResult()
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'committed')
+  assert.equal(commits, 1)
+})
+
+test('hidratação de total da linha e id operacional não altera o item confirmado', async () => {
+  let commits = 0
+  const pendingWithoutDerivedTotal = pending({
+    items: [{ service_id: 'bath-small', quantity: 1, unit_price: 55 }],
+  })
+  const refreshed = order({
+    items: [{
+      id: 'operational-line-id',
+      service_id: 'bath-small',
+      quantity: 1,
+      unit_price: 55,
+      total: 55,
+    }],
+  })
+  const result = await executeLunaConfirmation({
+    state: state(),
+    pendingOrder: pendingWithoutDerivedTotal,
+    explicitConfirmation: true,
+    idempotencyKey: 'session-1:pending-1',
+    fingerprint,
+    revalidate: async () => ({ ok: true, order: refreshed }),
+    commit: async () => {
+      commits += 1
+      return successResult()
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'committed')
+  assert.equal(commits, 1)
+})
+
+test('metadados derivados de pet, serviço e assinatura não mudam o contrato', async () => {
+  let commits = 0
+  const refreshed = order({
+    species: 'cachorro',
+    breed: 'Lhasa Apso',
+    weight_kg: 8,
+    service_type: 'banho',
+    service_kind: 'grooming',
+    regular_service_price: 55,
+    subscription_benefit: {
+      subscription_id: 'subscription-loaded-on-refresh',
+      service_type: 'banho',
+    },
+  })
+  const result = await executeLunaConfirmation({
+    state: state(),
+    pendingOrder: pending(),
+    explicitConfirmation: true,
+    idempotencyKey: 'session-1:pending-1',
+    fingerprint,
+    revalidate: async () => ({ ok: true, order: refreshed }),
+    commit: async () => {
+      commits += 1
+      return successResult()
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'committed')
+  assert.equal(commits, 1)
+})
+
+test('mudança real informa os campos divergentes sem executar transação', async () => {
+  let commits = 0
+  const refreshed = order({
+    total: 60,
+    items: [{ service_id: 'bath-small', quantity: 1, unit_price: 60, total: 60 }],
+  })
+  const result = await executeLunaConfirmation({
+    state: state(),
+    pendingOrder: pending(),
+    explicitConfirmation: true,
+    idempotencyKey: 'session-1:pending-1',
+    fingerprint,
+    revalidate: async () => ({ ok: true, order: refreshed }),
+    commit: async () => { commits += 1 },
+  })
+
+  assert.equal(result.status, 'changed')
+  assert.equal(result.classification, LUNA_CONFIRMATION_RESULTS.COMMERCIAL_CONTRACT_CHANGED)
+  assert.ok(result.contract_changes.includes('total'))
+  assert.ok(result.contract_changes.includes('items[0].unit_price'))
+  assert.match(result.reason, /confirmation_contract_changed:/)
+  assert.equal(commits, 0)
+})
