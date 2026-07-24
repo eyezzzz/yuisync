@@ -150,7 +150,6 @@ export function buildConfirmationContract(order = {}) {
     pet_name: normalizedText(order?.pet_name),
     service: {
       product_id: text(order?.service_product_id) || items[0]?.id || '',
-      grooming_detail: normalizedText(order?.service_grooming_detail),
       notes: normalizedText(order?.notes),
     },
     scheduled_at: scheduledAt(order),
