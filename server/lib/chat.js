@@ -42,6 +42,9 @@ import {
   deriveLegacyOperationEvent,
   operationStateFromLegacyContext,
   verifyOperationTurn,
+  isCustomerNamePlaceholder,
+  normalizeCustomerDisplayName,
+  runBathShadowTurn,
 } from './luna/index.js'
 import {
   analyzeProductDifferentiation,
@@ -388,12 +391,42 @@ function enrichPetbotMotodogAddressFromCustomer(facts = {}, customer = null) {
   }
 }
 
+function looksLikePetbotTransportReference(value = '') {
+  const normalized = normalizeSearchText(value)
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return false
+  return /\b(?:em frente|ao lado|proximo|perto|referencia|portao|mercearia|mercado|igreja|escola|farmacia|posto|esquina|casa azul|predio|condominio)\b/.test(normalized)
+}
+
+export function sanitizePetbotTransportAddress(fields = {}) {
+  const next = {
+    service_transport_address: cleanText(fields.service_transport_address) || null,
+    service_transport_neighborhood: cleanText(fields.service_transport_neighborhood) || null,
+    service_transport_city: cleanText(fields.service_transport_city) || null,
+    service_transport_reference: cleanText(fields.service_transport_reference) || null,
+  }
+  if (looksLikePetbotTransportReference(next.service_transport_city)) {
+    next.service_transport_reference ||= next.service_transport_city
+    next.service_transport_city = null
+  }
+  if (
+    next.service_transport_city
+    && next.service_transport_reference
+    && normalizeSearchText(next.service_transport_city) === normalizeSearchText(next.service_transport_reference)
+  ) {
+    next.service_transport_city = null
+  }
+  return next
+}
+
 function inferPetbotTransportAddress(message = '', history = []) {
   const previousAssistant = [...(history || [])]
     .reverse()
     .find((entry) => ['assistant', 'human_agent'].includes(entry?.role))
   const previousText = normalizeSearchText(previousAssistant?.content)
-  if (!/(?:motodog|endereco|rua e numero|bairro|cidade|referencia)/.test(previousText)) return {}
+  if (!/(?:motodog|endereco|rua e numero|bairro|cidade|distrito|referencia)/.test(previousText)) return {}
 
   const raw = cleanText(message)
   if (!raw || raw.length < 6) return {}
@@ -402,7 +435,7 @@ function inferPetbotTransportAddress(message = '', history = []) {
   const withoutReference = referenceMatch ? raw.slice(0, referenceMatch.index).replace(/[,;\s-]+$/, '') : raw
   const labeledAddress = withoutReference.match(/(?:rua|avenida|av\.?|travessa|estrada)\s+(.+?)\s*(?:,|\-|numero|número|nº)\s*(\d+[a-zA-Z-]*)/i)
   const neighborhoodMatch = withoutReference.match(/(?:bairro)\s*[:\-]?\s*([^,;]+)/i)
-  const cityMatch = withoutReference.match(/(?:cidade)\s*[:\-]?\s*([^,;]+)/i)
+  const cityMatch = withoutReference.match(/(?:cidade|distrito)\s*[:\-]?\s*([^,;]+)/i)
   const inferred = {}
 
   if (labeledAddress) {
@@ -422,11 +455,15 @@ function inferPetbotTransportAddress(message = '', history = []) {
     } else if (parts.length >= 3 && /\d/.test(parts[0])) {
       inferred.service_transport_address = parts[0]
       inferred.service_transport_neighborhood ||= parts[1]
-      inferred.service_transport_city ||= parts[2]
+      if (looksLikePetbotTransportReference(parts[2])) {
+        inferred.service_transport_reference ||= parts[2]
+      } else {
+        inferred.service_transport_city ||= parts[2]
+      }
     }
   }
 
-  return inferred
+  return sanitizePetbotTransportAddress(inferred)
 }
 
 function inferPetbotTransportAddressConfirmation(message = '', history = []) {
@@ -485,7 +522,7 @@ function buildPetbotTransportQualificationReply({ facts = {}, settings = {} } = 
   const missing = []
   if (!hasPetbotStreetNumber(facts.service_transport_address)) missing.push('rua e número')
   if (!cleanText(facts.service_transport_neighborhood)) missing.push('bairro')
-  if (!cleanText(facts.service_transport_city)) missing.push('cidade')
+  if (!cleanText(facts.service_transport_city)) missing.push('cidade ou distrito')
   if (!cleanText(facts.service_transport_reference)) missing.push('ponto de referência')
   if (missing.length) {
     return [
@@ -511,6 +548,44 @@ function buildPetbotTransportQualificationReply({ facts = {}, settings = {} } = 
     ].join('\n')
   }
 
+  return ''
+}
+
+
+export function buildPetbotAvailableSlotContinuation({
+  availability = {},
+  facts = {},
+  settings = {},
+  timezone = 'America/Sao_Paulo',
+  currentTurnSelectedSchedule = false,
+  customerName = '',
+} = {}) {
+  const requested = availability?.requested_slot
+  if (!currentTurnSelectedSchedule || requested?.available !== true) return ''
+
+  const requestedDateTime = DateTime.fromISO(cleanText(requested.scheduled_at), { setZone: true }).setZone(timezone)
+  const requestedTime = requestedDateTime.isValid
+    ? requestedDateTime.toFormat('HH:mm')
+    : cleanText(facts.service_preferred_time)
+  const availabilityPrefix = requestedTime
+    ? `Sim, ${requestedTime} está disponível.`
+    : 'Sim, o horário solicitado está disponível.'
+  if (!normalizeCustomerDisplayName(customerName)) {
+    return `${availabilityPrefix}\n\nAntes de continuar, qual é o seu nome?`
+  }
+
+  const transportReply = buildPetbotTransportQualificationReply({ facts, settings })
+  if (transportReply) return `${availabilityPrefix}\n\n${transportReply}`
+  if (!cleanText(facts.service_transport_mode)) {
+    const petName = cleanText(facts.pet_name)
+    return [
+      availabilityPrefix,
+      '',
+      petName
+        ? `Como o ${petName} chegará à loja: você vai levar ou prefere usar o MotoDog?`
+        : 'Como o pet chegará à loja: você vai levar ou prefere usar o MotoDog?',
+    ].join('\n')
+  }
   return ''
 }
 
@@ -624,11 +699,7 @@ async function updateCustomerRegistrationFromMessage(supabase, session, message)
 }
 
 function isPlaceholderName(value = '') {
-  const name = cleanText(value).toLowerCase()
-  return !name
-    || ['cliente', 'cliente whatsapp', 'whatsapp', 'sem nome'].includes(name)
-    || /^cliente[-\s]?\d+/i.test(name)
-    || /^\+?\d[\d\s().-]{6,}$/.test(name)
+  return isCustomerNamePlaceholder(value)
 }
 
 function normalizeSpecies(value = '') {
@@ -932,7 +1003,8 @@ function buildCustomerContext(customer) {
   const nameConfirmed = !isPlaceholderName(customer.client.name) && details.name_confirmed !== false
   return [
     `Cliente cadastrado pelo telefone: sim`,
-    `Nome: ${nameConfirmed ? customer.client.name : 'nao confirmado'}`,
+    `Nome do tutor: ${nameConfirmed ? customer.client.name : 'desconhecido'}`,
+    ...(nameConfirmed ? [] : ['Nunca use "desconhecido", "não confirmado" ou o telefone como nome do cliente.']),
     `Telefone: ${customer.client.phone || customer.phone || 'Nao informado'}`,
     `Pet: ${details.pet_name || 'Nao informado'}`,
     `Especie: ${details.species || 'Nao informado'}`,
@@ -1405,8 +1477,11 @@ async function ensureCustomerProfile(supabase, session, patch = {}) {
     client = data || null
   }
 
-  const customerName = cleanText(patch.customer_name) || cleanText(client?.name) || cleanText(session.customer_name)
-  const hasConfirmedName = Boolean(cleanText(patch.customer_name)) || Boolean(client && !isPlaceholderName(client.name) && client.details?.name_confirmed !== false)
+  const customerName = normalizeCustomerDisplayName(patch.customer_name)
+    || normalizeCustomerDisplayName(client?.name)
+    || normalizeCustomerDisplayName(session.customer_name)
+  const hasConfirmedName = Boolean(normalizeCustomerDisplayName(patch.customer_name))
+    || Boolean(client && normalizeCustomerDisplayName(client.name) && client.details?.name_confirmed !== false)
   const nextDetails = {
     ...(client?.details || {}),
     ...(cleanText(patch.pet_name) ? { pet_name: cleanText(patch.pet_name) } : {}),
@@ -2179,7 +2254,7 @@ async function respondWithPetbotAgent({
     sessionId,
     moduleId,
     customerId: session.client_id,
-    customerName: session.customer_name,
+    customerName: normalizeCustomerDisplayName(session.customer_name),
     intent,
   })
   const lunaTraceStart = createLunaTurnTrace({
@@ -2225,7 +2300,7 @@ async function respondWithPetbotAgent({
   const transportAddressConfirmation = productConversationAtTurnStart
     ? null
     : inferPetbotTransportAddressConfirmation(trimmedMessage, history)
-  const currentTransportAddress = {
+  const currentTransportAddress = sanitizePetbotTransportAddress({
     service_transport_address: cleanText(llmInterpretation?.service_transport_address)
       || cleanText(inferredTransportAddress.service_transport_address)
       || null,
@@ -2238,7 +2313,7 @@ async function respondWithPetbotAgent({
     service_transport_reference: cleanText(llmInterpretation?.service_transport_reference)
       || cleanText(inferredTransportAddress.service_transport_reference)
       || null,
-  }
+  })
   const currentTurnProvidesTransportAddress = Object.values(currentTransportAddress).some(Boolean)
   const resetSavedTransportAddress = transportAddressConfirmation === false
     || (currentTurnProvidesTransportAddress && previousServiceFacts.service_transport_address_from_profile)
@@ -2329,7 +2404,7 @@ async function respondWithPetbotAgent({
   let orderResult = null
   let needsHuman = false
   let handoffTarget = null
-  let updatedCustomerName = cleanText(session.customer_name)
+  let updatedCustomerName = normalizeCustomerDisplayName(session.customer_name)
   let activeCustomer = customer
   const mediaMessages = []
   let liveProducts = Array.isArray(products) ? products : []
@@ -2417,7 +2492,7 @@ async function respondWithPetbotAgent({
     try {
       const persistedCustomer = await ensureCustomerProfile(supabase, sessionForAgent, interpretedProfilePatch)
       activeCustomer = persistedCustomer
-      updatedCustomerName = cleanText(persistedCustomer.client?.name) || updatedCustomerName
+      updatedCustomerName = normalizeCustomerDisplayName(persistedCustomer.client?.name) || updatedCustomerName
     } catch (error) {
       logger.warn('PetBot fact persistence failed', {
         sessionId,
@@ -3299,8 +3374,23 @@ async function respondWithPetbotAgent({
     && pendingAtTurnStart.order?.order_type !== 'produto'
     && explicitServiceNoteUpdate
   )
+  const currentTurnSelectedSchedule = Boolean(
+    cleanText(llmInterpretation?.service_preferred_time)
+    || cleanText(llmInterpretation?.service_time_preference)
+    || ['appointment_time', 'service_time'].includes(cleanText(turnSemantics?.target)),
+  )
   const transportQualificationReply = serviceOrderType === 'banho_tosa'
-    ? buildPetbotTransportQualificationReply({ facts: serviceFacts, settings: storeSettings })
+    ? (
+      buildPetbotAvailableSlotContinuation({
+        availability: operationalContext?.availability,
+        facts: serviceFacts,
+        settings: storeSettings,
+        timezone: storeSettings.petbotTimezone,
+        currentTurnSelectedSchedule,
+        customerName: trustedCustomerName(),
+      })
+      || buildPetbotTransportQualificationReply({ facts: serviceFacts, settings: storeSettings })
+    )
     : ''
 
   const veterinaryQualificationReply = !pendingAtTurnStart && veterinaryConsultationDeclined
@@ -3662,7 +3752,7 @@ async function respondWithPetbotAgent({
     try {
       const persistedCustomer = await ensureCustomerProfile(supabase, sessionForAgent, finalProfilePatch)
       activeCustomer = persistedCustomer
-      updatedCustomerName = cleanText(persistedCustomer.client?.name) || updatedCustomerName
+      updatedCustomerName = normalizeCustomerDisplayName(persistedCustomer.client?.name) || updatedCustomerName
     } catch (error) {
       logger.warn('PetBot final fact persistence failed', {
         sessionId,
@@ -3778,7 +3868,8 @@ async function respondWithPetbotAgent({
     sessionId,
     moduleId,
     customerId: activeCustomer?.client?.id || session.client_id,
-    customerName: updatedCustomerName || session.customer_name,
+    customerName: normalizeCustomerDisplayName(updatedCustomerName)
+      || normalizeCustomerDisplayName(session.customer_name),
     intent,
   })
   const lunaSemanticEvent = deriveLegacyOperationEvent({
@@ -3812,6 +3903,25 @@ async function respondWithPetbotAgent({
     })
   }
 
+  const lunaShadow = runBathShadowTurn({
+    sessionId,
+    stateBefore: lunaStateBefore,
+    stateAfter: lunaStateAfter,
+    semanticEvent: lunaSemanticEvent,
+    reply,
+    genericTransportRequested: explicitTransportMode === 'motodog',
+    orderResult,
+    availability: operationalContext?.availability || null,
+    currentTurnSelectedSchedule,
+  })
+  if (lunaShadow && !lunaShadow.agreement) {
+    logger.warn('Luna bath shadow detected a legacy divergence', {
+      traceId: lunaTrace.trace_id,
+      sessionId,
+      differences: lunaShadow.differences.map((entry) => entry.code),
+    })
+  }
+
   const primaryImage = mediaMessages.find((item) => item.type === 'image' && item.imageUrl)
   const { data: savedReply, error: replyInsertError } = await supabase
     .from('chat_messages')
@@ -3842,6 +3952,7 @@ async function respondWithPetbotAgent({
           handoff_target: handoffTarget,
           turn_semantics: turnSemantics,
           luna_trace: lunaTrace,
+          ...(lunaShadow ? { luna_shadow: lunaShadow } : {}),
         },
       },
       tokens_used: agentResult.tokensUsed,
@@ -3874,6 +3985,7 @@ async function respondWithPetbotAgent({
       source: options.source || 'dashboard_simulation',
       turn_semantics: turnSemantics,
       luna_trace: lunaTrace,
+      ...(lunaShadow ? { luna_shadow: lunaShadow } : {}),
     },
   })
 

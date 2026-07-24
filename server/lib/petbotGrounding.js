@@ -439,8 +439,9 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
     problems.push('disponibilidade de agenda sem consulta')
   }
 
-  const claimsCommitted = /\b(?:pedido|agendamento)\b.{0,30}\b(?:confirmado|registrado|finalizado|concluido|agendado)\b/.test(normalizedReply)
-    || /\b(?:confirmamos|registramos|finalizamos|concluimos|agendamos)\b.{0,30}\b(?:pedido|agendamento|servico)\b/.test(normalizedReply)
+  const claimsCommitted = /\b(?:pedido|agendamento)\b.{0,30}\b(?:confirmado|registrado|finalizado|concluido|agendado|reservado)\b/.test(normalizedReply)
+    || /\b(?:confirmamos|registramos|finalizamos|concluimos|agendamos|reservei|reservamos)\b.{0,30}\b(?:pedido|agendamento|servico|horario)\b/.test(normalizedReply)
+    || /\b(?:esta|ficou|foi)\s+(?:agendad[oa]|confirmad[oa]|reservad[oa])\b/.test(normalizedReply)
   if (claimsCommitted && !capabilities.has('committed_order')) {
     problems.push('conclusão de pedido sem transação confirmada')
   }
@@ -461,6 +462,11 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
 export function validatePetbotConversationReply({ reply = '', facts = {}, pendingOrder = null, currentMessageIsConfirmation = false, serviceContext = false, productContext = false, toolRuns = [] } = {}) {
   const normalized = normalizeCatalogText(reply)
   const problems = []
+
+  const placeholderUsedAsName = /(?:^(?:bom dia|boa tarde|boa noite|ola|oi)|\bcliente\s*:|^(?:pronto|obrigad[oa]))[,!:\s-]{0,8}(?:nao confirmado|nao confirmada|nao informado|nao informada|desconhecido|desconhecida)\b/.test(normalized)
+  if (placeholderUsedAsName) {
+    problems.push('placeholder interno não pode ser usado como nome do cliente')
+  }
 
   const asksCoat = /\b(?:qual(?: e)? (?:o )?tipo de (?:pelo|pelagem)|qual pelagem|confirma(?:r)?(?: novamente)?(?: o)? tipo de (?:pelo|pelagem))\b/.test(normalized)
     || /\b(?:informe|informar|diga|dizer|poderia me informar|pode me dizer)\b.{0,45}\b(?:tipo de pelo|pelagem)\b/.test(normalized)
@@ -518,7 +524,7 @@ export function validatePetbotConversationReply({ reply = '', facts = {}, pendin
     || (exactMotodogMode && transportAddressComplete && transportAddressConfirmed),
   )
   const asksTransportOption = /(?:buscar e levar|somente buscar|so buscar|somente levar|so levar|qual opcao|qual modalidade)/.test(normalized)
-  const asksTransportAddress = /(?:endereco|rua|numero|bairro|cidade|ponto de referencia|referencia)/.test(normalized)
+  const asksTransportAddress = /(?:endereco|rua|numero|bairro|cidade|distrito|ponto de referencia|referencia)/.test(normalized)
   const offersPrematureSummary = /(?:posso|vou|quer que eu).{0,45}(?:preparar|montar).{0,30}(?:resumo|agendamento)/.test(normalized)
   const hasPreparedOrder = Boolean(pendingOrder) || (toolRuns || []).some((run) => (
     ['prepare_petshop_service_booking', 'prepare_petshop_order'].includes(clean(run?.name))
@@ -705,7 +711,7 @@ export function buildPetbotAgentV3Prompt({
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
     '- Para banho/tosa, os únicos fatos de classificação que podem ser solicitados ao cliente são raça e peso aproximado. Se ambos já estiverem no estado confiável, não os pergunte nem peça confirmação novamente.',
     '- Se o cliente disser apenas MotoDog, consulte as opções reais e peça uma única escolha entre buscar e levar, somente buscar ou somente levar, com as taxas retornadas pela loja.',
-    '- Depois da modalidade MotoDog, obtenha rua e número, bairro, cidade e ponto de referência. Nunca apresente resumo nem peça confirmação final enquanto qualquer um desses dados estiver ausente.',
+    '- Depois da modalidade MotoDog, obtenha rua e número, bairro, cidade ou distrito e ponto de referência. Nunca apresente resumo nem peça confirmação final enquanto qualquer um desses dados estiver ausente.',
     '- O nome do pet é obrigatório para concluir um serviço. Se ainda estiver ausente, pergunte o nome antes de chegada, observações ou resumo; nunca use a raça como nome do pet.',
     '- Campo ausente, serviço ambíguo ou tentativa de consultar a agenda cedo demais não são motivo para transferir o atendimento: use o retorno da ferramenta para fazer a próxima pergunta útil.',
     '- Transfira para humano somente quando o cliente pedir, houver risco veterinário ou uma falha operacional persistente impedir qualquer continuação segura.',
