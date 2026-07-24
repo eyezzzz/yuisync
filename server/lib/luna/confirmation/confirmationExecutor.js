@@ -5,6 +5,7 @@ import { LUNA_CONFIRMATION_RESULTS } from './confirmationEvents.js'
 import {
   classifyConfirmationContractChange,
   classifyConfirmationValidationFailure,
+  confirmationContractsEqual,
   isCommitResultAmbiguous,
   requiredPersistenceIdsPresent,
 } from './confirmationPolicy.js'
@@ -207,7 +208,7 @@ export async function executeLunaConfirmation({
     ? fingerprint(refreshed.order)
     : JSON.stringify(refreshed.order)
 
-  if (expectedFingerprint !== refreshedFingerprint) {
+  if (!confirmationContractsEqual(pendingOrder.order, refreshed.order)) {
     const classification = classifyConfirmationContractChange(
       pendingOrder.order,
       refreshed.order,

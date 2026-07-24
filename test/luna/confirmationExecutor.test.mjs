@@ -271,3 +271,51 @@ test('resultado ambíguo bloqueia nova transação até reconciliar', async () =
   assert.equal(second.classification, LUNA_CONFIRMATION_RESULTS.COMMIT_RESULT_AMBIGUOUS)
   assert.equal(commits, 1)
 })
+
+test('reidratação de campos derivados não invalida o contrato confirmado', async () => {
+  let commits = 0
+  const refreshed = order({
+    appointment_id: 'slot-generated-on-refresh',
+    duration_min: 75,
+    service_label: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG',
+    size: 'medio',
+    coat_type: 'longo',
+  })
+  const result = await executeLunaConfirmation({
+    state: state(),
+    pendingOrder: pending(),
+    explicitConfirmation: true,
+    idempotencyKey: 'session-1:pending-1',
+    fingerprint,
+    revalidate: async () => ({ ok: true, order: refreshed }),
+    commit: async () => {
+      commits += 1
+      return successResult()
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'committed')
+  assert.equal(commits, 1)
+})
+
+test('o mesmo instante com outra representação ISO mantém o contrato', async () => {
+  let commits = 0
+  const refreshed = order({ scheduled_at: '2026-07-25T17:00:00.000Z' })
+  const result = await executeLunaConfirmation({
+    state: state(),
+    pendingOrder: pending(),
+    explicitConfirmation: true,
+    idempotencyKey: 'session-1:pending-1',
+    fingerprint,
+    revalidate: async () => ({ ok: true, order: refreshed }),
+    commit: async () => {
+      commits += 1
+      return successResult()
+    },
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.status, 'committed')
+  assert.equal(commits, 1)
+})
