@@ -1,0 +1,23 @@
+{
+  "name": "specific_grooming_mode_is_preserved",
+  "initial_state": {
+    "operation_id": "op_groom",
+    "type": "service_booking",
+    "status": "collecting_data"
+  },
+  "events": [
+    {
+      "type": "SELECT_SERVICE",
+      "payload": {
+        "service_type": "tosa",
+        "modality": "tosa tesoura"
+      }
+    },
+    { "type": "SET_PET", "payload": { "name": "Lola", "weight_kg": 4 } }
+  ],
+  "expected": {
+    "type": "service_booking",
+    "metadata": { "service_modality": "tosa tesoura" },
+    "pet": { "name": "Lola", "weight_kg": 4 }
+  }
+}

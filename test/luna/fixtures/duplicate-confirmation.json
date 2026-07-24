@@ -1,0 +1,23 @@
+{
+  "name": "duplicate_confirmation_is_idempotent",
+  "initial_state": {
+    "operation_id": "op_confirmed",
+    "type": "service_booking",
+    "status": "confirmed",
+    "version": 8,
+    "persistence": {
+      "sale_id": "sale_1",
+      "order_id": "order_1",
+      "appointment_id": "appointment_1"
+    }
+  },
+  "events": [
+    { "type": "CONFIRM_OPERATION" }
+  ],
+  "expected": {
+    "status": "confirmed",
+    "version": 8,
+    "metadata": { "duplicate_confirmation_ignored": true },
+    "persistence": { "appointment_id": "appointment_1" }
+  }
+}

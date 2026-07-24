@@ -1,0 +1,1621 @@
+diff --git a/.github/workflows/quality.yml b/.github/workflows/quality.yml
+index 9528837..761e648 100644
+--- a/.github/workflows/quality.yml
++++ b/.github/workflows/quality.yml
+@@ -19,6 +19,7 @@ jobs:
+       - run: npm run typecheck
+       - run: npm run test
+       - run: npm run test:petbot
++      - run: npm run test:luna
+       - run: npm run test:transactions
+       - run: npm run test:tenant
+         env:
+diff --git a/package.json b/package.json
+index c893fbb..c55dff3 100644
+--- a/package.json
++++ b/package.json
+@@ -15,13 +15,16 @@
+     "test:transactions": "node --test test/transactionalStatic.test.mjs",
+     "test:e2e": "playwright test",
+     "test:tenant": "node scripts/test-tenant-isolation.mjs",
+-    "test:all": "npm run typecheck && npm run test && npm run test:petbot && npm run test:transactions && npm run build",
++    "test:all": "npm run typecheck && npm run test && npm run test:petbot && npm run test:luna && npm run test:transactions && npm run build",
+     "typecheck": "tsc --noEmit",
+     "build": "vite build",
+     "preview": "vite preview",
+     "test:petbot:legacy": "node --test test/petbotGuard.test.mjs",
+     "test:petbot:live": "node scripts/eval-petbot-agent.mjs",
+-    "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs"
++    "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs",
++    "test:luna:unit": "node --test test/luna/*.test.mjs",
++    "test:luna:regressions": "node scripts/run-luna-scenarios.mjs",
++    "test:luna": "npm run test:luna:unit && npm run test:luna:regressions"
+   },
+   "dependencies": {
+     "@supabase/supabase-js": "^2.110.7",
+diff --git a/scripts/run-luna-scenarios.mjs b/scripts/run-luna-scenarios.mjs
+new file mode 100644
+index 0000000..c2a9a52
+--- /dev/null
++++ b/scripts/run-luna-scenarios.mjs
+@@ -0,0 +1,26 @@
++import { readdir, readFile } from 'node:fs/promises'
++import { fileURLToPath } from 'node:url'
++import path from 'node:path'
++import { runOperationScenario } from '../server/lib/luna/scenarioRunner.js'
++
++const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
++const fixturesDirectory = path.join(root, 'test', 'luna', 'fixtures')
++const files = (await readdir(fixturesDirectory))
++  .filter((file) => file.endsWith('.json'))
++  .sort()
++
++let failed = 0
++for (const file of files) {
++  const scenario = JSON.parse(await readFile(path.join(fixturesDirectory, file), 'utf8'))
++  const result = runOperationScenario(scenario)
++  if (result.ok) {
++    console.log(`✓ ${result.name}`)
++    continue
++  }
++  failed += 1
++  console.error(`✗ ${result.name}`)
++  for (const error of result.errors) console.error(`  - ${error}`)
++}
++
++console.log(`\n${files.length - failed}/${files.length} Luna regression scenarios passed.`)
++if (failed) process.exitCode = 1
+diff --git a/server/lib/chat.js b/server/lib/chat.js
+index c8fcdee..cbfc569 100644
+--- a/server/lib/chat.js
++++ b/server/lib/chat.js
+@@ -36,6 +36,13 @@ import {
+   runPetbotAgent,
+   shouldForcePetbotServicePreparation,
+ } from './petbotAgent.js'
++import {
++  completeLunaTurnTrace,
++  createLunaTurnTrace,
++  deriveLegacyOperationEvent,
++  operationStateFromLegacyContext,
++  verifyOperationTurn,
++} from './luna/index.js'
+ import {
+   analyzeProductDifferentiation,
+   buildPetbotAgentV3Prompt,
+@@ -2167,6 +2174,21 @@ async function respondWithPetbotAgent({
+   appointments,
+   customInstructions,
+ }) {
++  const lunaStateBefore = operationStateFromLegacyContext(sessionForAgent.context, {
++    tenantId: session.tenant_id,
++    sessionId,
++    moduleId,
++    customerId: session.client_id,
++    customerName: session.customer_name,
++    intent,
++  })
++  const lunaTraceStart = createLunaTurnTrace({
++    sessionId,
++    tenantId: session.tenant_id,
++    moduleId,
++    message: trimmedMessage,
++    stateBefore: lunaStateBefore,
++  })
+   const pendingAtTurnStart = getPendingAgentOrder(sessionForAgent.context)
+   const explicitCurrentMessageConfirmation = Boolean(
+     pendingAtTurnStart
+@@ -3751,6 +3773,45 @@ async function respondWithPetbotAgent({
+     throw new HttpError(500, `Unable to persist PetBot agent state${sessionUpdateError?.message ? `: ${sessionUpdateError.message}` : '.'}`)
+   }
+ 
++  const lunaStateAfter = operationStateFromLegacyContext(nextContext, {
++    tenantId: session.tenant_id,
++    sessionId,
++    moduleId,
++    customerId: activeCustomer?.client?.id || session.client_id,
++    customerName: updatedCustomerName || session.customer_name,
++    intent,
++  })
++  const lunaSemanticEvent = deriveLegacyOperationEvent({
++    message: trimmedMessage,
++    turnSemantics,
++    orderResult,
++    needsHuman,
++    pendingBefore: pendingAtTurnStart,
++    pendingAfter: pendingOrder,
++    toolRuns: agentResult.toolRuns,
++  })
++  const lunaVerification = verifyOperationTurn({
++    stateBefore: lunaStateBefore,
++    stateAfter: lunaStateAfter,
++    orderResult,
++    reply,
++    toolRuns: agentResult.toolRuns,
++  })
++  const lunaTrace = completeLunaTurnTrace(lunaTraceStart, {
++    stateAfter: lunaStateAfter,
++    semanticEvent: lunaSemanticEvent,
++    toolRuns: agentResult.toolRuns,
++    outcome: orderResult ? 'saved' : (needsHuman ? 'handoff' : 'ok'),
++    verifier: lunaVerification,
++  })
++  if (!lunaVerification.ok) {
++    logger.warn('Luna passive verifier detected an inconsistent turn', {
++      traceId: lunaTrace.trace_id,
++      sessionId,
++      issues: lunaVerification.issues.map((entry) => entry.code),
++    })
++  }
++
+   const primaryImage = mediaMessages.find((item) => item.type === 'image' && item.imageUrl)
+   const { data: savedReply, error: replyInsertError } = await supabase
+     .from('chat_messages')
+@@ -3780,6 +3841,7 @@ async function respondWithPetbotAgent({
+           needs_human: needsHuman,
+           handoff_target: handoffTarget,
+           turn_semantics: turnSemantics,
++          luna_trace: lunaTrace,
+         },
+       },
+       tokens_used: agentResult.tokensUsed,
+@@ -3811,6 +3873,7 @@ async function respondWithPetbotAgent({
+       pending_order_id: pendingOrder?.id || null,
+       source: options.source || 'dashboard_simulation',
+       turn_semantics: turnSemantics,
++      luna_trace: lunaTrace,
+     },
+   })
+ 
+diff --git a/server/lib/luna/errors.js b/server/lib/luna/errors.js
+new file mode 100644
+index 0000000..a340220
+--- /dev/null
++++ b/server/lib/luna/errors.js
+@@ -0,0 +1,49 @@
++export const LUNA_ERROR_CODES = Object.freeze({
++  INVALID_STATE_TRANSITION: 'INVALID_STATE_TRANSITION',
++  INVALID_OPERATION_STATE: 'INVALID_OPERATION_STATE',
++  CATALOG_TYPE_MISMATCH: 'CATALOG_TYPE_MISMATCH',
++  CATALOG_ITEM_NOT_FOUND: 'CATALOG_ITEM_NOT_FOUND',
++  SLOT_UNAVAILABLE: 'SLOT_UNAVAILABLE',
++  SLOT_OUTSIDE_BOOKING_HOURS: 'SLOT_OUTSIDE_BOOKING_HOURS',
++  STALE_OPERATION_VERSION: 'STALE_OPERATION_VERSION',
++  MISSING_REQUIRED_FIELD: 'MISSING_REQUIRED_FIELD',
++  TOTAL_MISMATCH: 'TOTAL_MISMATCH',
++  PERSISTENCE_PARTIAL_FAILURE: 'PERSISTENCE_PARTIAL_FAILURE',
++  ALREADY_CONFIRMED: 'ALREADY_CONFIRMED',
++  TOOL_TIMEOUT: 'TOOL_TIMEOUT',
++  TOOL_FAILED: 'TOOL_FAILED',
++})
++
++export class LunaError extends Error {
++  constructor(code, message, options = {}) {
++    super(message)
++    this.name = 'LunaError'
++    this.code = code || LUNA_ERROR_CODES.TOOL_FAILED
++    this.recoverable = options.recoverable !== false
++    this.retryable = Boolean(options.retryable)
++    this.userActionRequired = Boolean(options.userActionRequired)
++    this.details = options.details && typeof options.details === 'object' ? options.details : {}
++    if (options.cause) this.cause = options.cause
++  }
++
++  toJSON() {
++    return {
++      code: this.code,
++      message: this.message,
++      recoverable: this.recoverable,
++      retryable: this.retryable,
++      user_action_required: this.userActionRequired,
++      details: this.details,
++    }
++  }
++}
++
++export function normalizeLunaError(error, fallbackCode = LUNA_ERROR_CODES.TOOL_FAILED) {
++  if (error instanceof LunaError) return error
++  const message = error instanceof Error ? error.message : String(error || 'Unknown Luna error')
++  return new LunaError(fallbackCode, message, {
++    recoverable: true,
++    retryable: false,
++    cause: error instanceof Error ? error : undefined,
++  })
++}
+diff --git a/server/lib/luna/index.js b/server/lib/luna/index.js
+new file mode 100644
+index 0000000..c7f2743
+--- /dev/null
++++ b/server/lib/luna/index.js
+@@ -0,0 +1,8 @@
++export * from './errors.js'
++export * from './legacyAdapter.js'
++export * from './operationEvents.js'
++export * from './operationReducer.js'
++export * from './operationState.js'
++export * from './trace.js'
++export * from './verifier.js'
++export * from './scenarioRunner.js'
+diff --git a/server/lib/luna/legacyAdapter.js b/server/lib/luna/legacyAdapter.js
+new file mode 100644
+index 0000000..e70c331
+--- /dev/null
++++ b/server/lib/luna/legacyAdapter.js
+@@ -0,0 +1,134 @@
++import { createOperationState } from './operationState.js'
++import { LUNA_OPERATION_EVENTS } from './operationEvents.js'
++
++function objectValue(value) {
++  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
++}
++
++function parseContext(value) {
++  if (value && typeof value === 'object' && !Array.isArray(value)) return value
++  try {
++    const parsed = JSON.parse(String(value || '{}'))
++    return objectValue(parsed)
++  } catch {
++    return {}
++  }
++}
++
++function text(value, max = 300) {
++  return String(value ?? '').trim().slice(0, max)
++}
++
++function orderTypeToOperationType(value = '') {
++  const normalized = text(value, 120).toLowerCase()
++  if (/veterin|consulta|vacina|exame/.test(normalized)) return 'veterinary_booking'
++  if (/banho|tosa|servico|escov|desembolo|hidrat/.test(normalized)) return 'service_booking'
++  if (/produto|racao|feed|order|pedido/.test(normalized)) return 'product_order'
++  return 'unknown'
++}
++
++function legacyItems(order = {}) {
++  const source = objectValue(order)
++  const items = Array.isArray(source.items) ? source.items : []
++  const additions = Array.isArray(source.additional_services) ? source.additional_services : []
++  return [
++    ...items.map((item) => ({ ...item, kind: item.kind || item.type || 'product' })),
++    ...additions.map((item) => ({ ...item, kind: item.kind || 'additional_service' })),
++  ]
++}
++
++export function operationStateFromLegacyContext(contextValue, identifiers = {}) {
++  const context = parseContext(contextValue)
++  const agent = objectValue(context.petbot_agent)
++  const pending = objectValue(agent.pending_order)
++  const order = objectValue(pending.order)
++  const facts = objectValue(agent.facts)
++  const hasCommittedIds = Boolean(context.last_sale_id || context.last_order_id || context.last_appointment_id)
++  const operationType = orderTypeToOperationType(order.order_type || pending.order_type || facts.service_type)
++  let status = 'collecting_data'
++  if (agent.needs_human) status = 'human_handoff'
++  else if (hasCommittedIds && !pending.id) status = 'confirmed'
++  else if (pending.id) status = 'awaiting_confirmation'
++  else if (facts.service_date || facts.service_time_preference) status = 'selecting_schedule'
++
++  return createOperationState({
++    operation_id: pending.id || agent.operation_id || null,
++    tenant_id: identifiers.tenantId || identifiers.tenant_id || null,
++    session_id: identifiers.sessionId || identifiers.session_id || null,
++    module_id: identifiers.moduleId || identifiers.module_id || 'petshop',
++    type: operationType,
++    status,
++    version: Number(agent.operation_version || agent.version || 0),
++    customer: {
++      id: identifiers.customerId || null,
++      name: identifiers.customerName || null,
++    },
++    pet: {
++      name: facts.pet_name || null,
++      species: facts.species || null,
++      breed: facts.breed || null,
++      weight_kg: facts.weight_kg || null,
++      size: facts.size || null,
++      coat_type: facts.coat_type || null,
++    },
++    items: legacyItems(order),
++    schedule: {
++      scheduled_at: order.scheduled_at || null,
++      date: facts.service_date || null,
++      time: facts.service_time_preference || facts.service_preferred_time || null,
++    },
++    transport: {
++      mode: order.transport_mode || facts.service_transport_mode || null,
++      price: order.transport_price || 0,
++      address: {
++        street: facts.service_transport_address || null,
++        neighborhood: facts.service_transport_neighborhood || null,
++        city: facts.service_transport_city || null,
++        reference: facts.service_transport_reference || null,
++      },
++    },
++    notes: facts.service_notes ? [facts.service_notes] : [],
++    totals: {
++      subtotal: order.subtotal || order.total || pending.total || 0,
++      transport: order.transport_price || 0,
++      total: order.total || pending.total || context.last_total || 0,
++    },
++    persistence: {
++      sale_id: context.last_sale_id || null,
++      order_id: context.last_order_id || null,
++      appointment_id: context.last_appointment_id || null,
++      commit_id: context.last_commit_id || null,
++    },
++    last_error: agent.last_error || null,
++    metadata: {
++      engine_version: agent.engine_version || null,
++      legacy_intent: identifiers.intent || null,
++      pending_order_type: order.order_type || pending.order_type || null,
++    },
++  })
++}
++
++export function deriveLegacyOperationEvent({
++  message = '',
++  turnSemantics = {},
++  orderResult = null,
++  needsHuman = false,
++  pendingBefore = null,
++  pendingAfter = null,
++  toolRuns = [],
++} = {}) {
++  if (orderResult) return LUNA_OPERATION_EVENTS.CONFIRM_SUCCEEDED
++  if (needsHuman) return LUNA_OPERATION_EVENTS.REQUEST_HUMAN
++  const action = text(turnSemantics?.action, 80).toLowerCase()
++  const target = text(turnSemantics?.target, 100).toLowerCase()
++  if (turnSemantics?.confirms_pending_order || (pendingBefore && /\b(?:sim|confirmo|pode confirmar|fecha assim)\b/i.test(message))) {
++    return LUNA_OPERATION_EVENTS.CONFIRM_OPERATION
++  }
++  if (target === 'service_notes' && ['correct', 'inform', 'select'].includes(action)) return LUNA_OPERATION_EVENTS.ADD_NOTE
++  if (target.includes('transport')) return LUNA_OPERATION_EVENTS.SET_TRANSPORT
++  if (target.includes('appointment_time') || target.includes('service_time')) return LUNA_OPERATION_EVENTS.SELECT_TIME
++  if (pendingBefore && !pendingAfter) return LUNA_OPERATION_EVENTS.CANCEL_OPERATION
++  const lastTool = Array.isArray(toolRuns) ? toolRuns.at(-1)?.name : ''
++  if (/prepare_.*service|prepare_petshop_service/.test(lastTool || '')) return LUNA_OPERATION_EVENTS.REQUEST_CONFIRMATION
++  return LUNA_OPERATION_EVENTS.INFORMATIONAL_QUERY
++}
+diff --git a/server/lib/luna/operationEvents.js b/server/lib/luna/operationEvents.js
+new file mode 100644
+index 0000000..5c6cdd0
+--- /dev/null
++++ b/server/lib/luna/operationEvents.js
+@@ -0,0 +1,40 @@
++export const LUNA_OPERATION_EVENTS = Object.freeze({
++  START_OPERATION: 'START_OPERATION',
++  SET_CUSTOMER: 'SET_CUSTOMER',
++  SET_PET: 'SET_PET',
++  SELECT_SERVICE: 'SELECT_SERVICE',
++  SELECT_PRODUCT: 'SELECT_PRODUCT',
++  SELECT_TIME: 'SELECT_TIME',
++  REJECT_TIME: 'REJECT_TIME',
++  SET_TRANSPORT: 'SET_TRANSPORT',
++  SET_ADDRESS: 'SET_ADDRESS',
++  ADD_NOTE: 'ADD_NOTE',
++  ADD_ITEM: 'ADD_ITEM',
++  REMOVE_ITEM: 'REMOVE_ITEM',
++  INFORMATIONAL_QUERY: 'INFORMATIONAL_QUERY',
++  REQUEST_CONFIRMATION: 'REQUEST_CONFIRMATION',
++  CONFIRM_OPERATION: 'CONFIRM_OPERATION',
++  CONFIRM_SUCCEEDED: 'CONFIRM_SUCCEEDED',
++  CONFIRM_FAILED: 'CONFIRM_FAILED',
++  CANCEL_OPERATION: 'CANCEL_OPERATION',
++  REQUEST_HUMAN: 'REQUEST_HUMAN',
++  RESET_FAILURE: 'RESET_FAILURE',
++})
++
++const VALUES = new Set(Object.values(LUNA_OPERATION_EVENTS))
++
++export function isLunaOperationEvent(value) {
++  return VALUES.has(String(value || '').trim())
++}
++
++export function createOperationEvent(type, payload = {}, metadata = {}) {
++  const normalizedType = String(type || '').trim()
++  if (!isLunaOperationEvent(normalizedType)) {
++    throw new TypeError(`Unknown Luna operation event: ${normalizedType || '<empty>'}`)
++  }
++  return {
++    type: normalizedType,
++    payload: payload && typeof payload === 'object' && !Array.isArray(payload) ? payload : {},
++    metadata: metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {},
++  }
++}
+diff --git a/server/lib/luna/operationReducer.js b/server/lib/luna/operationReducer.js
+new file mode 100644
+index 0000000..a10a811
+--- /dev/null
++++ b/server/lib/luna/operationReducer.js
+@@ -0,0 +1,270 @@
++import { LunaError, LUNA_ERROR_CODES } from './errors.js'
++import { LUNA_OPERATION_EVENTS, createOperationEvent } from './operationEvents.js'
++import { createOperationState } from './operationState.js'
++
++const TERMINAL = new Set(['confirmed', 'cancelled', 'human_handoff'])
++
++function text(value, max = 500) {
++  return String(value ?? '').trim().slice(0, max)
++}
++
++function assertMutable(state, eventType) {
++  if (!TERMINAL.has(state.status)) return
++  if (state.status === 'confirmed' && eventType === LUNA_OPERATION_EVENTS.CONFIRM_OPERATION) return
++  throw new LunaError(
++    LUNA_ERROR_CODES.INVALID_STATE_TRANSITION,
++    `Cannot apply ${eventType} while operation is ${state.status}.`,
++    { recoverable: false, details: { status: state.status, event: eventType } },
++  )
++}
++
++function withLedger(state, event, patch = {}, options = {}) {
++  const changed = options.changed !== false
++  const nextVersion = changed ? state.version + 1 : state.version
++  return createOperationState({
++    ...state,
++    ...patch,
++    version: nextVersion,
++    ledger: [
++      ...state.ledger,
++      {
++        event: event.type,
++        version: nextVersion,
++        source: text(event.metadata?.source, 80) || null,
++        at: text(event.metadata?.at, 80) || null,
++      },
++    ].slice(-100),
++  })
++}
++
++function totalsForItems(items = [], currentTotals = {}) {
++  const subtotal = items.reduce((sum, item) => {
++    const quantity = Math.max(1, Number(item.quantity || 1) || 1)
++    const unitPrice = Math.max(0, Number(item.unit_price ?? item.price ?? 0) || 0)
++    const itemTotal = Math.max(0, Number(item.total) || (unitPrice * quantity))
++    return sum + itemTotal
++  }, 0)
++  const transport = Math.max(0, Number(currentTotals.transport || 0) || 0)
++  const discounts = Math.max(0, Number(currentTotals.discounts || 0) || 0)
++  return {
++    subtotal,
++    transport,
++    discounts,
++    total: Math.max(0, subtotal + transport - discounts),
++  }
++}
++
++function validateItemForState(state, item = {}) {
++  const kind = text(item.kind || item.type || item.item_type, 60).toLowerCase()
++  const id = text(item.id || item.catalog_id || item.product_id || item.service_id, 120)
++  if (!id) {
++    throw new LunaError(LUNA_ERROR_CODES.CATALOG_ITEM_NOT_FOUND, 'A catalog-backed item requires an id.', {
++      recoverable: true,
++      userActionRequired: true,
++    })
++  }
++  if (state.type === 'service_booking' || state.type === 'veterinary_booking') {
++    if (!['service', 'additional_service', 'veterinary_service'].includes(kind)) {
++      throw new LunaError(LUNA_ERROR_CODES.CATALOG_TYPE_MISMATCH, 'Only service items can be added to a booking.', {
++        recoverable: true,
++        details: { operation_type: state.type, item_kind: kind },
++      })
++    }
++  }
++  if (state.type === 'product_order' && !['product', 'feed'].includes(kind)) {
++    throw new LunaError(LUNA_ERROR_CODES.CATALOG_TYPE_MISMATCH, 'Only sellable products can be added to a product order.', {
++      recoverable: true,
++      details: { operation_type: state.type, item_kind: kind },
++    })
++  }
++}
++
++export function reduceOperation(currentState = {}, eventInput = {}) {
++  const state = createOperationState(currentState)
++  const event = createOperationEvent(eventInput.type, eventInput.payload, eventInput.metadata)
++  assertMutable(state, event.type)
++
++  switch (event.type) {
++    case LUNA_OPERATION_EVENTS.START_OPERATION:
++      return withLedger(state, event, {
++        operation_id: text(event.payload.operation_id || event.payload.operationId, 160) || state.operation_id,
++        type: event.payload.type || state.type,
++        status: 'collecting_data',
++        last_error: null,
++      })
++
++    case LUNA_OPERATION_EVENTS.SET_CUSTOMER:
++      return withLedger(state, event, { customer: { ...state.customer, ...event.payload } })
++
++    case LUNA_OPERATION_EVENTS.SET_PET:
++      return withLedger(state, event, { pet: { ...state.pet, ...event.payload } })
++
++    case LUNA_OPERATION_EVENTS.SELECT_SERVICE:
++      return withLedger(state, event, {
++        type: event.payload.operation_type || (event.payload.veterinary ? 'veterinary_booking' : 'service_booking'),
++        status: 'selecting_schedule',
++        metadata: {
++          ...state.metadata,
++          service_type: text(event.payload.service_type || event.payload.name, 240) || null,
++          service_modality: text(event.payload.modality, 120) || state.metadata.service_modality || null,
++        },
++      })
++
++    case LUNA_OPERATION_EVENTS.SELECT_PRODUCT:
++      return withLedger(state, event, { type: 'product_order', status: 'preparing_summary' })
++
++    case LUNA_OPERATION_EVENTS.SELECT_TIME: {
++      const scheduledAt = text(event.payload.scheduled_at || event.payload.datetime || event.payload.time, 100)
++      if (!scheduledAt) {
++        throw new LunaError(LUNA_ERROR_CODES.MISSING_REQUIRED_FIELD, 'SELECT_TIME requires scheduled_at.', {
++          recoverable: true,
++          userActionRequired: true,
++          details: { field: 'scheduled_at' },
++        })
++      }
++      if (state.rejected_slots.includes(scheduledAt)) {
++        throw new LunaError(LUNA_ERROR_CODES.SLOT_UNAVAILABLE, 'The selected slot was already rejected as unavailable.', {
++          recoverable: true,
++          userActionRequired: true,
++          details: { scheduled_at: scheduledAt },
++        })
++      }
++      return withLedger(state, event, {
++        schedule: { ...state.schedule, ...event.payload, scheduled_at: scheduledAt },
++        status: 'preparing_summary',
++        last_error: null,
++      })
++    }
++
++    case LUNA_OPERATION_EVENTS.REJECT_TIME: {
++      const scheduledAt = text(event.payload.scheduled_at || state.schedule.scheduled_at, 100)
++      return withLedger(state, event, {
++        schedule: scheduledAt === state.schedule.scheduled_at ? {} : state.schedule,
++        rejected_slots: [...new Set([...state.rejected_slots, scheduledAt].filter(Boolean))],
++        status: 'selecting_schedule',
++        last_error: {
++          code: LUNA_ERROR_CODES.SLOT_UNAVAILABLE,
++          recoverable: true,
++          details: { scheduled_at: scheduledAt },
++        },
++      })
++    }
++
++    case LUNA_OPERATION_EVENTS.SET_TRANSPORT:
++      return withLedger(state, event, { transport: { ...state.transport, ...event.payload } })
++
++    case LUNA_OPERATION_EVENTS.SET_ADDRESS:
++      return withLedger(state, event, {
++        transport: { ...state.transport, address: { ...(state.transport.address || {}), ...event.payload } },
++      })
++
++    case LUNA_OPERATION_EVENTS.ADD_NOTE: {
++      const note = text(event.payload.text || event.payload.note, 500)
++      if (!note) {
++        throw new LunaError(LUNA_ERROR_CODES.MISSING_REQUIRED_FIELD, 'ADD_NOTE requires text.', {
++          recoverable: true,
++          userActionRequired: true,
++          details: { field: 'text' },
++        })
++      }
++      return withLedger(state, event, {
++        notes: [...state.notes, { text: note }],
++        status: state.status === 'awaiting_confirmation' ? 'awaiting_confirmation' : state.status,
++        last_error: null,
++      })
++    }
++
++    case LUNA_OPERATION_EVENTS.ADD_ITEM: {
++      validateItemForState(state, event.payload)
++      const itemId = text(event.payload.id || event.payload.catalog_id || event.payload.product_id || event.payload.service_id, 120)
++      const withoutExisting = state.items.filter((item) => item.id !== itemId)
++      const items = [...withoutExisting, { ...event.payload, id: itemId }]
++      return withLedger(state, event, {
++        items,
++        totals: totalsForItems(items, state.totals),
++        status: state.status === 'awaiting_confirmation' ? 'awaiting_confirmation' : 'preparing_summary',
++        last_error: null,
++      })
++    }
++
++    case LUNA_OPERATION_EVENTS.REMOVE_ITEM: {
++      const itemId = text(event.payload.id || event.payload.catalog_id, 120)
++      const items = state.items.filter((item) => item.id !== itemId)
++      return withLedger(state, event, {
++        items,
++        totals: totalsForItems(items, state.totals),
++      })
++    }
++
++    case LUNA_OPERATION_EVENTS.INFORMATIONAL_QUERY:
++      return withLedger(state, event, {}, { changed: false })
++
++    case LUNA_OPERATION_EVENTS.REQUEST_CONFIRMATION:
++      return withLedger(state, event, { status: 'awaiting_confirmation', last_error: null })
++
++    case LUNA_OPERATION_EVENTS.CONFIRM_OPERATION:
++      if (state.status === 'confirmed') {
++        return withLedger(state, event, {
++          metadata: { ...state.metadata, duplicate_confirmation_ignored: true },
++        }, { changed: false })
++      }
++      if (state.status !== 'awaiting_confirmation') {
++        throw new LunaError(LUNA_ERROR_CODES.INVALID_STATE_TRANSITION, 'Operation is not ready for confirmation.', {
++          recoverable: true,
++          userActionRequired: true,
++          details: { status: state.status },
++        })
++      }
++      return withLedger(state, event, { status: 'confirming', last_error: null })
++
++    case LUNA_OPERATION_EVENTS.CONFIRM_SUCCEEDED: {
++      const persistence = {
++        ...state.persistence,
++        sale_id: text(event.payload.sale_id, 160) || state.persistence.sale_id || null,
++        order_id: text(event.payload.order_id, 160) || state.persistence.order_id || null,
++        appointment_id: text(event.payload.appointment_id, 160) || state.persistence.appointment_id || null,
++        commit_id: text(event.payload.commit_id, 160) || state.persistence.commit_id || null,
++      }
++      const hasPrimaryId = state.type === 'product_order'
++        ? Boolean(persistence.sale_id || persistence.order_id)
++        : Boolean(persistence.appointment_id && (persistence.sale_id || persistence.order_id))
++      if (!hasPrimaryId) {
++        throw new LunaError(LUNA_ERROR_CODES.PERSISTENCE_PARTIAL_FAILURE, 'Confirmation succeeded without the required persistence ids.', {
++          recoverable: false,
++          details: { operation_type: state.type, persistence },
++        })
++      }
++      return withLedger(state, event, { status: 'confirmed', persistence, last_error: null })
++    }
++
++    case LUNA_OPERATION_EVENTS.CONFIRM_FAILED:
++      return withLedger(state, event, {
++        status: event.payload.recoverable === false ? 'failed' : 'awaiting_confirmation',
++        last_error: event.payload.error || {
++          code: LUNA_ERROR_CODES.TOOL_FAILED,
++          recoverable: event.payload.recoverable !== false,
++        },
++      })
++
++    case LUNA_OPERATION_EVENTS.CANCEL_OPERATION:
++      return withLedger(state, event, { status: 'cancelled', last_error: null })
++
++    case LUNA_OPERATION_EVENTS.REQUEST_HUMAN:
++      return withLedger(state, event, {
++        status: 'human_handoff',
++        metadata: { ...state.metadata, handoff_target: text(event.payload.target, 120) || null },
++      })
++
++    case LUNA_OPERATION_EVENTS.RESET_FAILURE:
++      if (state.status !== 'failed') {
++        throw new LunaError(LUNA_ERROR_CODES.INVALID_STATE_TRANSITION, 'Only failed operations can be reset.', {
++          recoverable: false,
++          details: { status: state.status },
++        })
++      }
++      return withLedger(state, event, { status: 'collecting_data', last_error: null })
++
++    default:
++      return state
++  }
++}
+diff --git a/server/lib/luna/operationState.js b/server/lib/luna/operationState.js
+new file mode 100644
+index 0000000..3f0b601
+--- /dev/null
++++ b/server/lib/luna/operationState.js
+@@ -0,0 +1,122 @@
++import { createHash } from 'node:crypto'
++
++const OPERATION_TYPES = new Set([
++  'unknown',
++  'service_booking',
++  'veterinary_booking',
++  'product_order',
++])
++
++const OPERATION_STATUSES = new Set([
++  'idle',
++  'collecting_data',
++  'resolving_catalog',
++  'selecting_schedule',
++  'preparing_summary',
++  'awaiting_confirmation',
++  'confirming',
++  'confirmed',
++  'cancelled',
++  'failed',
++  'human_handoff',
++])
++
++function objectValue(value) {
++  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
++}
++
++function text(value, max = 300) {
++  return String(value ?? '').trim().slice(0, max)
++}
++
++function finiteNumber(value, fallback = 0) {
++  const parsed = Number(value)
++  return Number.isFinite(parsed) ? parsed : fallback
++}
++
++function normalizeItem(item = {}) {
++  const source = objectValue(item)
++  return {
++    id: text(source.id || source.catalog_id || source.product_id || source.service_id, 120) || null,
++    kind: text(source.kind || source.type || source.item_type, 60) || 'unknown',
++    name: text(source.name || source.product_name || source.service_name, 240) || null,
++    quantity: Math.max(1, finiteNumber(source.quantity, 1)),
++    unit_price: Math.max(0, finiteNumber(source.unit_price ?? source.price ?? source.default_price, 0)),
++    total: Math.max(0, finiteNumber(source.total, finiteNumber(source.unit_price ?? source.price ?? source.default_price, 0) * Math.max(1, finiteNumber(source.quantity, 1)))),
++    metadata: objectValue(source.metadata),
++  }
++}
++
++function normalizeNotes(notes) {
++  const values = Array.isArray(notes) ? notes : (notes ? [notes] : [])
++  return values
++    .map((note) => text(typeof note === 'object' ? note.text : note, 500))
++    .filter(Boolean)
++    .map((note) => ({ text: note }))
++}
++
++export function createOperationState(input = {}) {
++  const source = objectValue(input)
++  const type = OPERATION_TYPES.has(source.type) ? source.type : 'unknown'
++  const status = OPERATION_STATUSES.has(source.status) ? source.status : 'idle'
++  const items = (Array.isArray(source.items) ? source.items : []).map(normalizeItem)
++  const subtotal = items.reduce((sum, item) => sum + item.total, 0)
++  const totalsSource = objectValue(source.totals)
++  const total = Math.max(0, finiteNumber(totalsSource.total, subtotal + finiteNumber(totalsSource.transport, 0)))
++
++  return {
++    operation_id: text(source.operation_id || source.operationId, 160) || null,
++    tenant_id: text(source.tenant_id || source.tenantId, 160) || null,
++    session_id: text(source.session_id || source.sessionId, 160) || null,
++    module_id: text(source.module_id || source.moduleId, 80) || 'petshop',
++    type,
++    status,
++    version: Math.max(0, Math.trunc(finiteNumber(source.version, 0))),
++    customer: objectValue(source.customer),
++    pet: objectValue(source.pet),
++    items,
++    schedule: objectValue(source.schedule),
++    transport: objectValue(source.transport),
++    notes: normalizeNotes(source.notes),
++    totals: {
++      subtotal: Math.max(0, finiteNumber(totalsSource.subtotal, subtotal)),
++      transport: Math.max(0, finiteNumber(totalsSource.transport, 0)),
++      discounts: Math.max(0, finiteNumber(totalsSource.discounts, 0)),
++      total,
++    },
++    required_fields: Array.isArray(source.required_fields)
++      ? source.required_fields.map((field) => text(field, 100)).filter(Boolean)
++      : [],
++    persistence: objectValue(source.persistence),
++    last_error: source.last_error && typeof source.last_error === 'object' ? source.last_error : null,
++    rejected_slots: Array.isArray(source.rejected_slots)
++      ? source.rejected_slots.map((slot) => text(slot, 80)).filter(Boolean)
++      : [],
++    ledger: Array.isArray(source.ledger) ? source.ledger.slice(-100) : [],
++    metadata: objectValue(source.metadata),
++  }
++}
++
++export function isTerminalOperationState(state = {}) {
++  return ['confirmed', 'cancelled', 'human_handoff'].includes(createOperationState(state).status)
++}
++
++export function operationStateFingerprint(state = {}) {
++  const normalized = createOperationState(state)
++  const canonical = JSON.stringify({
++    operation_id: normalized.operation_id,
++    type: normalized.type,
++    status: normalized.status,
++    version: normalized.version,
++    item_ids: normalized.items.map((item) => item.id || item.name),
++    schedule: normalized.schedule,
++    transport: normalized.transport,
++    notes: normalized.notes,
++    totals: normalized.totals,
++    persistence: normalized.persistence,
++  })
++  return createHash('sha256').update(canonical).digest('hex').slice(0, 24)
++}
++
++export const LUNA_OPERATION_TYPES = Object.freeze([...OPERATION_TYPES])
++export const LUNA_OPERATION_STATUSES = Object.freeze([...OPERATION_STATUSES])
+diff --git a/server/lib/luna/scenarioRunner.js b/server/lib/luna/scenarioRunner.js
+new file mode 100644
+index 0000000..e4acc4d
+--- /dev/null
++++ b/server/lib/luna/scenarioRunner.js
+@@ -0,0 +1,58 @@
++import { reduceOperation } from './operationReducer.js'
++import { createOperationState } from './operationState.js'
++import { normalizeLunaError } from './errors.js'
++
++function objectValue(value) {
++  return value && typeof value === 'object' && !Array.isArray(value) ? value : {}
++}
++
++function matchesSubset(actual, expected, path = '') {
++  if (Array.isArray(expected)) {
++    if (!Array.isArray(actual)) return [`${path || '<root>'}: expected array`]
++    const errors = []
++    expected.forEach((entry, index) => {
++      errors.push(...matchesSubset(actual[index], entry, `${path}[${index}]`))
++    })
++    return errors
++  }
++  if (expected && typeof expected === 'object') {
++    if (!actual || typeof actual !== 'object') return [`${path || '<root>'}: expected object`]
++    return Object.entries(expected).flatMap(([key, value]) => (
++      matchesSubset(actual[key], value, path ? `${path}.${key}` : key)
++    ))
++  }
++  return Object.is(actual, expected)
++    ? []
++    : [`${path || '<root>'}: expected ${JSON.stringify(expected)}, received ${JSON.stringify(actual)}`]
++}
++
++export function runOperationScenario(scenarioInput = {}) {
++  const scenario = objectValue(scenarioInput)
++  let state = createOperationState(scenario.initial_state)
++  let caughtError = null
++  try {
++    for (const event of Array.isArray(scenario.events) ? scenario.events : []) {
++      state = reduceOperation(state, event)
++    }
++  } catch (error) {
++    caughtError = normalizeLunaError(error)
++  }
++
++  const expectedError = scenario.expected_error
++  if (expectedError) {
++    if (!caughtError) {
++      return { ok: false, name: scenario.name || 'unnamed', state, errors: [`Expected error ${expectedError}, but scenario completed.`] }
++    }
++    if (caughtError.code !== expectedError) {
++      return { ok: false, name: scenario.name || 'unnamed', state, error: caughtError, errors: [`Expected error ${expectedError}, received ${caughtError.code}.`] }
++    }
++    return { ok: true, name: scenario.name || 'unnamed', state, error: caughtError, errors: [] }
++  }
++
++  if (caughtError) {
++    return { ok: false, name: scenario.name || 'unnamed', state, error: caughtError, errors: [`Unexpected ${caughtError.code}: ${caughtError.message}`] }
++  }
++
++  const errors = matchesSubset(state, objectValue(scenario.expected))
++  return { ok: errors.length === 0, name: scenario.name || 'unnamed', state, errors }
++}
+diff --git a/server/lib/luna/trace.js b/server/lib/luna/trace.js
+new file mode 100644
+index 0000000..7826fec
+--- /dev/null
++++ b/server/lib/luna/trace.js
+@@ -0,0 +1,92 @@
++import { createHash, randomUUID } from 'node:crypto'
++import { createOperationState, operationStateFingerprint } from './operationState.js'
++
++function text(value, max = 400) {
++  return String(value ?? '').trim().slice(0, max)
++}
++
++function nowIso(clock) {
++  const value = typeof clock === 'function' ? clock() : new Date()
++  return value instanceof Date ? value.toISOString() : new Date(value).toISOString()
++}
++
++function messageFingerprint(message = '') {
++  const normalized = text(message, 4000).replace(/\s+/g, ' ')
++  return createHash('sha256').update(normalized).digest('hex').slice(0, 24)
++}
++
++export function createLunaTurnTrace({
++  traceId,
++  sessionId,
++  tenantId,
++  moduleId = 'petshop',
++  message = '',
++  stateBefore = {},
++  clock,
++} = {}) {
++  const before = createOperationState(stateBefore)
++  return {
++    trace_id: text(traceId, 160) || `luna_${randomUUID()}`,
++    turn_id: `turn_${randomUUID()}`,
++    session_id: text(sessionId, 160) || null,
++    tenant_id: text(tenantId, 160) || null,
++    module_id: text(moduleId, 80) || 'petshop',
++    started_at: nowIso(clock),
++    finished_at: null,
++    duration_ms: 0,
++    message: {
++      fingerprint: messageFingerprint(message),
++      length: String(message || '').length,
++    },
++    state_before: {
++      status: before.status,
++      type: before.type,
++      version: before.version,
++      fingerprint: operationStateFingerprint(before),
++    },
++    state_after: null,
++    semantic_event: null,
++    tools: [],
++    outcome: 'running',
++    verifier: null,
++    error: null,
++  }
++}
++
++export function completeLunaTurnTrace(trace = {}, {
++  stateAfter = {},
++  semanticEvent = null,
++  toolRuns = [],
++  outcome = 'ok',
++  verifier = null,
++  error = null,
++  clock,
++} = {}) {
++  const after = createOperationState(stateAfter)
++  const finishedAt = nowIso(clock)
++  const startedAtMs = Date.parse(trace.started_at || finishedAt)
++  const finishedAtMs = Date.parse(finishedAt)
++  return {
++    ...trace,
++    finished_at: finishedAt,
++    duration_ms: Math.max(0, finishedAtMs - startedAtMs),
++    state_after: {
++      status: after.status,
++      type: after.type,
++      version: after.version,
++      fingerprint: operationStateFingerprint(after),
++    },
++    semantic_event: text(semanticEvent, 100) || null,
++    tools: (Array.isArray(toolRuns) ? toolRuns : []).map((run) => ({
++      name: text(run?.name, 120) || 'unknown',
++      ok: run?.ok !== false,
++      status: text(run?.status, 100) || null,
++      duration_ms: Math.max(0, Number(run?.duration_ms || 0) || 0),
++    })),
++    outcome: text(outcome, 80) || 'ok',
++    verifier: verifier && typeof verifier === 'object' ? verifier : null,
++    error: error && typeof error === 'object'
++      ? error
++      : (error ? { message: text(error, 500) } : null),
++  }
++}
+diff --git a/server/lib/luna/verifier.js b/server/lib/luna/verifier.js
+new file mode 100644
+index 0000000..2d9cb82
+--- /dev/null
++++ b/server/lib/luna/verifier.js
+@@ -0,0 +1,77 @@
++import { createOperationState } from './operationState.js'
++import { LUNA_ERROR_CODES } from './errors.js'
++
++function text(value, max = 1000) {
++  return String(value ?? '').trim().slice(0, max)
++}
++
++function issue(code, severity, message, details = {}) {
++  return { code, severity, message, details }
++}
++
++export function verifyOperationTurn({
++  stateBefore = {},
++  stateAfter = {},
++  orderResult = null,
++  reply = '',
++  toolRuns = [],
++} = {}) {
++  const before = createOperationState(stateBefore)
++  const after = createOperationState(stateAfter)
++  const issues = []
++  const result = orderResult && typeof orderResult === 'object' ? orderResult : {}
++  const replyText = text(reply, 8000).toLowerCase()
++  const claimsConfirmation = /\b(?:confirmad[oa]|agendad[oa]|pedido conclu[ií]do|pronto[,!])\b/.test(replyText)
++  const persistence = {
++    sale_id: result.sale_id || after.persistence.sale_id || null,
++    order_id: result.order_id || after.persistence.order_id || null,
++    appointment_id: result.appointment_id || after.persistence.appointment_id || null,
++    commit_id: result.commit_id || after.persistence.commit_id || null,
++  }
++
++  if (after.status === 'confirmed') {
++    const hasRequiredIds = after.type === 'product_order'
++      ? Boolean(persistence.sale_id || persistence.order_id)
++      : Boolean(persistence.appointment_id && (persistence.sale_id || persistence.order_id))
++    if (!hasRequiredIds) {
++      issues.push(issue(
++        LUNA_ERROR_CODES.PERSISTENCE_PARTIAL_FAILURE,
++        'error',
++        'Operation is marked confirmed without the required persisted ids.',
++        { operation_type: after.type, persistence },
++      ))
++    }
++  }
++
++  if (claimsConfirmation && !orderResult && after.status !== 'confirmed') {
++    issues.push(issue(
++      LUNA_ERROR_CODES.PERSISTENCE_PARTIAL_FAILURE,
++      'error',
++      'Reply claims success while the operation is not confirmed.',
++      { before_status: before.status, after_status: after.status },
++    ))
++  }
++
++  const failedTools = (Array.isArray(toolRuns) ? toolRuns : []).filter((run) => run?.ok === false)
++  if (failedTools.length) {
++    issues.push(issue(
++      LUNA_ERROR_CODES.TOOL_FAILED,
++      'warning',
++      'One or more tools failed during the turn.',
++      { tools: failedTools.map((run) => run?.name || 'unknown') },
++    ))
++  }
++
++  if (after.totals.total < 0 || after.totals.subtotal < 0) {
++    issues.push(issue(LUNA_ERROR_CODES.TOTAL_MISMATCH, 'error', 'Operation totals cannot be negative.'))
++  }
++
++  const severity = issues.some((entry) => entry.severity === 'error')
++    ? 'error'
++    : (issues.length ? 'warning' : 'ok')
++  return {
++    ok: severity !== 'error',
++    severity,
++    issues,
++  }
++}
+diff --git a/test/luna/fixtures/additional-service-requires-catalog-item.json b/test/luna/fixtures/additional-service-requires-catalog-item.json
+new file mode 100644
+index 0000000..069bad2
+--- /dev/null
++++ b/test/luna/fixtures/additional-service-requires-catalog-item.json
+@@ -0,0 +1,19 @@
++{
++  "name": "additional_service_requires_catalog_item",
++  "initial_state": {
++    "operation_id": "op_addon",
++    "type": "service_booking",
++    "status": "awaiting_confirmation"
++  },
++  "events": [
++    {
++      "type": "ADD_ITEM",
++      "payload": {
++        "kind": "additional_service",
++        "name": "Escovação dental",
++        "unit_price": 15
++      }
++    }
++  ],
++  "expected_error": "CATALOG_ITEM_NOT_FOUND"
++}
+diff --git a/test/luna/fixtures/confirmation-after-motodog.json b/test/luna/fixtures/confirmation-after-motodog.json
+new file mode 100644
+index 0000000..102fb0d
+--- /dev/null
++++ b/test/luna/fixtures/confirmation-after-motodog.json
+@@ -0,0 +1,34 @@
++{
++  "name": "confirmation_after_motodog",
++  "initial_state": {
++    "operation_id": "op_motodog",
++    "type": "service_booking",
++    "status": "awaiting_confirmation",
++    "version": 4,
++    "transport": { "mode": "buscar_e_levar", "price": 20 },
++    "totals": { "subtotal": 55, "transport": 20, "total": 75 }
++  },
++  "events": [
++    { "type": "CONFIRM_OPERATION" },
++    {
++      "type": "CONFIRM_SUCCEEDED",
++      "payload": {
++        "sale_id": "sale_1",
++        "order_id": "order_1",
++        "appointment_id": "appointment_1",
++        "commit_id": "commit_1"
++      }
++    }
++  ],
++  "expected": {
++    "status": "confirmed",
++    "transport": { "mode": "buscar_e_levar", "price": 20 },
++    "totals": { "total": 75 },
++    "persistence": {
++      "sale_id": "sale_1",
++      "order_id": "order_1",
++      "appointment_id": "appointment_1",
++      "commit_id": "commit_1"
++    }
++  }
++}
+diff --git a/test/luna/fixtures/duplicate-confirmation.json b/test/luna/fixtures/duplicate-confirmation.json
+new file mode 100644
+index 0000000..16bae4d
+--- /dev/null
++++ b/test/luna/fixtures/duplicate-confirmation.json
+@@ -0,0 +1,23 @@
++{
++  "name": "duplicate_confirmation_is_idempotent",
++  "initial_state": {
++    "operation_id": "op_confirmed",
++    "type": "service_booking",
++    "status": "confirmed",
++    "version": 8,
++    "persistence": {
++      "sale_id": "sale_1",
++      "order_id": "order_1",
++      "appointment_id": "appointment_1"
++    }
++  },
++  "events": [
++    { "type": "CONFIRM_OPERATION" }
++  ],
++  "expected": {
++    "status": "confirmed",
++    "version": 8,
++    "metadata": { "duplicate_confirmation_ignored": true },
++    "persistence": { "appointment_id": "appointment_1" }
++  }
++}
+diff --git a/test/luna/fixtures/informational-question.json b/test/luna/fixtures/informational-question.json
+new file mode 100644
+index 0000000..b240533
+--- /dev/null
++++ b/test/luna/fixtures/informational-question.json
+@@ -0,0 +1,18 @@
++{
++  "name": "informational_question_is_not_note",
++  "initial_state": {
++    "operation_id": "op_info",
++    "type": "service_booking",
++    "status": "awaiting_confirmation",
++    "version": 2,
++    "notes": []
++  },
++  "events": [
++    { "type": "INFORMATIONAL_QUERY", "payload": { "question": "O banho inclui tosa higiênica?" } }
++  ],
++  "expected": {
++    "status": "awaiting_confirmation",
++    "version": 2,
++    "notes": []
++  }
++}
+diff --git a/test/luna/fixtures/note-before-confirmation.json b/test/luna/fixtures/note-before-confirmation.json
+new file mode 100644
+index 0000000..564504c
+--- /dev/null
++++ b/test/luna/fixtures/note-before-confirmation.json
+@@ -0,0 +1,18 @@
++{
++  "name": "note_before_confirmation",
++  "initial_state": {
++    "operation_id": "op_note",
++    "type": "service_booking",
++    "status": "awaiting_confirmation",
++    "version": 3,
++    "notes": []
++  },
++  "events": [
++    { "type": "ADD_NOTE", "payload": { "text": "sem perfume" } }
++  ],
++  "expected": {
++    "status": "awaiting_confirmation",
++    "version": 4,
++    "notes": [{ "text": "sem perfume" }]
++  }
++}
+diff --git a/test/luna/fixtures/product-cannot-become-service.json b/test/luna/fixtures/product-cannot-become-service.json
+new file mode 100644
+index 0000000..f541f7d
+--- /dev/null
++++ b/test/luna/fixtures/product-cannot-become-service.json
+@@ -0,0 +1,19 @@
++{
++  "name": "product_cannot_become_service",
++  "initial_state": {
++    "operation_id": "op_catalog",
++    "type": "service_booking",
++    "status": "awaiting_confirmation"
++  },
++  "events": [
++    {
++      "type": "ADD_ITEM",
++      "payload": {
++        "id": "machine_1",
++        "kind": "product",
++        "name": "Máquina de tosa"
++      }
++    }
++  ],
++  "expected_error": "CATALOG_TYPE_MISMATCH"
++}
+diff --git a/test/luna/fixtures/rejected-slot-cannot-return.json b/test/luna/fixtures/rejected-slot-cannot-return.json
+new file mode 100644
+index 0000000..594f11e
+--- /dev/null
++++ b/test/luna/fixtures/rejected-slot-cannot-return.json
+@@ -0,0 +1,13 @@
++{
++  "name": "rejected_slot_cannot_return",
++  "initial_state": {
++    "operation_id": "op_slot_reuse",
++    "type": "service_booking",
++    "status": "selecting_schedule",
++    "rejected_slots": ["2026-07-26T10:00:00-03:00"]
++  },
++  "events": [
++    { "type": "SELECT_TIME", "payload": { "scheduled_at": "2026-07-26T10:00:00-03:00" } }
++  ],
++  "expected_error": "SLOT_UNAVAILABLE"
++}
+diff --git a/test/luna/fixtures/rejected-slot.json b/test/luna/fixtures/rejected-slot.json
+new file mode 100644
+index 0000000..e93b445
+--- /dev/null
++++ b/test/luna/fixtures/rejected-slot.json
+@@ -0,0 +1,19 @@
++{
++  "name": "rejected_slot_is_removed",
++  "initial_state": {
++    "operation_id": "op_slot",
++    "type": "service_booking",
++    "status": "selecting_schedule",
++    "version": 1
++  },
++  "events": [
++    { "type": "SELECT_TIME", "payload": { "scheduled_at": "2026-07-26T10:00:00-03:00" } },
++    { "type": "REJECT_TIME", "payload": { "scheduled_at": "2026-07-26T10:00:00-03:00" } }
++  ],
++  "expected": {
++    "status": "selecting_schedule",
++    "schedule": {},
++    "rejected_slots": ["2026-07-26T10:00:00-03:00"],
++    "last_error": { "code": "SLOT_UNAVAILABLE" }
++  }
++}
+diff --git a/test/luna/fixtures/specific-grooming-mode.json b/test/luna/fixtures/specific-grooming-mode.json
+new file mode 100644
+index 0000000..873cabb
+--- /dev/null
++++ b/test/luna/fixtures/specific-grooming-mode.json
+@@ -0,0 +1,23 @@
++{
++  "name": "specific_grooming_mode_is_preserved",
++  "initial_state": {
++    "operation_id": "op_groom",
++    "type": "service_booking",
++    "status": "collecting_data"
++  },
++  "events": [
++    {
++      "type": "SELECT_SERVICE",
++      "payload": {
++        "service_type": "tosa",
++        "modality": "tosa tesoura"
++      }
++    },
++    { "type": "SET_PET", "payload": { "name": "Lola", "weight_kg": 4 } }
++  ],
++  "expected": {
++    "type": "service_booking",
++    "metadata": { "service_modality": "tosa tesoura" },
++    "pet": { "name": "Lola", "weight_kg": 4 }
++  }
++}
+diff --git a/test/luna/legacyAdapter.test.mjs b/test/luna/legacyAdapter.test.mjs
+new file mode 100644
+index 0000000..ea348b9
+--- /dev/null
++++ b/test/luna/legacyAdapter.test.mjs
+@@ -0,0 +1,54 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++
++import {
++  deriveLegacyOperationEvent,
++  operationStateFromLegacyContext,
++} from '../../server/lib/luna/index.js'
++
++test('adapter lê o contexto atual sem alterar a infraestrutura de agenda e estoque', () => {
++  const state = operationStateFromLegacyContext({
++    petbot_agent: {
++      version: 3,
++      pending_order: {
++        id: 'pending_1',
++        order: {
++          order_type: 'banho_tosa',
++          total: 75,
++          transport_mode: 'buscar_e_levar',
++          transport_price: 20,
++          scheduled_at: '2026-07-26T10:00:00-03:00',
++          items: [{ id: 'service_1', kind: 'service', name: 'Banho', unit_price: 55 }]
++        }
++      },
++      facts: {
++        pet_name: 'Thor',
++        species: 'dog',
++        weight_kg: 8,
++        service_notes: 'sem perfume'
++      }
++    }
++  }, {
++    tenantId: 'tenant_1',
++    sessionId: 'session_1',
++    moduleId: 'petshop'
++  })
++
++  assert.equal(state.operation_id, 'pending_1')
++  assert.equal(state.type, 'service_booking')
++  assert.equal(state.status, 'awaiting_confirmation')
++  assert.equal(state.schedule.scheduled_at, '2026-07-26T10:00:00-03:00')
++  assert.equal(state.transport.mode, 'buscar_e_levar')
++  assert.equal(state.items[0].id, 'service_1')
++  assert.deepEqual(state.notes, [{ text: 'sem perfume' }])
++})
++
++test('adapter prioriza confirmação explícita no trace legado', () => {
++  const event = deriveLegacyOperationEvent({
++    message: 'sim, confirmo',
++    pendingBefore: { id: 'pending_1' },
++    pendingAfter: { id: 'pending_1' },
++    turnSemantics: { action: 'correct', target: 'service_transport' },
++  })
++  assert.equal(event, 'CONFIRM_OPERATION')
++})
+diff --git a/test/luna/operationReducer.test.mjs b/test/luna/operationReducer.test.mjs
+new file mode 100644
+index 0000000..a185726
+--- /dev/null
++++ b/test/luna/operationReducer.test.mjs
+@@ -0,0 +1,97 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++
++import {
++  LUNA_ERROR_CODES,
++  LUNA_OPERATION_EVENTS,
++  LunaError,
++  createOperationState,
++  reduceOperation,
++} from '../../server/lib/luna/index.js'
++
++test('observação antes da confirmação atualiza o estado sem cancelar a operação', () => {
++  const initial = createOperationState({
++    operation_id: 'op_note',
++    type: 'service_booking',
++    status: 'awaiting_confirmation',
++    version: 3,
++  })
++
++  const next = reduceOperation(initial, {
++    type: LUNA_OPERATION_EVENTS.ADD_NOTE,
++    payload: { text: 'sem perfume' },
++  })
++
++  assert.equal(next.status, 'awaiting_confirmation')
++  assert.equal(next.version, 4)
++  assert.deepEqual(next.notes, [{ text: 'sem perfume' }])
++})
++
++test('horário rejeitado sai do estado e não pode ser selecionado novamente', () => {
++  const selected = reduceOperation({
++    operation_id: 'op_slot',
++    type: 'service_booking',
++    status: 'selecting_schedule',
++  }, {
++    type: LUNA_OPERATION_EVENTS.SELECT_TIME,
++    payload: { scheduled_at: '2026-07-26T10:00:00-03:00' },
++  })
++  const rejected = reduceOperation(selected, {
++    type: LUNA_OPERATION_EVENTS.REJECT_TIME,
++    payload: { scheduled_at: '2026-07-26T10:00:00-03:00' },
++  })
++
++  assert.equal(rejected.status, 'selecting_schedule')
++  assert.deepEqual(rejected.schedule, {})
++  assert.deepEqual(rejected.rejected_slots, ['2026-07-26T10:00:00-03:00'])
++  assert.throws(() => reduceOperation(rejected, {
++    type: LUNA_OPERATION_EVENTS.SELECT_TIME,
++    payload: { scheduled_at: '2026-07-26T10:00:00-03:00' },
++  }), (error) => error instanceof LunaError && error.code === LUNA_ERROR_CODES.SLOT_UNAVAILABLE)
++})
++
++test('produto físico não pode entrar em operação de serviço', () => {
++  assert.throws(() => reduceOperation({
++    operation_id: 'op_catalog',
++    type: 'service_booking',
++    status: 'awaiting_confirmation',
++  }, {
++    type: LUNA_OPERATION_EVENTS.ADD_ITEM,
++    payload: { id: 'machine_1', kind: 'product', name: 'Máquina de tosa' },
++  }), (error) => error instanceof LunaError && error.code === LUNA_ERROR_CODES.CATALOG_TYPE_MISMATCH)
++})
++
++test('confirmação só conclui com ids persistidos', () => {
++  const confirming = reduceOperation({
++    operation_id: 'op_confirm',
++    type: 'service_booking',
++    status: 'awaiting_confirmation',
++  }, { type: LUNA_OPERATION_EVENTS.CONFIRM_OPERATION })
++
++  assert.equal(confirming.status, 'confirming')
++  assert.throws(() => reduceOperation(confirming, {
++    type: LUNA_OPERATION_EVENTS.CONFIRM_SUCCEEDED,
++    payload: { sale_id: 'sale_1' },
++  }), (error) => error instanceof LunaError && error.code === LUNA_ERROR_CODES.PERSISTENCE_PARTIAL_FAILURE)
++
++  const confirmed = reduceOperation(confirming, {
++    type: LUNA_OPERATION_EVENTS.CONFIRM_SUCCEEDED,
++    payload: { sale_id: 'sale_1', order_id: 'order_1', appointment_id: 'appointment_1' },
++  })
++  assert.equal(confirmed.status, 'confirmed')
++  assert.equal(confirmed.persistence.appointment_id, 'appointment_1')
++})
++
++test('confirmação repetida é idempotente', () => {
++  const initial = createOperationState({
++    operation_id: 'op_done',
++    type: 'service_booking',
++    status: 'confirmed',
++    version: 7,
++    persistence: { sale_id: 'sale_1', appointment_id: 'appointment_1' },
++  })
++  const next = reduceOperation(initial, { type: LUNA_OPERATION_EVENTS.CONFIRM_OPERATION })
++  assert.equal(next.status, 'confirmed')
++  assert.equal(next.version, 7)
++  assert.equal(next.metadata.duplicate_confirmation_ignored, true)
++})
+diff --git a/test/luna/passiveIntegration.test.mjs b/test/luna/passiveIntegration.test.mjs
+new file mode 100644
+index 0000000..50cb652
+--- /dev/null
++++ b/test/luna/passiveIntegration.test.mjs
+@@ -0,0 +1,15 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++import { readFileSync } from 'node:fs'
++
++const chat = readFileSync(new URL('../../server/lib/chat.js', import.meta.url), 'utf8')
++const legacyAdapter = readFileSync(new URL('../../server/lib/luna/legacyAdapter.js', import.meta.url), 'utf8')
++
++test('foundation observa o fluxo atual sem substituir conexões de agenda, estoque e transação', () => {
++  assert.match(chat, /loadAppointmentsFresh\(/)
++  assert.match(chat, /createConfirmedPetshopOrderViaRpc\(/)
++  assert.match(chat, /loadProductsByIds\(/)
++  assert.match(chat, /operationStateFromLegacyContext\(sessionForAgent\.context/)
++  assert.match(chat, /luna_trace: lunaTrace/)
++  assert.doesNotMatch(legacyAdapter, /supabase|\.from\(|fetch\(/)
++})
+diff --git a/test/luna/scenarioRunner.test.mjs b/test/luna/scenarioRunner.test.mjs
+new file mode 100644
+index 0000000..c4a31bb
+--- /dev/null
++++ b/test/luna/scenarioRunner.test.mjs
+@@ -0,0 +1,22 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++
++import { runOperationScenario } from '../../server/lib/luna/index.js'
++
++test('scenario runner valida resultado parcial e erro esperado', () => {
++  const success = runOperationScenario({
++    name: 'simple_note',
++    initial_state: { type: 'service_booking', status: 'awaiting_confirmation' },
++    events: [{ type: 'ADD_NOTE', payload: { text: 'sem perfume' } }],
++    expected: { status: 'awaiting_confirmation', notes: [{ text: 'sem perfume' }] },
++  })
++  assert.equal(success.ok, true)
++
++  const expectedError = runOperationScenario({
++    name: 'wrong_kind',
++    initial_state: { type: 'service_booking', status: 'awaiting_confirmation' },
++    events: [{ type: 'ADD_ITEM', payload: { id: 'product_1', kind: 'product' } }],
++    expected_error: 'CATALOG_TYPE_MISMATCH',
++  })
++  assert.equal(expectedError.ok, true)
++})
+diff --git a/test/luna/trace.test.mjs b/test/luna/trace.test.mjs
+new file mode 100644
+index 0000000..b9b796c
+--- /dev/null
++++ b/test/luna/trace.test.mjs
+@@ -0,0 +1,51 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++
++import {
++  completeLunaTurnTrace,
++  createLunaTurnTrace,
++} from '../../server/lib/luna/index.js'
++
++test('trace usa identificadores únicos e não persiste a mensagem em texto puro', () => {
++  const state = { operation_id: 'op_1', type: 'service_booking', status: 'awaiting_confirmation' }
++  const first = createLunaTurnTrace({
++    sessionId: 'session_1',
++    tenantId: 'tenant_1',
++    message: 'sim, confirmo',
++    stateBefore: state,
++    clock: () => new Date('2026-07-24T12:00:00.000Z'),
++  })
++  const second = createLunaTurnTrace({
++    sessionId: 'session_1',
++    tenantId: 'tenant_1',
++    message: 'sim, confirmo',
++    stateBefore: state,
++    clock: () => new Date('2026-07-24T12:00:00.000Z'),
++  })
++
++  assert.notEqual(first.trace_id, second.trace_id)
++  assert.notEqual(first.turn_id, second.turn_id)
++  assert.equal(first.message.length, 13)
++  assert.equal(typeof first.message.fingerprint, 'string')
++  assert.doesNotMatch(JSON.stringify(first), /sim, confirmo/)
++})
++
++test('trace final registra transição, ferramentas e verificador', () => {
++  const start = createLunaTurnTrace({
++    stateBefore: { type: 'service_booking', status: 'awaiting_confirmation', version: 4 },
++    clock: () => new Date('2026-07-24T12:00:00.000Z'),
++  })
++  const finished = completeLunaTurnTrace(start, {
++    stateAfter: { type: 'service_booking', status: 'confirmed', version: 6 },
++    semanticEvent: 'CONFIRM_SUCCEEDED',
++    toolRuns: [{ name: 'confirm_service_booking', ok: true, duration_ms: 80 }],
++    verifier: { ok: true, severity: 'ok', issues: [] },
++    outcome: 'saved',
++    clock: () => new Date('2026-07-24T12:00:00.125Z'),
++  })
++
++  assert.equal(finished.duration_ms, 125)
++  assert.equal(finished.state_after.status, 'confirmed')
++  assert.equal(finished.semantic_event, 'CONFIRM_SUCCEEDED')
++  assert.deepEqual(finished.tools, [{ name: 'confirm_service_booking', ok: true, status: null, duration_ms: 80 }])
++})
+diff --git a/test/luna/verifier.test.mjs b/test/luna/verifier.test.mjs
+new file mode 100644
+index 0000000..3a151d1
+--- /dev/null
++++ b/test/luna/verifier.test.mjs
+@@ -0,0 +1,33 @@
++import assert from 'node:assert/strict'
++import test from 'node:test'
++
++import { verifyOperationTurn } from '../../server/lib/luna/index.js'
++
++test('verificador detecta resposta de confirmação sem persistência', () => {
++  const result = verifyOperationTurn({
++    stateBefore: { type: 'service_booking', status: 'awaiting_confirmation' },
++    stateAfter: { type: 'service_booking', status: 'awaiting_confirmation' },
++    reply: 'Pronto! O agendamento foi confirmado.',
++    orderResult: null,
++  })
++
++  assert.equal(result.ok, false)
++  assert.equal(result.severity, 'error')
++  assert.ok(result.issues.some((entry) => entry.code === 'PERSISTENCE_PARTIAL_FAILURE'))
++})
++
++test('verificador aprova confirmação respaldada por ids persistidos', () => {
++  const result = verifyOperationTurn({
++    stateBefore: { type: 'service_booking', status: 'confirming' },
++    stateAfter: {
++      type: 'service_booking',
++      status: 'confirmed',
++      persistence: { sale_id: 'sale_1', order_id: 'order_1', appointment_id: 'appointment_1' },
++    },
++    orderResult: { sale_id: 'sale_1', order_id: 'order_1', appointment_id: 'appointment_1' },
++    reply: 'Pronto! O agendamento foi confirmado.',
++  })
++
++  assert.equal(result.ok, true)
++  assert.deepEqual(result.issues, [])
++})

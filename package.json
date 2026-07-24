@@ -15,14 +15,17 @@
     "test:transactions": "node --test test/transactionalStatic.test.mjs",
     "test:e2e": "playwright test",
     "test:tenant": "node scripts/test-tenant-isolation.mjs",
-    "test:all": "npm run typecheck && npm run test && npm run test:petbot && npm run test:transactions && npm run build",
+    "test:all": "npm run typecheck && npm run test && npm run test:petbot && npm run test:luna && npm run test:transactions && npm run build",
     "typecheck": "tsc --noEmit",
     "build": "vite build",
     "preview": "vite preview",
     "test:petbot:legacy": "node --test test/petbotGuard.test.mjs",
     "test:petbot:live": "node scripts/eval-petbot-agent.mjs",
     "test:petbot:live-chat": "node --env-file=.env scripts/test-petbot-live-conversations.mjs --run",
-    "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs"
+    "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs",
+    "test:luna:unit": "node --test test/luna/*.test.mjs",
+    "test:luna:regressions": "node scripts/run-luna-scenarios.mjs",
+    "test:luna": "npm run test:luna:unit && npm run test:luna:regressions"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",

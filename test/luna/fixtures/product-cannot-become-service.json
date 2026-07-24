@@ -1,0 +1,19 @@
+{
+  "name": "product_cannot_become_service",
+  "initial_state": {
+    "operation_id": "op_catalog",
+    "type": "service_booking",
+    "status": "awaiting_confirmation"
+  },
+  "events": [
+    {
+      "type": "ADD_ITEM",
+      "payload": {
+        "id": "machine_1",
+        "kind": "product",
+        "name": "Máquina de tosa"
+      }
+    }
+  ],
+  "expected_error": "CATALOG_TYPE_MISMATCH"
+}

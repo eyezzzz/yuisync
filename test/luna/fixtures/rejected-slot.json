@@ -1,0 +1,19 @@
+{
+  "name": "rejected_slot_is_removed",
+  "initial_state": {
+    "operation_id": "op_slot",
+    "type": "service_booking",
+    "status": "selecting_schedule",
+    "version": 1
+  },
+  "events": [
+    { "type": "SELECT_TIME", "payload": { "scheduled_at": "2026-07-26T10:00:00-03:00" } },
+    { "type": "REJECT_TIME", "payload": { "scheduled_at": "2026-07-26T10:00:00-03:00" } }
+  ],
+  "expected": {
+    "status": "selecting_schedule",
+    "schedule": {},
+    "rejected_slots": ["2026-07-26T10:00:00-03:00"],
+    "last_error": { "code": "SLOT_UNAVAILABLE" }
+  }
+}
