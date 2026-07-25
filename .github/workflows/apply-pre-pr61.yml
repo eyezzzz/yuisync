@@ -1,0 +1,40 @@
+name: Apply Pre PR6.1 Changes
+
+on:
+  push:
+    branches:
+      - feat/pre-pr61-petshop-operations
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ !contains(github.event.head_commit.message, '[workspace-ready]') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/pre-pr61-petshop-operations
+          fetch-depth: 0
+
+      - name: Decode and validate patch
+        run: |
+          base64 --decode .github/pre-pr61.patch.gz.b64 | gzip --decompress > /tmp/pre-pr61.patch
+          git apply --check /tmp/pre-pr61.patch
+
+      - name: Apply implementation
+        run: |
+          git apply --index /tmp/pre-pr61.patch
+          rm -f .github/pre-pr61.patch.gz.b64
+          rm -f .github/workflows/apply-pre-pr61.yml
+          rm -f .github/workflows/pre-pr61-workspace.yml
+          git add -A
+          git diff --cached --check
+
+      - name: Publish branch implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "feat(petshop): prepare PR6.1 operational scheduling [workspace-ready]"
+          git push origin HEAD:feat/pre-pr61-petshop-operations
