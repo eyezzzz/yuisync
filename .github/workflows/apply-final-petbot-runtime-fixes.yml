@@ -1,9 +1,7 @@
 name: Apply Final PetBot Runtime Fixes
 
 on:
-  push:
-    branches:
-      - test/petbot-predictive-100x
+  pull_request:
     paths:
       - scripts/apply-final-petbot-runtime-fixes.mjs
       - .github/workflows/apply-final-petbot-runtime-fixes.yml
