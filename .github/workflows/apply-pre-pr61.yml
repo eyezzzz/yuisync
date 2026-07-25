@@ -4,16 +4,13 @@ on:
   push:
     branches:
       - feat/pre-pr61-petshop-operations
-  pull_request:
-    branches:
-      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: ${{ !contains(github.event.pull_request.title || github.event.head_commit.message || '', '[workspace-ready]') }}
+    if: ${{ !contains(github.event.head_commit.message || '', '[workspace-ready]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -21,15 +18,24 @@ jobs:
           ref: feat/pre-pr61-petshop-operations
           fetch-depth: 0
 
-      - name: Decode and validate patch
+      - name: Assemble and validate patch
         run: |
-          base64 --decode .github/pre-pr61.patch.gz.b64 | gzip --decompress > /tmp/pre-pr61.patch
+          cat \
+            .github/pre-pr61.patch.part00 \
+            .github/pre-pr61.patch.part01 \
+            .github/pre-pr61.patch.part02 \
+            .github/pre-pr61.patch.part03a \
+            .github/pre-pr61.patch.part03b \
+            .github/pre-pr61.patch.part04 \
+            > /tmp/pre-pr61.patch.gz.b64
+          base64 --decode /tmp/pre-pr61.patch.gz.b64 | gzip --decompress > /tmp/pre-pr61.patch
           git apply --check /tmp/pre-pr61.patch
 
       - name: Apply implementation
         run: |
           git apply --index /tmp/pre-pr61.patch
           rm -f .github/pre-pr61.patch.gz.b64
+          rm -f .github/pre-pr61.patch.part*
           rm -f .github/workflows/apply-pre-pr61.yml
           rm -f .github/workflows/pre-pr61-workspace.yml
           git add -A
