@@ -1,0 +1,90 @@
+name: PetBot Final Humanized 100
+
+on:
+  pull_request:
+    paths:
+      - 'scripts/eval-petbot-humanized-50.mjs'
+      - 'scripts/run-petbot-diagnostic-50.mjs'
+      - 'scripts/petbot-diagnostic-suite.mjs'
+      - 'server/lib/petbotAgent.js'
+      - 'server/lib/petbotGrounding.js'
+      - 'server/lib/chat.js'
+      - 'package.json'
+      - '.github/workflows/petbot-final-humanized-100.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: petbot-final-humanized-100-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  final-humanized-100:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o-mini' }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      PETBOT_E2E_TENANT_ID: ${{ secrets.PETBOT_E2E_TENANT_ID }}
+      PETBOT_HUMANIZED_REPORT: artifacts/petbot-humanized-50.json
+      PETBOT_DIAGNOSTIC_REPORT: artifacts/petbot-diagnostic-50.json
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate live-test credentials
+        shell: bash
+        run: |
+          missing=0
+          for name in OPENAI_API_KEY SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY PETBOT_E2E_TENANT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name não está configurado nos GitHub Actions Secrets."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - id: humanized
+        name: Run 50 humanized LLM and tool-routing conversations
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot:humanized 2>&1 | tee artifacts/petbot-humanized-50.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - id: live
+        name: Run 50 real runtime, tool, order and connection conversations
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot:diagnostic:50 2>&1 | tee artifacts/petbot-diagnostic-50.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload complete reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petbot-final-humanized-100-report
+          path: artifacts/
+          retention-days: 7
+
+      - name: Enforce humanized LLM result
+        if: steps.humanized.outputs.exit_code != '0'
+        run: exit 1
+
+      - name: Enforce live runtime result
+        if: steps.live.outputs.exit_code != '0'
+        run: exit 1
