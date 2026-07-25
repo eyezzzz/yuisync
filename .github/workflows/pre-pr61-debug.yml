@@ -1,0 +1,35 @@
+name: Pre PR6.1 PetBot Diagnostics
+
+on:
+  push:
+    branches:
+      - feat/pre-pr61-petshop-operations
+
+permissions:
+  contents: read
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Capture PetBot test report
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot > petbot-test.log 2>&1
+          status=$?
+          echo "$status" > petbot-test.exit-code
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pre-pr61-petbot-test-report
+          path: |
+            petbot-test.log
+            petbot-test.exit-code
+          retention-days: 1
