@@ -10,6 +10,10 @@ on:
       - '.github/workflows/petbot-predictive-matrix.yml'
   workflow_dispatch:
 
+concurrency:
+  group: petbot-predictive-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   predictive-matrix:
     runs-on: ubuntu-latest
