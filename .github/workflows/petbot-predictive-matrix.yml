@@ -21,4 +21,22 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm run test:petbot:predictive
+      - id: matrix
+        name: Run predictive matrix
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot:predictive 2>&1 | tee predictive-matrix.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload predictive report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petbot-predictive-matrix-report
+          path: predictive-matrix.log
+          retention-days: 2
+      - name: Enforce predictive result
+        if: steps.matrix.outputs.exit_code != '0'
+        run: exit 1
