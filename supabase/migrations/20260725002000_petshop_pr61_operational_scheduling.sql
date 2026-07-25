@@ -1,5 +1,6 @@
 begin;
 
+-- Migration idempotente: pode ser reaplicada com segurança durante a preparação da PR6.1.
 alter table public.settings
   add column if not exists veterinary_name text not null default 'Dra. Taina Campos',
   add column if not exists veterinary_business_hours jsonb not null default '{"1":[{"open":"13:00","close":"18:00"}],"2":[{"open":"13:00","close":"18:00"}],"3":[{"open":"13:00","close":"18:00"}],"4":[{"open":"13:00","close":"18:00"}],"5":[{"open":"13:00","close":"18:00"}],"6":[],"7":[]}'::jsonb,
