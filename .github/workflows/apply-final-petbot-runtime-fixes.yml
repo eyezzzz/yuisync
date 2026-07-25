@@ -7,6 +7,7 @@ on:
     paths:
       - scripts/apply-final-petbot-runtime-fixes.mjs
       - .github/workflows/apply-final-petbot-runtime-fixes.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
