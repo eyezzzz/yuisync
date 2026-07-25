@@ -1,5 +1,6 @@
 name: PetBot Predictive Matrix
 
+# Final validation gate for the deterministic 100x scenario families.
 on:
   pull_request:
     paths:
