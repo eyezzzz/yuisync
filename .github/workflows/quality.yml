@@ -4,12 +4,17 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
 
 jobs:
   quality:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -19,7 +24,16 @@ jobs:
       - run: npm run typecheck
       - run: npm run test
       - run: npm run test:petbot
-      - run: npm run test:luna
+      - run: npm run test:luna:unit
+      - run: npm run test:luna:regressions
+      - id: luna-eval-impact
+        name: Select Luna eval scenarios by impact
+        run: >-
+          node scripts/select-luna-evals.mjs
+          --base "${{ github.event.pull_request.base.sha || github.event.before }}"
+          --head "${{ github.sha }}"
+      - name: Luna deterministic evals
+        run: npm run test:luna:eval -- --groups "${{ steps.luna-eval-impact.outputs.groups }}"
       - run: npm run test:transactions
       - id: tenant-readiness
         name: Check tenant isolation credentials
