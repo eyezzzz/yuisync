@@ -4,13 +4,16 @@ on:
   push:
     branches:
       - feat/pre-pr61-petshop-operations
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   snapshot:
-    if: ${{ !contains(github.event.head_commit.message, '[workspace-ready]') }}
+    if: ${{ github.event_name == 'pull_request' || !contains(github.event.head_commit.message, '[workspace-ready]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
