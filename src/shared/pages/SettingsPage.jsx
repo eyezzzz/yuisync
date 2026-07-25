@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import {
   Settings, Save, Store, Printer, Phone, RefreshCw, AlertCircle, Check,
-  FileText, Building2, Users2, Plus, Bot, Truck, Clock,
+  FileText, Building2, Users2, Plus, Bot, Truck, Clock, Stethoscope,
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import PetbotDiagnosticSuite from '../components/PetbotDiagnosticSuite'
@@ -11,6 +11,14 @@ import { useModuleCtx } from '../../context/ModuleContext'
 import { MODULES } from '../../config/modules'
 import { buildTenantPayload, isTenantSchemaError, runWithTenantFallback } from '../../lib/tenant'
 import { DEFAULT_PETBOT_PROMPT } from '../../../shared/petbotPrompt'
+import {
+  DEFAULT_PETSHOP_OPERATIONAL_STAFF,
+  DEFAULT_PETSHOP_SERVICE_DURATIONS,
+  DEFAULT_VETERINARY_BUSINESS_HOURS,
+  DEFAULT_VETERINARY_NAME,
+  normalizeOperationalStaff,
+  normalizeServiceDurations,
+} from '../../../shared/petshopOperations'
 
 const DEFAULT_STORE_BUSINESS_HOURS = {
   1: [{ open: '08:00', close: '18:00' }],
@@ -88,7 +96,14 @@ const INITIAL_FORM = {
   petbot_business_hours: DEFAULT_PETBOT_BUSINESS_HOURS,
   petbot_slot_interval_min: '30',
   petbot_booking_lead_time_min: '15',
-  petbot_booking_capacity: '1',
+  petbot_booking_capacity: '2',
+  veterinary_name: DEFAULT_VETERINARY_NAME,
+  veterinary_business_hours: DEFAULT_VETERINARY_BUSINESS_HOURS,
+  petshop_operational_staff: DEFAULT_PETSHOP_OPERATIONAL_STAFF,
+  petshop_service_durations: DEFAULT_PETSHOP_SERVICE_DURATIONS,
+  appointment_reminder_enabled: false,
+  appointment_reminder_lead_min: '60',
+  appointment_reminder_template_name: 'appointment_arrival_reminder',
   delivery_fee: '8.00',
   pet_transport_fee: '20.00',
   pix_key: '',
@@ -138,6 +153,13 @@ function isFeeSchemaError(error) {
     || msg.includes('petbot_slot_interval_min')
     || msg.includes('petbot_booking_lead_time_min')
     || msg.includes('petbot_booking_capacity')
+    || msg.includes('veterinary_name')
+    || msg.includes('veterinary_business_hours')
+    || msg.includes('petshop_operational_staff')
+    || msg.includes('petshop_service_durations')
+    || msg.includes('appointment_reminder_enabled')
+    || msg.includes('appointment_reminder_lead_min')
+    || msg.includes('appointment_reminder_template_name')
   ) && (
     msg.includes('schema cache')
     || msg.includes('column')
@@ -316,7 +338,14 @@ export default function SettingsPage() {
           petbot_business_hours: normalizeBusinessHours(data.petbot_business_hours, DEFAULT_PETBOT_BUSINESS_HOURS),
           petbot_slot_interval_min: data.petbot_slot_interval_min != null ? String(data.petbot_slot_interval_min) : '30',
           petbot_booking_lead_time_min: data.petbot_booking_lead_time_min != null ? String(data.petbot_booking_lead_time_min) : '15',
-          petbot_booking_capacity: data.petbot_booking_capacity != null ? String(data.petbot_booking_capacity) : '1',
+          petbot_booking_capacity: data.petbot_booking_capacity != null ? String(data.petbot_booking_capacity) : '2',
+          veterinary_name: data.veterinary_name || DEFAULT_VETERINARY_NAME,
+          veterinary_business_hours: normalizeBusinessHours(data.veterinary_business_hours, DEFAULT_VETERINARY_BUSINESS_HOURS),
+          petshop_operational_staff: normalizeOperationalStaff(data.petshop_operational_staff),
+          petshop_service_durations: normalizeServiceDurations(data.petshop_service_durations),
+          appointment_reminder_enabled: toBool(data.appointment_reminder_enabled, false),
+          appointment_reminder_lead_min: data.appointment_reminder_lead_min != null ? String(data.appointment_reminder_lead_min) : '60',
+          appointment_reminder_template_name: data.appointment_reminder_template_name || 'appointment_arrival_reminder',
           delivery_fee: data.delivery_fee != null ? String(data.delivery_fee) : '8.00',
           pet_transport_fee: data.pet_transport_fee != null ? String(data.pet_transport_fee) : '20.00',
           pix_key: data.pix_key || '',
@@ -421,7 +450,14 @@ export default function SettingsPage() {
           petbot_business_hours: normalizeBusinessHours(form.petbot_business_hours, DEFAULT_PETBOT_BUSINESS_HOURS),
           petbot_slot_interval_min: Math.max(5, Number(form.petbot_slot_interval_min || 30)),
           petbot_booking_lead_time_min: Math.max(0, Number(form.petbot_booking_lead_time_min || 15)),
-          petbot_booking_capacity: Math.max(1, Number(form.petbot_booking_capacity || 1)),
+          petbot_booking_capacity: Math.max(1, Math.min(4, Number(form.petbot_booking_capacity || 2))),
+          veterinary_name: String(form.veterinary_name || DEFAULT_VETERINARY_NAME).trim(),
+          veterinary_business_hours: normalizeBusinessHours(form.veterinary_business_hours, DEFAULT_VETERINARY_BUSINESS_HOURS),
+          petshop_operational_staff: normalizeOperationalStaff(form.petshop_operational_staff),
+          petshop_service_durations: normalizeServiceDurations(form.petshop_service_durations),
+          appointment_reminder_enabled: Boolean(form.appointment_reminder_enabled),
+          appointment_reminder_lead_min: Math.max(30, Math.min(60, Number(form.appointment_reminder_lead_min || 60))),
+          appointment_reminder_template_name: String(form.appointment_reminder_template_name || 'appointment_arrival_reminder').trim(),
           updated_at: new Date().toISOString(),
         }, activeTenantId, includeTenant)
 
@@ -443,6 +479,13 @@ export default function SettingsPage() {
           delete fallbackRow.petbot_slot_interval_min
           delete fallbackRow.petbot_booking_lead_time_min
           delete fallbackRow.petbot_booking_capacity
+          delete fallbackRow.veterinary_name
+          delete fallbackRow.veterinary_business_hours
+          delete fallbackRow.petshop_operational_staff
+          delete fallbackRow.petshop_service_durations
+          delete fallbackRow.appointment_reminder_enabled
+          delete fallbackRow.appointment_reminder_lead_min
+          delete fallbackRow.appointment_reminder_template_name
           return supabase.from('settings').upsert(fallbackRow, { onConflict: conflict })
         }
         return firstTry
@@ -905,6 +948,7 @@ export default function SettingsPage() {
                       className="inp"
                       type="number"
                       min="1"
+                      max="4"
                       step="1"
                       disabled={!canEdit}
                       value={form.petbot_booking_capacity}
@@ -963,8 +1007,92 @@ export default function SettingsPage() {
                       </div>
                     )
                   })}
-                  <p className="text-xs text-muted px-1">Padrão sugerido: loja das 08:00 às 18:00 e agendamentos com início das 08:00 às 17:00.</p>
+                  <p className="text-xs text-muted px-1">Padrão sugerido: loja das 08:00 às 18:00, agendamentos das 08:00 às 17:00 e capacidade 2 para as duas esteticistas atuais.</p>
                 </div>
+              </div>
+
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-6">
+                <div className="flex items-center gap-2">
+                  <Stethoscope size={16} />
+                  <div>
+                    <h4 className="font-bold">Atendimento veterinário</h4>
+                    <p className="text-xs text-muted">Nome exibido e horários independentes da agenda de banho e tosa.</p>
+                  </div>
+                </div>
+                <div>
+                  <label className="inp-label">Nome da veterinária</label>
+                  <input className="inp" disabled={!canEdit} value={form.veterinary_name} onChange={(event) => setForm((prev) => ({ ...prev, veterinary_name: event.target.value }))} />
+                </div>
+                <div className="space-y-3">
+                  {PETBOT_WEEKDAYS.map(([weekday, label]) => {
+                    const periods = normalizeBusinessHours(form.veterinary_business_hours, DEFAULT_VETERINARY_BUSINESS_HOURS)[weekday] || []
+                    const open = periods[0]?.open || '13:00'
+                    const close = periods[0]?.close || '18:00'
+                    const enabled = periods.length > 0
+                    const updateVeterinaryHours = (field, value) => setForm((prev) => {
+                      const next = normalizeBusinessHours(prev.veterinary_business_hours, DEFAULT_VETERINARY_BUSINESS_HOURS)
+                      if (field === 'enabled') next[weekday] = value ? [{ open, close }] : []
+                      else next[weekday] = [{ open: field === 'open' ? value : open, close: field === 'close' ? value : close }]
+                      return { ...prev, veterinary_business_hours: next }
+                    })
+                    return (
+                      <div key={weekday} className="grid grid-cols-1 md:grid-cols-[120px_100px_1fr_1fr] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                        <span className="text-sm font-bold text-text">{label}</span>
+                        <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" disabled={!canEdit} checked={enabled} onChange={(event) => updateVeterinaryHours('enabled', event.target.checked)} />{enabled ? 'Atende' : 'Não atende'}</label>
+                        <div><label className="inp-label md:hidden">Início</label><input className="inp" type="time" disabled={!canEdit || !enabled} value={open} onChange={(event) => updateVeterinaryHours('open', event.target.value)} /></div>
+                        <div><label className="inp-label md:hidden">Fim</label><input className="inp" type="time" disabled={!canEdit || !enabled} value={close} onChange={(event) => updateVeterinaryHours('close', event.target.value)} /></div>
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-6">
+                <div className="flex items-center gap-2">
+                  <Users2 size={16} />
+                  <div>
+                    <h4 className="font-bold">Equipe operacional da estética</h4>
+                    <p className="text-xs text-muted">Nomes organizacionais, sem login ou senha. Até quatro profissionais.</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {normalizeOperationalStaff(form.petshop_operational_staff).map((person, index) => (
+                    <div key={person.key} className="grid grid-cols-1 md:grid-cols-[1fr_110px] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                      <div><label className="inp-label">Esteticista {index + 1}</label><input className="inp" disabled={!canEdit} value={person.name} onChange={(event) => setForm((prev) => ({ ...prev, petshop_operational_staff: normalizeOperationalStaff(prev.petshop_operational_staff).map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) }))} /></div>
+                      <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" disabled={!canEdit} checked={person.active} onChange={(event) => setForm((prev) => ({ ...prev, petshop_operational_staff: normalizeOperationalStaff(prev.petshop_operational_staff).map((item, itemIndex) => itemIndex === index ? { ...item, active: event.target.checked } : item) }))} />Ativa</label>
+                    </div>
+                  ))}
+                  {normalizeOperationalStaff(form.petshop_operational_staff).length < 4 && (
+                    <button type="button" disabled={!canEdit} className="btn btn-secondary" onClick={() => setForm((prev) => ({ ...prev, petshop_operational_staff: [...normalizeOperationalStaff(prev.petshop_operational_staff), { key: `esteticista-${normalizeOperationalStaff(prev.petshop_operational_staff).length + 1}`, name: `Esteticista ${normalizeOperationalStaff(prev.petshop_operational_staff).length + 1}`, active: true }] }))}><Plus size={14}/> Adicionar profissional</button>
+                  )}
+                </div>
+              </div>
+
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-6">
+                <div className="flex items-center gap-2">
+                  <Clock size={16} />
+                  <div><h4 className="font-bold">Duração dos serviços</h4><p className="text-xs text-muted">Tempos usados pela Luna para bloquear conflitos reais na agenda.</p></div>
+                </div>
+                {Object.entries(normalizeServiceDurations(form.petshop_service_durations)).map(([rangeKey, row]) => (
+                  <div key={rangeKey} className="rounded-2xl border border-white/5 bg-white/[0.02] p-4 space-y-3">
+                    <p className="text-sm font-bold text-text">{rangeKey === 'small' ? 'Pet até 9,99 kg' : 'Pet de 10 a 21,99 kg'}</p>
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {[['bath_min', 'Banho'], ['machine_grooming_min', 'Tosa máquina/total'], ['scissor_grooming_min', 'Tosa tesoura']].map(([field, label]) => (
+                        <div key={field}><label className="inp-label">{label} (min)</label><input className="inp" type="number" min="15" step="5" disabled={!canEdit} value={row[field]} onChange={(event) => setForm((prev) => { const next = normalizeServiceDurations(prev.petshop_service_durations); next[rangeKey] = { ...next[rangeKey], [field]: Math.max(15, Number(event.target.value || 15)) }; return { ...prev, petshop_service_durations: next } })} /></div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-5">
+                <div className="flex items-center gap-2"><Phone size={16}/><div><h4 className="font-bold">Lembrete de chegada pelo WhatsApp</h4><p className="text-xs text-muted">Preparação para template de utilidade aprovado pela Meta. O envio automático permanece desligado até a homologação.</p></div></div>
+                <label className="flex items-center gap-2 text-sm text-muted"><input type="checkbox" disabled={!canEdit} checked={Boolean(form.appointment_reminder_enabled)} onChange={(event) => setForm((prev) => ({ ...prev, appointment_reminder_enabled: event.target.checked }))} />Ativar quando o template estiver aprovado</label>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div><label className="inp-label">Antecedência (30 a 60 min)</label><input className="inp" type="number" min="30" max="60" step="5" disabled={!canEdit} value={form.appointment_reminder_lead_min} onChange={(event) => setForm((prev) => ({ ...prev, appointment_reminder_lead_min: event.target.value }))} /></div>
+                  <div><label className="inp-label">Nome do template Meta</label><input className="inp" disabled={!canEdit} value={form.appointment_reminder_template_name} onChange={(event) => setForm((prev) => ({ ...prev, appointment_reminder_template_name: event.target.value }))} /></div>
+                </div>
+                <p className="text-xs text-muted">Texto recomendado: “Bom dia, [NOME]! Estamos aguardando você e [PET] para o serviço de [SERVIÇO] às [HORÁRIO].”</p>
               </div>
             </div>
 

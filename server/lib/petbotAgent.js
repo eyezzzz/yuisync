@@ -1,6 +1,13 @@
 import { createHash } from 'node:crypto'
 import { DateTime } from 'luxon'
 import { classifyCommonPetBreed, normalizePetbotBreedText } from '../../shared/petbotBreedCatalog.js'
+import {
+  DEFAULT_PETSHOP_SERVICE_DURATIONS,
+  DEFAULT_VETERINARY_BUSINESS_HOURS,
+  friendlyPetshopServiceLabel,
+  normalizeServiceDurations,
+  resolvePetshopServiceDuration,
+} from '../../shared/petshopOperations.js'
 
 const AVAILABLE_STATUSES = new Set(['available', 'livre', 'disponivel', 'aberto', 'open'])
 const BUSY_STATUSES = new Set([
@@ -18,7 +25,7 @@ const MAX_AGENT_STEPS = 7
 const DEFAULT_TIMEZONE = 'America/Sao_Paulo'
 const DEFAULT_SLOT_INTERVAL_MINUTES = 30
 const DEFAULT_BOOKING_LEAD_MINUTES = 15
-const DEFAULT_BOOKING_CAPACITY = 1
+const DEFAULT_BOOKING_CAPACITY = 2
 const DEFAULT_STORE_BUSINESS_HOURS = {
   1: [{ open: '08:00', close: '18:00' }],
   2: [{ open: '08:00', close: '18:00' }],
@@ -367,7 +374,7 @@ export function normalizePetbotSchedulingSettings(settings = {}) {
   const timezone = clean(settings.timezone || settings.petbotTimezone) || DEFAULT_TIMEZONE
   const slotIntervalMin = Math.max(5, Math.min(240, Number(settings.slotIntervalMin || settings.petbotSlotIntervalMin || DEFAULT_SLOT_INTERVAL_MINUTES) || DEFAULT_SLOT_INTERVAL_MINUTES))
   const leadTimeMin = Math.max(0, Math.min(10080, Number(settings.bookingLeadTimeMin || settings.petbotBookingLeadTimeMin || DEFAULT_BOOKING_LEAD_MINUTES) || 0))
-  const capacity = Math.max(1, Math.min(100, Number(settings.bookingCapacity || settings.petbotBookingCapacity || DEFAULT_BOOKING_CAPACITY) || DEFAULT_BOOKING_CAPACITY))
+  const capacity = Math.max(1, Math.min(4, Number(settings.bookingCapacity || settings.petbotBookingCapacity || DEFAULT_BOOKING_CAPACITY) || DEFAULT_BOOKING_CAPACITY))
   const businessHours = normalizeBusinessHours(
     settings.businessHours || settings.petbotBusinessHours,
     DEFAULT_BOOKING_HOURS,
@@ -376,7 +383,14 @@ export function normalizePetbotSchedulingSettings(settings = {}) {
     settings.storeBusinessHours || settings.store_business_hours,
     DEFAULT_STORE_BUSINESS_HOURS,
   )
-  return { timezone, slotIntervalMin, leadTimeMin, capacity, businessHours, storeBusinessHours }
+  const veterinaryBusinessHours = normalizeBusinessHours(
+    settings.veterinaryBusinessHours || settings.veterinary_business_hours,
+    DEFAULT_VETERINARY_BUSINESS_HOURS,
+  )
+  const serviceDurations = normalizeServiceDurations(
+    settings.petshopServiceDurations || settings.petshop_service_durations || DEFAULT_PETSHOP_SERVICE_DURATIONS,
+  )
+  return { timezone, slotIntervalMin, leadTimeMin, capacity, businessHours, storeBusinessHours, veterinaryBusinessHours, serviceDurations }
 }
 
 const WEEKDAY_BY_NAME = new Map([
@@ -1029,6 +1043,7 @@ function publicService(service) {
     product_id: service.source_product_id || null,
     code: service.code,
     name: service.name,
+    display_name: friendlyPetshopServiceLabel(service),
     price: service.default_price,
     duration_min: service.default_duration_min,
     service_kind: service.service_kind || serviceKind(`${service.code || ''} ${service.name || ''}`),
@@ -1767,9 +1782,19 @@ export function buildServiceAvailability({
     return { ok: false, status: 'invalid_input', error: 'invalid_time', service: publicService(service) }
   }
 
-  const periods = schedule.businessHours[day.weekday] || []
+  const periods = clean(orderType) === 'veterinaria'
+    ? (schedule.veterinaryBusinessHours[day.weekday] || [])
+    : (schedule.businessHours[day.weekday] || [])
   const storePeriods = schedule.storeBusinessHours[day.weekday] || []
-  const durationMin = Math.max(15, Number(service.default_duration_min ?? service.duration_min ?? 60) || 60)
+  const catalogDurationMin = Math.max(15, Number(service.default_duration_min ?? service.duration_min ?? 60) || 60)
+  const durationMin = clean(orderType) === 'banho_tosa'
+    ? resolvePetshopServiceDuration({
+      service,
+      weightKg,
+      durations: schedule.serviceDurations,
+      fallbackMin: catalogDurationMin,
+    })
+    : catalogDurationMin
   const busyAppointments = (appointments || [])
     .map((row) => normalizeAppointment(row, schedule.timezone))
     .filter((row) => BUSY_STATUSES.has(normalize(row.status)))
@@ -2274,9 +2299,12 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
       id: clean(additional.id),
       source_product_id: clean(additional.source_product_id) || null,
       code: clean(additional.code),
-      name: clean(additional.name),
+      name: friendlyPetshopServiceLabel(additional, { weightKg: base.weight_kg }),
+      internal_name: clean(additional.name),
       price: additionalPrice,
-      duration_min: Math.max(0, Number(additional.default_duration_min || 0) || 0),
+      duration_min: orderType === 'banho_tosa'
+        ? resolvePetshopServiceDuration({ service: additional, weightKg: base.weight_kg, durations: schedule.serviceDurations, fallbackMin: additional.default_duration_min || 0 })
+        : Math.max(0, Number(additional.default_duration_min || 0) || 0),
     })
   }
 
@@ -2305,6 +2333,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
   if (missing.length) return { ok: false, missing: [...new Set(missing)] }
 
   const serviceType = serviceDefinition.code
+  const serviceDisplayName = friendlyPetshopServiceLabel(serviceDefinition, { weightKg: base.weight_kg })
   const serviceTransportFee = Number(transport.fee || 0)
   const additionalItems = additionalServices.map((additional) => ({
     product_id: additional.source_product_id || null,
@@ -2320,7 +2349,8 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     items: [{
       product_id: serviceDefinition.source_product_id || null,
       service_id: serviceDefinition.id || null,
-      name: serviceDefinition.name,
+      name: serviceDisplayName,
+      internal_name: serviceDefinition.name,
       quantity: 1,
       unit_price: servicePrice,
       upsell: false,
@@ -2329,11 +2359,11 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
     scheduled_at: availableSlot.scheduled_at,
     service_product_id: serviceDefinition.source_product_id || null,
     service_type: serviceType,
-    service_label: serviceDefinition.name,
+    service_label: serviceDisplayName,
     service_kind: serviceDefinition.service_kind || serviceKind(`${serviceDefinition.code || ''} ${serviceDefinition.name || ''}`),
     regular_service_price: regularServicePrice,
     subscription_benefit: subscriptionBenefit,
-    duration_min: Number(availableSlot.duration_min || serviceDefinition.default_duration_min || 60)
+    duration_min: Number(availableSlot.duration_min || resolvePetshopServiceDuration({ service: serviceDefinition, weightKg: base.weight_kg, durations: schedule.serviceDurations, fallbackMin: serviceDefinition.default_duration_min || 60 }))
       + additionalServices.reduce((sum, item) => sum + Number(item.duration_min || 0), 0),
     additional_service_ids: additionalServices.map((item) => item.id),
     additional_services: additionalServices,
