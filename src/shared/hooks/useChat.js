@@ -5,18 +5,6 @@ import { useModuleCtx } from '../../context/ModuleContext'
 import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
 
-const DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS = 1000
-const DASHBOARD_REPLY_DEBOUNCE_MS = (() => {
-  const parsed = Number(import.meta.env.VITE_CHAT_REPLY_DEBOUNCE_MS)
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : DEFAULT_DASHBOARD_REPLY_DEBOUNCE_MS
-})()
-
-// The AppRouter intentionally remounts pages when navigating between areas.
-// Keep the debounce outbox at module scope so a route change cannot discard a
-// customer message or cancel the bot turn that still needs to be processed.
-const pendingDashboardMessages = new Map()
-const dashboardReplyTimers = new Map()
-
 function createPendingClientMessage(content) {
   const id = crypto.randomUUID()
   return {
@@ -25,14 +13,36 @@ function createPendingClientMessage(content) {
     content,
     metadata: { pending: true, local_only: true, client_message_id: id },
     sent_at: new Date().toISOString(),
+    dashboard_turn_version: null,
   }
 }
 
 function normalizeIncomingMessage(message) {
   return {
     ...message,
-    sent_at: message.sent_at,
+    sent_at: message.sent_at || null,
+    dashboard_turn_version: message.dashboard_turn_version ?? null,
   }
+}
+
+function sortChatMessages(messages) {
+  return [...messages].sort((left, right) => {
+    const leftPending = left?.metadata?.local_only === true
+    const rightPending = right?.metadata?.local_only === true
+    if (leftPending !== rightPending) return leftPending ? 1 : -1
+
+    const leftTime = new Date(left?.sent_at || 0).getTime()
+    const rightTime = new Date(right?.sent_at || 0).getTime()
+    if (Number.isFinite(leftTime) && Number.isFinite(rightTime) && leftTime !== rightTime) {
+      return leftTime - rightTime
+    }
+
+    const leftVersion = Number(left?.dashboard_turn_version || 0)
+    const rightVersion = Number(right?.dashboard_turn_version || 0)
+    if (leftVersion !== rightVersion) return leftVersion - rightVersion
+
+    return String(left?.id || '').localeCompare(String(right?.id || ''))
+  })
 }
 
 function isMatchingPendingMessage(localMessage, incomingMessage) {
@@ -53,16 +63,25 @@ function isMatchingPendingMessage(localMessage, incomingMessage) {
 
 function mergeIncomingMessage(previousMessages, message) {
   const incomingMessage = normalizeIncomingMessage(message)
-  if (previousMessages.find((item) => item.id === incomingMessage.id)) return previousMessages
+  const existingIndex = previousMessages.findIndex((item) => item.id === incomingMessage.id)
+  if (existingIndex >= 0) {
+    const existing = previousMessages[existingIndex]
+    if (!existing?.metadata?.local_only && JSON.stringify(existing) === JSON.stringify(incomingMessage)) {
+      return previousMessages
+    }
+    const next = [...previousMessages]
+    next[existingIndex] = incomingMessage
+    return sortChatMessages(next)
+  }
 
   const pendingIndex = previousMessages.findIndex((item) => isMatchingPendingMessage(item, incomingMessage))
   if (pendingIndex >= 0) {
     const next = [...previousMessages]
     next[pendingIndex] = incomingMessage
-    return next
+    return sortChatMessages(next)
   }
 
-  return [...previousMessages, incomingMessage]
+  return sortChatMessages([...previousMessages, incomingMessage])
 }
 
 function playHandoffSound() {
@@ -146,6 +165,7 @@ export function useChat() {
   const msgChannelRef = useRef(null)
   const activeSessionIdRef = useRef(null)
   const handoffAlertIdsRef = useRef(new Set())
+  const botRequestsInFlightRef = useRef(0)
   const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
 
@@ -208,11 +228,12 @@ export function useChat() {
   const loadMessages = useCallback(async (sessionId) => {
     const { data } = await supabase
       .from('chat_messages')
-      .select('id, role, content, metadata, tokens_used, sent_at')
+      .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
       .eq('session_id', sessionId)
       .order('sent_at', { ascending: true })
+      .order('id', { ascending: true })
 
-    const normalized = (data || []).map(normalizeIncomingMessage)
+    const normalized = sortChatMessages((data || []).map(normalizeIncomingMessage))
 
     setMessages(normalized)
     return normalized
@@ -227,11 +248,16 @@ export function useChat() {
     msgChannelRef.current = supabase
       .channel(`messages-${session.id}`)
       .on('postgres_changes', {
-        event: 'INSERT',
+        event: '*',
         schema: 'public',
         table: 'chat_messages',
         filter: `session_id=eq.${session.id}`,
       }, (payload) => {
+        if (payload.eventType === 'DELETE') {
+          setMessages((prev) => prev.filter((message) => message.id !== payload.old?.id))
+          return
+        }
+        if (!payload.new?.id) return
         pushHandoffAlert(payload.new, session)
         setMessages((prev) => mergeIncomingMessage(prev, payload.new))
       })
@@ -265,109 +291,47 @@ export function useChat() {
     return response.data
   }, [activeModuleId, activeTenantId])
 
-  const flushClientMessages = useCallback(async (sessionId) => {
-    const queuedMessages = pendingDashboardMessages.get(sessionId) || []
-    pendingDashboardMessages.delete(sessionId)
-    dashboardReplyTimers.delete(sessionId)
-
-    if (!queuedMessages.length) {
-      if (pendingDashboardMessages.size === 0 && dashboardReplyTimers.size === 0) setBotTyping(false)
-      return
-    }
-
-    const combinedMessage = queuedMessages.map((message) => message.content).filter(Boolean).join('\n')
-
-    try {
-      await requestChatReply(sessionId, combinedMessage, {
-        userMessages: queuedMessages.map((message) => ({
-          client_message_id: message.id,
-          content: message.content,
-          sent_at: message.sent_at,
-        })),
-      })
-      if (activeSessionIdRef.current === sessionId) {
-        await loadMessages(sessionId)
-      }
-    } catch (error) {
-      const staleTurn = error?.status === 409 && (
-        error?.code === 'PETBOT_STALE_TURN'
-        || /newer customer message superseded/i.test(String(error?.message || ''))
-      )
-      if (staleTurn) {
-        // A newer customer message deliberately cancelled this response. The
-        // newer request owns the conversation; this is not a failed message.
-        if (activeSessionIdRef.current === sessionId) await loadMessages(sessionId)
-        return
-      }
-      const failedIds = new Set(queuedMessages.map((message) => message.id))
-      setMessages((prev) => prev.map((message) => (
-        failedIds.has(message.id)
-          ? { ...message, metadata: { ...(message.metadata || {}), pending: false, response_failed: true } }
-          : message
-      )))
-      console.error('Falha ao responder chat com debounce:', error)
-    } finally {
-      if (pendingDashboardMessages.size === 0 && dashboardReplyTimers.size === 0) {
-        setBotTyping(false)
-      }
-    }
-  }, [loadMessages])
-
   const sendClientMessage = useCallback(async (sessionId, text) => {
     const trimmed = String(text || '').trim()
     if (!trimmed) return
 
     const optimisticMessage = createPendingClientMessage(trimmed)
-    setMessages((prev) => [...prev, optimisticMessage])
+    setMessages((prev) => sortChatMessages([...prev, optimisticMessage]))
+    botRequestsInFlightRef.current += 1
     setBotTyping(true)
 
-    // Persist before starting the debounce. Even a full page remount now leaves
-    // the customer's message in the conversation, while the API's idempotent
-    // upsert prevents the later bot request from inserting it twice.
-    const persistedMetadata = {
-      source: 'dashboard_simulation',
-      client_message_id: optimisticMessage.id,
-    }
-    const { data: persistedMessage, error: persistenceError } = await supabase
-      .from('chat_messages')
-      .upsert({
-        id: optimisticMessage.id,
-        session_id: sessionId,
-        role: 'user',
-        content: optimisticMessage.content,
-        metadata: persistedMetadata,
-        sent_at: optimisticMessage.sent_at,
-      }, { onConflict: 'id', ignoreDuplicates: true })
-      .select('id, role, content, metadata, tokens_used, sent_at')
-      .maybeSingle()
+    try {
+      const result = await requestChatReply(sessionId, trimmed, {
+        clientMessageId: optimisticMessage.id,
+      })
 
-    if (persistenceError) {
+      const persistedMessage = (result?.savedUserMessages || []).find((message) => (
+        message?.id === optimisticMessage.id
+        || message?.metadata?.client_message_id === optimisticMessage.id
+      ))
+
+      if (persistedMessage) {
+        setMessages((prev) => mergeIncomingMessage(prev, persistedMessage))
+      }
+
+      if (activeSessionIdRef.current === sessionId) {
+        await loadMessages(sessionId)
+      }
+
+      return result
+    } catch (error) {
       setMessages((prev) => prev.map((message) => (
         message.id === optimisticMessage.id
           ? { ...message, metadata: { ...(message.metadata || {}), pending: false, failed: true } }
           : message
       )))
-      setBotTyping(false)
-      throw persistenceError
+      console.error('Falha na ingestão serverless do chat:', error)
+      throw error
+    } finally {
+      botRequestsInFlightRef.current = Math.max(0, botRequestsInFlightRef.current - 1)
+      if (botRequestsInFlightRef.current === 0) setBotTyping(false)
     }
-
-    if (persistedMessage) {
-      setMessages((prev) => prev.map((message) => (
-        message.id === optimisticMessage.id ? normalizeIncomingMessage(persistedMessage) : message
-      )))
-    }
-
-    const queuedMessages = pendingDashboardMessages.get(sessionId) || []
-    pendingDashboardMessages.set(sessionId, [...queuedMessages, optimisticMessage])
-
-    const existingTimer = dashboardReplyTimers.get(sessionId)
-    if (existingTimer) clearTimeout(existingTimer)
-
-    const timer = setTimeout(() => {
-      void flushClientMessages(sessionId)
-    }, DASHBOARD_REPLY_DEBOUNCE_MS)
-    dashboardReplyTimers.set(sessionId, timer)
-  }, [flushClientMessages])
+  }, [loadMessages])
 
   const sendHumanMessage = useCallback(async (sessionId, text) => {
     const trimmed = String(text || '').trim()

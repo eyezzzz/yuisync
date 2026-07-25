@@ -45,7 +45,11 @@ export function checkoutPetshop(payload) {
 export function requestChatReply(sessionId, message, options = {}) {
   return apiRequest('/chat/respond', {
     method: 'POST',
-    body: JSON.stringify({ sessionId, message, ...options }),
+    body: JSON.stringify({
+      sessionId,
+      message,
+      clientMessageId: options.clientMessageId,
+    }),
   })
 }
 

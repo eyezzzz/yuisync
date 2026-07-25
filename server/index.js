@@ -18,7 +18,7 @@ import {
   validateManagedEmail,
   validateManagedPassword,
 } from './lib/auth.js'
-import { respondToChatMessage } from './lib/chat.js'
+import { ingestAndRespondToDashboardChat, normalizeDashboardChatEntries } from './lib/dashboardChat.js'
 import { handleFocusWebhook, issueFiscalForSale } from './lib/fiscal.js'
 import { searchProductImageCandidates } from './lib/productImages.js'
 import { executeCheckout } from './lib/checkout.js'
@@ -241,25 +241,6 @@ function ensureChatSessionAccess(requester, session) {
 
 // ── Route handlers ───────────────────────────────────────────────────────────
 
-function normalizeChatUserMessages(raw) {
-  if (!Array.isArray(raw)) return []
-
-  return raw
-    .map((entry) => {
-      if (!entry || typeof entry !== 'object') return null
-      const content = typeof entry.content === 'string' ? entry.content.trim() : ''
-      if (!content) return null
-
-      return {
-        client_message_id: typeof entry.client_message_id === 'string' ? entry.client_message_id : '',
-        content,
-        sent_at: typeof entry.sent_at === 'string' ? entry.sent_at : '',
-      }
-    })
-    .filter(Boolean)
-    .slice(0, 10)
-}
-
 async function handleChatRespond(req, res) {
   const origin = req.headers.origin
   const accessToken = getBearerToken(req)
@@ -308,9 +289,18 @@ async function handleChatRespond(req, res) {
     throw new HttpError(403, 'Requested tenant does not match this chat session.')
   }
 
-  const userMessages = normalizeChatUserMessages(body.userMessages)
-  const result = await respondToChatMessage(adminSupabase, body.sessionId, body.message, userMessages.length ? { userMessages } : {})
-  sendJson(res, 200, result, getCorsHeaders(origin))
+  const entries = normalizeDashboardChatEntries({
+    message: body.message,
+    clientMessageId: body.clientMessageId,
+    userMessages: body.userMessages,
+  })
+  const result = await ingestAndRespondToDashboardChat({
+    supabase: adminSupabase,
+    sessionId: body.sessionId,
+    entries,
+    source: 'dashboard_simulation',
+  })
+  sendJson(res, result.queued ? 202 : 200, result, getCorsHeaders(origin))
 }
 
 async function handleChatHumanMessage(req, res) {

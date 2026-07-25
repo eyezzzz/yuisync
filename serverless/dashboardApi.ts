@@ -14,7 +14,7 @@ import {
   validateManagedEmail,
   validateManagedPassword,
 } from '../server/lib/auth.js'
-import { respondToChatMessage } from '../server/lib/chat.js'
+import { ingestAndRespondToDashboardChat, normalizeDashboardChatEntries } from '../server/lib/dashboardChat.js'
 import { handleFocusWebhook, issueFiscalForSale } from '../server/lib/fiscal.js'
 import { searchProductImageCandidates } from '../server/lib/productImages.js'
 import { sendHumanChatMessage } from '../server/lib/whatsapp.js'
@@ -68,26 +68,6 @@ function omitStaffType(payload: Record<string, unknown>) {
   const next = { ...payload }
   delete next.staff_type
   return next
-}
-
-function normalizeChatUserMessages(raw: unknown) {
-  if (!Array.isArray(raw)) return []
-
-  return raw
-    .map((entry) => {
-      if (!entry || typeof entry !== 'object') return null
-      const item = entry as Record<string, unknown>
-      const content = typeof item.content === 'string' ? item.content.trim() : ''
-      if (!content) return null
-
-      return {
-        client_message_id: typeof item.client_message_id === 'string' ? item.client_message_id : '',
-        content,
-        sent_at: typeof item.sent_at === 'string' ? item.sent_at : '',
-      }
-    })
-    .filter(Boolean)
-    .slice(0, 10)
 }
 
 async function loadActiveTenantIds() {
@@ -450,9 +430,18 @@ async function handleChatRespond(req: IncomingMessage, res: ServerResponse) {
 
   ensureChatSessionAccess(requester, session)
 
-  const userMessages = normalizeChatUserMessages(body.userMessages)
-  const result = await respondToChatMessage(adminSupabase, sessionId, body.message, userMessages.length ? { userMessages } : {})
-  sendJson(res, 200, result)
+  const entries = normalizeDashboardChatEntries({
+    message: body.message,
+    clientMessageId: body.clientMessageId,
+    userMessages: Array.isArray(body.userMessages) ? body.userMessages : undefined,
+  })
+  const result = await ingestAndRespondToDashboardChat({
+    supabase: adminSupabase,
+    sessionId,
+    entries,
+    source: 'dashboard_simulation',
+  })
+  sendJson(res, result.queued ? 202 : 200, result)
 }
 
 async function handleChatHumanMessage(req: IncomingMessage, res: ServerResponse) {
