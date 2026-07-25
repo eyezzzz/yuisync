@@ -13,61 +13,18 @@ permissions:
 
 jobs:
   fix:
+    if: ${{ !contains(github.event.head_commit.message || '', '[workspace-ready]') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: feat/pre-pr61-petshop-operations
           fetch-depth: 0
-      - name: Align legacy tests with PR6.1 contract
+      - name: Apply exact regression patch
         run: |
-          python - <<'PY'
-          from pathlib import Path
-
-          agent = Path('test/petbotAgent.test.mjs')
-          text = agent.read_text()
-          marker = "test('marca horário ocupado e oferece alternativas reais'"
-          before, section = text.split(marker, 1)
-          old = """      status: 'confirmado',
-            }],
-            now: new Date('2026-07-21T10:00:00-03:00'),
-          """
-          new = """      status: 'confirmado',
-            }, {
-              id: 'busy-2',
-              service_type: 'banho',
-              scheduled_at: '2026-07-21T15:00:00-03:00',
-              duration_min: 60,
-              status: 'agendado',
-            }],
-            now: new Date('2026-07-21T10:00:00-03:00'),
-          """
-          if old not in section:
-              raise SystemExit('occupied-slot fixture not found')
-          text = before + marker + section.replace(old, new, 1)
-
-          replacements = {
-            "assert.equal(prepared.order.service_label, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')": "assert.equal(prepared.order.service_label, 'Banho Pet Porte Médio')\n  assert.equal(prepared.order.items[0].internal_name, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')",
-            "assert.match(prepared.summary, /Banho Pet Porte Medio 10,1 A 22 KG \\(Pelo Duplo\\)/)": "assert.match(prepared.summary, /Banho Pet Porte Médio/)",
-            "assert.doesNotMatch(prepared.summary, /Pagamento:/)": "assert.doesNotMatch(prepared.summary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)",
-          }
-          for old, new in replacements.items():
-            if old not in text:
-              raise SystemExit(f'assertion not found: {old}')
-            text = text.replace(old, new, 1)
-          agent.write_text(text)
-
-          modes = Path('test/petbotModes.test.mjs')
-          text = modes.read_text()
-          marker = "test('agendamento veterinário não exige pagamento, transporte, peso ou pelagem'"
-          before, section = text.split(marker, 1)
-          section = section.replace("scheduled_at: '2026-07-25T14:00:00-03:00'", "scheduled_at: '2026-07-27T14:00:00-03:00'", 1)
-          old = "petbotBusinessHours: { 6: [{ open: '08:00', close: '18:00' }] }"
-          new = "veterinaryBusinessHours: { 1: [{ open: '13:00', close: '18:00' }] }"
-          if old not in section:
-              raise SystemExit('veterinary schedule fixture not found')
-          modes.write_text(before + marker + section.replace(old, new, 1))
-          PY
+          git apply --check .github/pre-pr61-test-fix.patch
+          git apply --index .github/pre-pr61-test-fix.patch
+          rm -f .github/pre-pr61-test-fix.patch
           rm -f .github/workflows/pre-pr61-debug.yml
           rm -f .github/workflows/fix-pre-pr61-regressions.yml
           git add -A
