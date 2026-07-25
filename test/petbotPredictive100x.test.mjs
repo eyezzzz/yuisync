@@ -226,7 +226,9 @@ test('100 cenários hipotéticos de produtos usam preço real e taxa configurada
         customer_name: customerNames[index % customerNames.length],
         order_type: 'produto',
         items: [{ product_id: product.id, name: 'Nome e preço inventados', quantity, upsell: false }],
-        payment_method: index % 3 === 0 ? 'pix' : index % 3 === 1 ? 'dinheiro' : 'cartao',
+        payment_method: delivery
+          ? (index % 3 === 0 ? 'pix' : index % 3 === 1 ? 'dinheiro' : 'cartao')
+          : 'a_combinar',
         fulfillment_type: delivery ? 'entrega' : 'retirada',
         delivery_address: delivery ? `Rua Produto, ${100 + index}` : null,
         delivery_neighborhood: delivery ? 'Centro' : null,
@@ -265,7 +267,7 @@ test('100 cenários hipotéticos de ração preservam marca, quantidade, estoque
         customer_name: customerNames[index % customerNames.length],
         order_type: 'produto',
         items: [{ product_id: product.id, name: 'Ração genérica', quantity, upsell: false }],
-        payment_method: 'pix',
+        payment_method: 'a_combinar',
         fulfillment_type: 'retirada',
       },
       products: [product],
@@ -338,8 +340,17 @@ test('100 cenários hipotéticos de MotoDog ignoram taxa inventada e usam a conf
     })
 
     assert.equal(selection.ok, true, `motodog/${index}`)
-    assert.equal(selection.mode, expected.id, `motodog-modo/${index}`)
-    assert.equal(selection.fee, expected.fee, `motodog-taxa/${index}`)
+    if (expected.id === 'sem_transporte') {
+      assert.equal(selection.requested, false, `motodog-cliente-leva/${index}`)
+      assert.equal(selection.mode, null, `motodog-modo/${index}`)
+      assert.equal(selection.fee, 0, `motodog-taxa/${index}`)
+      assert.equal(selection.customer_brings_pet, true, `motodog-cliente/${index}`)
+    } else {
+      assert.equal(selection.requested, true, `motodog-solicitado/${index}`)
+      assert.equal(selection.mode, expected.id, `motodog-modo/${index}`)
+      assert.equal(selection.fee, expected.fee, `motodog-taxa/${index}`)
+      assert.equal(selection.customer_brings_pet, false, `motodog-cliente/${index}`)
+    }
     scenarios += 1
   }
   assertFamilyCount(scenarios, 'MotoDog')
