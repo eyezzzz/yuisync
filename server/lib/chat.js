@@ -1997,6 +1997,7 @@ function inferPetbotServiceOrderType({ interpretation = {}, facts = {}, message 
 }
 
 const PETBOT_FRIENDLY_CLOSING = 'Agradecemos pela preferência! Estamos à disposição. Volte sempre! 😊'
+const PETBOT_PREPARATION_RECOVERY_HANDOFF_REPLY = 'Já confirmei a disponibilidade e guardei os dados, mas não consegui concluir o resumo com segurança agora. Vou encaminhar o atendimento para a equipe finalizar sem pedir que você repita as informações.'
 
 async function respondToAlreadyCommittedConfirmation({
   supabase,
@@ -2181,7 +2182,7 @@ function buildPetbotLocalRecoveryReply({ facts = {}, toolRuns = [], resolvedServ
       if (!facts.service_notes_resolved) {
         return `${availabilityPrefix} Há alguma observação para o serviço, como alergia ou preferência de perfume?`
       }
-      return `${availabilityPrefix} Vou preparar o resumo com os dados confirmados.`
+      return PETBOT_PREPARATION_RECOVERY_HANDOFF_REPLY
     }
     const slots = (availability.available_slots || []).slice(0, 6).map((slot) => cleanText(slot.time)).filter(Boolean)
     if (slots.length) {
@@ -3998,6 +3999,11 @@ async function respondWithPetbotAgent({
       }
     },
   })
+
+  if (cleanText(agentResult.reply) === PETBOT_PREPARATION_RECOVERY_HANDOFF_REPLY) {
+    needsHuman = true
+    handoffTarget = 'atendente'
+  }
 
   lunaRuntime.recordValidationRetries(agentResult.validationRetries || 0)
   agentResult.runtime = lunaRuntime.complete({
