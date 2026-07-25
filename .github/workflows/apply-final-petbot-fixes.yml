@@ -1,0 +1,48 @@
+name: Apply Final PetBot Fixes
+
+on:
+  push:
+    branches:
+      - test/petbot-predictive-100x
+    paths:
+      - scripts/apply-final-petbot-fixes.mjs
+      - .github/workflows/apply-final-petbot-fixes.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/petbot-predictive-100x
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Validate and apply focused fixes
+        run: |
+          node --check scripts/apply-final-petbot-fixes.mjs
+          node scripts/apply-final-petbot-fixes.mjs
+          node --check server/lib/petbotAgent.js
+          node --check server/lib/petbotAi.js
+          node --check server/lib/luna/verifier.js
+          node --check scripts/petbot-diagnostic-suite.mjs
+          node --check scripts/eval-petbot-humanized-50.mjs
+
+      - name: Remove temporary patcher
+        run: |
+          rm scripts/apply-final-petbot-fixes.mjs
+          rm .github/workflows/apply-final-petbot-fixes.yml
+
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(petbot): corrigir contexto, serviços e diagnóstico vivo"
+          git push origin HEAD:test/petbot-predictive-100x
