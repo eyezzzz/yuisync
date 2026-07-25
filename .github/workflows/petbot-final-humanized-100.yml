@@ -41,6 +41,12 @@ jobs:
 
       - run: npm ci
 
+      - name: Validate final-suite scripts
+        run: |
+          node --check scripts/eval-petbot-humanized-50.mjs
+          node --check scripts/run-petbot-diagnostic-50.mjs
+          mkdir -p artifacts
+
       - name: Validate live-test credentials
         shell: bash
         run: |
