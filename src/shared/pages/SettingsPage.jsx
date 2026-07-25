@@ -5,6 +5,7 @@ import {
 } from 'lucide-react'
 import { supabase } from '../../lib/supabase'
 import PetbotDiagnosticSuite from '../components/PetbotDiagnosticSuite'
+import LunaEvalDashboard from '../components/LunaEvalDashboard'
 import { useAuthCtx } from '../../context/AuthContext'
 import { useModuleCtx } from '../../context/ModuleContext'
 import { MODULES } from '../../config/modules'
@@ -808,7 +809,10 @@ export default function SettingsPage() {
           <div className="grid grid-cols-1 gap-8">
             {showDiagnosticSettings && (
               <div className="col-span-1 md:col-span-2">
-                <PetbotDiagnosticSuite tenantId={activeTenantId} canEdit={canEdit} />
+                <div className="space-y-6">
+                  <LunaEvalDashboard tenantId={activeTenantId} canEdit={canEdit} />
+                  <PetbotDiagnosticSuite tenantId={activeTenantId} canEdit={canEdit} />
+                </div>
               </div>
             )}
             <div className={showGeneralSettings ? 'space-y-4 order-1' : 'hidden'}>

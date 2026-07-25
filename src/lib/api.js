@@ -127,6 +127,30 @@ export function importLegacyRows({ kind, rows, moduleId, tenantId }) {
   })
 }
 
+export function prepareLunaEvalPlatform({ tenantId }) {
+  return apiRequest('/admin/petbot-e2e', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId,
+      action: 'luna_eval_plan',
+      confirm: 'PREPARE_LUNA_EVAL_PLATFORM',
+    }),
+  })
+}
+
+export function runLunaEvalPlatform({ tenantId, scenarioNames = [], maxCases = 500 }) {
+  return apiRequest('/admin/petbot-e2e', {
+    method: 'POST',
+    body: JSON.stringify({
+      tenantId,
+      scenarioNames,
+      maxCases,
+      action: 'luna_eval_run',
+      confirm: 'RUN_LUNA_EVAL_PLATFORM',
+    }),
+  })
+}
+
 export function preparePetbotDiagnosticSuite({ tenantId }) {
   return apiRequest('/admin/petbot-e2e', {
     method: 'POST',

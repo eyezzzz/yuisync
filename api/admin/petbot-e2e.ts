@@ -2,6 +2,11 @@ import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isModuleAdmin, requireAuthenticatedProfile } from '../../server/lib/auth.js'
 import { HttpError, getBearerToken, readJsonBody, sendJson, validateUUID } from '../../server/lib/http.js'
 import { getPetbotDiagnosticPlan, runPetbotDiagnosticCase } from '../../scripts/petbot-diagnostic-suite.mjs'
+import {
+  buildLunaEvalPlan,
+  compileLunaEvalPlan,
+  runCompiledScenarioSuite,
+} from '../../server/lib/luna/eval/index.js'
 
 export const config = {
   maxDuration: 300,
@@ -15,20 +20,33 @@ function clean(value: unknown) {
   return typeof value === 'string' ? value.trim() : ''
 }
 
-function handleApiError(res: ServerResponse, error: unknown) {
+function stringList(value: unknown, max = 100) {
+  if (!Array.isArray(value)) return []
+  return [...new Set(value.map(clean).filter(Boolean))].slice(0, max)
+}
+
+function handleApiError(res: ServerResponse, error: unknown, action = '') {
   const status = error instanceof HttpError ? error.status : 500
-  const message = error instanceof Error ? error.message : 'Erro ao executar o diagnóstico do PetBot.'
-  if (status >= 500) console.error('[petbot-diagnostic-suite]', error)
+  const isLunaEval = action.startsWith('luna_eval_')
+  const message = error instanceof Error
+    ? error.message
+    : isLunaEval
+      ? 'Erro ao executar a plataforma de avaliação da Luna.'
+      : 'Erro ao executar o diagnóstico do PetBot.'
+  if (status >= 500) console.error(isLunaEval ? '[luna-eval-platform]' : '[petbot-diagnostic-suite]', error)
   sendJson(res, status, {
     success: false,
     error: {
-      code: status === 409 ? 'PETBOT_DIAGNOSTIC_ALREADY_RUNNING' : 'PETBOT_DIAGNOSTIC_FAILED',
+      code: isLunaEval
+        ? status === 400 ? 'LUNA_EVAL_INVALID_REQUEST' : 'LUNA_EVAL_FAILED'
+        : status === 409 ? 'PETBOT_DIAGNOSTIC_ALREADY_RUNNING' : 'PETBOT_DIAGNOSTIC_FAILED',
       message,
     },
   })
 }
 
 export default async function petbotDiagnostic(req: IncomingMessage, res: ServerResponse) {
+  let action = ''
   if (req.method === 'OPTIONS') {
     res.statusCode = 204
     res.end()
@@ -48,11 +66,32 @@ export default async function petbotDiagnostic(req: IncomingMessage, res: Server
 
     const body = await readJsonBody(req) as JsonBody
     const tenantId = clean(body.tenantId)
-    const action = clean(body.action) || 'plan'
+    action = clean(body.action) || 'plan'
     validateUUID(tenantId, 'tenantId')
 
     if (requester.role !== 'admin' && requester.active_tenant_id !== tenantId) {
-      throw new HttpError(403, 'O diagnóstico só pode ser executado no negócio ativo da sua conta.')
+      throw new HttpError(403, 'A execução só pode ocorrer no negócio ativo da sua conta.')
+    }
+
+    if (action === 'luna_eval_plan') {
+      if (clean(body.confirm) !== 'PREPARE_LUNA_EVAL_PLATFORM') {
+        throw new HttpError(400, 'Confirmação de avaliação inválida.')
+      }
+      sendJson(res, 200, { success: true, data: buildLunaEvalPlan() })
+      return
+    }
+
+    if (action === 'luna_eval_run') {
+      if (clean(body.confirm) !== 'RUN_LUNA_EVAL_PLATFORM') {
+        throw new HttpError(400, 'Confirmação de execução inválida.')
+      }
+      const scenarioNames = stringList(body.scenarioNames)
+      const maxCases = Math.max(1, Math.min(500, Number(body.maxCases || 500) || 500))
+      const compiled = compileLunaEvalPlan({ names: scenarioNames.length ? scenarioNames : null, maxCases })
+      if (!compiled.length) throw new HttpError(400, 'Nenhum cenário corresponde à seleção.')
+      const report = await runCompiledScenarioSuite(compiled)
+      sendJson(res, 200, { success: report.failed === 0, data: report })
+      return
     }
 
     if (action === 'plan') {
@@ -95,6 +134,6 @@ export default async function petbotDiagnostic(req: IncomingMessage, res: Server
       runningCases.delete(runningKey)
     }
   } catch (error) {
-    handleApiError(res, error)
+    handleApiError(res, error, action)
   }
 }

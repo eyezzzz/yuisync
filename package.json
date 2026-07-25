@@ -25,11 +25,19 @@
     "test:petbot:matrix": "node --test test/petbotFlowMatrix.test.mjs",
     "test:luna:unit": "node --test test/luna/*.test.mjs",
     "test:luna:regressions": "node scripts/run-luna-scenarios.mjs",
-    "test:luna": "npm run test:luna:unit && npm run test:luna:regressions",
+    "test:luna": "npm run test:luna:unit && npm run test:luna:regressions && npm run test:luna:eval",
     "audit:ci": "node scripts/check-npm-audit.mjs",
     "luna:fixture:export": "node scripts/export-luna-trace-fixture.mjs",
     "luna:trace:replay": "node scripts/replay-luna-trace.mjs",
-    "test:luna:foundation": "node --test test/luna/errors.test.mjs test/luna/toolRegistry.test.mjs test/luna/runtime.test.mjs test/luna/traceFixture.test.mjs test/luna/temporaryOperationStore.test.mjs test/luna/factualRenderer.test.mjs test/luna/foundationIntegration.test.mjs test/luna/ciPolicy.test.mjs"
+    "test:luna:foundation": "node --test test/luna/errors.test.mjs test/luna/toolRegistry.test.mjs test/luna/runtime.test.mjs test/luna/traceFixture.test.mjs test/luna/temporaryOperationStore.test.mjs test/luna/factualRenderer.test.mjs test/luna/foundationIntegration.test.mjs test/luna/ciPolicy.test.mjs test/luna/evalPlatform.test.mjs test/luna/evalApiStatic.test.mjs",
+    "luna:eval:compile": "node scripts/compile-luna-scenarios.mjs",
+    "luna:eval:run": "node scripts/run-luna-evals.mjs",
+    "luna:eval:replay": "node scripts/replay-luna-eval.mjs",
+    "luna:eval:impact": "node scripts/select-luna-evals.mjs",
+    "test:luna:eval": "node scripts/run-luna-evals.mjs",
+    "test:luna:eval:full": "node scripts/run-luna-evals.mjs --groups all --max-cases 500",
+    "test:luna:eval:contracts": "node --test test/luna/evalPlatform.test.mjs test/luna/evalApiStatic.test.mjs",
+    "test:luna:eval:ci": "npm run test:luna:eval:contracts && npm run test:luna:eval"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.7",

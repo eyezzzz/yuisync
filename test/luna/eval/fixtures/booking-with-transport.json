@@ -1,0 +1,42 @@
+{
+  "schema_version": 1,
+  "name": "fixture_booking_with_transport",
+  "title": "Fixture canônica de banho com transporte",
+  "group": "bath",
+  "tags": ["bath", "transport", "fixture"],
+  "initial_state": { "type": "unknown", "status": "idle" },
+  "fixtures": { "base": "petshop_standard" },
+  "compiler": { "strategy": "one_at_a_time", "max_cases": 16 },
+  "steps": [
+    {
+      "id": "request",
+      "user_intent": "request_bath",
+      "phrases": ["Quero banho para Thor.", "Preciso marcar um banho para Thor."],
+      "payload": { "pet_name": "Thor", "breed": "Lhasa Apso", "weight_kg": 8, "customer_name": "Gabriel" }
+    },
+    {
+      "id": "time",
+      "user_intent": "choose_time",
+      "payload": { "scheduled_at": "2026-07-27T16:00:00-03:00" }
+    },
+    {
+      "id": "transport",
+      "user_intent": "request_motodog",
+      "payload": { "mode": "buscar_e_levar" }
+    },
+    {
+      "id": "address",
+      "user_intent": "provide_address",
+      "payload": { "street": "Av. Antônio Tureta", "number": "339", "district": "São Joaquim", "city": "Muriaé", "reference": "Casa Rosa" }
+    },
+    { "id": "summary", "user_intent": "request_summary", "payload": {} },
+    { "id": "confirm", "user_intent": "confirm", "paraphrase_set": "confirm", "payload": {} }
+  ],
+  "assert": {
+    "operation_status": "confirmed",
+    "total": 75,
+    "transport_mode": "buscar_e_levar",
+    "persistence": { "appointment_id": "$present" },
+    "tool_calls": { "confirm_operation": 1 }
+  }
+}
