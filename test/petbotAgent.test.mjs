@@ -181,6 +181,12 @@ test('marca horário ocupado e oferece alternativas reais', () => {
       scheduled_at: '2026-07-21T15:00:00-03:00',
       duration_min: 60,
       status: 'confirmado',
+    }, {
+      id: 'busy-2',
+      service_type: 'banho',
+      scheduled_at: '2026-07-21T15:00:00-03:00',
+      duration_min: 60,
+      status: 'agendado',
     }],
     now: new Date('2026-07-21T10:00:00-03:00'),
   })
@@ -427,11 +433,12 @@ test('seleciona nome e preco exatos do servico por peso e tipo de pelo', () => {
   })
 
   assert.equal(prepared.ok, true)
-  assert.equal(prepared.order.service_label, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
+  assert.equal(prepared.order.service_label, 'Banho Pet Porte Médio')
+  assert.equal(prepared.order.items[0].internal_name, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
   assert.equal(prepared.order.items[0].unit_price, 104)
   assert.equal(prepared.order.total, 104)
-  assert.match(prepared.summary, /Banho Pet Porte Medio 10,1 A 22 KG \(Pelo Duplo\)/)
-  assert.doesNotMatch(prepared.summary, /Pagamento:/)
+  assert.match(prepared.summary, /Banho Pet Porte Médio/)
+  assert.doesNotMatch(prepared.summary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)
 })
 
 test('codigo especializado retornado pelo catalogo permanece exato', () => {

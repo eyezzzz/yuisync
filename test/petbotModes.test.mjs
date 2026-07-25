@@ -648,7 +648,7 @@ test('agendamento veterinário não exige pagamento, transporte, peso ou pelagem
     args: {
       customer_name: 'Ana', pet_name: 'Bob', species: 'dog', size: 'pequeno',
       breed: null, weight_kg: null, symptom: 'coceira', order_type: 'veterinaria',
-      appointment_id: null, scheduled_at: '2026-07-25T14:00:00-03:00',
+      appointment_id: null, scheduled_at: '2026-07-27T14:00:00-03:00',
       service_product_id: 'vet-product', service_code: 'consulta_veterinaria',
       service_type: 'consulta_veterinaria', notes: null,
     },
@@ -657,7 +657,7 @@ test('agendamento veterinário não exige pagamento, transporte, peso ou pelagem
     settings: {
       petbotTimezone: 'America/Sao_Paulo',
       petbotBookingLeadTimeMin: 0,
-      petbotBusinessHours: { 6: [{ open: '08:00', close: '18:00' }] },
+      veterinaryBusinessHours: { 1: [{ open: '13:00', close: '18:00' }] },
     },
     now,
   })
