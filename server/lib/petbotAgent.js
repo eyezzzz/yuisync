@@ -2186,7 +2186,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
       delivery_neighborhood: deliveryNeighborhood,
       delivery_city: deliveryCity,
       delivery_reference: deliveryReference,
-      total: subtotal + deliveryFee,
+      total: Number((subtotal + deliveryFee).toFixed(2)),
     }
     const pendingOrderId = buildPendingOrderId(order)
     return {
