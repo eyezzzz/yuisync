@@ -9,6 +9,8 @@ alter table public.settings
   add column if not exists appointment_reminder_lead_min integer not null default 60,
   add column if not exists appointment_reminder_template_name text not null default 'appointment_arrival_reminder';
 
+-- O envio automático permanece desativado até o template de utilidade ser aprovado
+-- no WhatsApp Manager e a rotina agendada de disparo ser habilitada.
 alter table public.settings drop constraint if exists settings_appointment_reminder_lead_min_check;
 alter table public.settings add constraint settings_appointment_reminder_lead_min_check
   check (appointment_reminder_lead_min between 30 and 60);
