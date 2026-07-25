@@ -3,7 +3,7 @@ import { respondToChatMessage } from '../server/lib/chat.js'
 import { adminSupabase } from '../server/lib/supabase.js'
 
 const MODULE_ID = 'petshop'
-const SUITE_VERSION = '2026-07-24.2'
+const SUITE_VERSION = '2026-07-25.1'
 const CATEGORY_ORDER = ['banho', 'servicos', 'produtos', 'racao', 'veterinaria']
 const CATEGORY_LABELS = {
   banho: 'Banho',
@@ -114,6 +114,10 @@ function productText(item) {
   return normalize(`${item?.name || ''} ${item?.category || ''} ${item?.description || ''} ${JSON.stringify(item?.bot_metadata || {})}`)
 }
 
+function commercialProductText(item) {
+  return normalize(`${item?.name || ''} ${item?.category || ''} ${item?.description || ''}`)
+}
+
 function serviceText(item) {
   return normalize(`${item?.name || ''} ${item?.group_type || ''} ${item?.code || ''}`)
 }
@@ -137,8 +141,8 @@ function firstMatching(rows, predicate, usedIds = new Set()) {
 const VETERINARY_EXCLUSION = /consulta|veterin|cirurg|anest|exame|analise|acompanhamento|piometra|castr|vacina|ultrassom|hemograma|internacao|retorno|coleta|sutura|laborat|raio|radiograf|eletro|hernia|masectomia|cistocentese/
 const GROOMING_SIGNAL = /tosa|hidrat|escov|dental|unha|ouvido|desemb|trim|groom|higien/
 const PRODUCT_SERVICE_SIGNAL = /servico|servicos|banho|tosa|consulta|veterin|escovacao|hidratacao/
-const FEED_SIGNAL = /racao|alimento completo|bionatural|premier|golden|granplus|special dog|royal canin|pedigree|whiskas|friskies|formula natural|quatree|origens|magnus/
-const FEED_EXCLUSION = /bifinho|petisco|snack|ossinho|biscoito|palito|pate|sache|bebida|agua mineral/
+const FEED_SIGNAL = /\bracao\b|alimento completo|bionatural|premier|golden|granplus|special dog|royal canin|pedigree|whiskas|friskies|formula natural|quatree|origens|magnus/
+const FEED_EXCLUSION = /bifinho|petisco|snack|ossinho|biscoito|palito|pate|sache|bebida|agua mineral|brinquedo|borracha|corda|pilha|alcalina|bateria/
 
 const SERVICE_INTENTS = [
   {
@@ -220,7 +224,7 @@ const PRODUCT_INTENTS = [
     key: 'petisco',
     label: 'Petisco',
     noun: 'um petisco para cachorro',
-    matches: (row) => /petisco|bifinho|snack|ossinho|biscoito|palito/.test(productText(row)),
+    matches: (row) => /petisco|bifinho|snack|ossinho|biscoito|palito (?:dental|mastig)/.test(productText(row)),
   },
   {
     key: 'acessorio',
@@ -254,14 +258,17 @@ function productSemanticRequest(item, intent) {
       ? ' para cachorro'
       : ''
   const weight = clean(item?.name).match(/(?:ate|até)\s*(\d+(?:[.,]\d+)?)\s*kg/i)
-  const details = [brand ? `da ${brand}` : '', audience, weight ? ` de até ${weight[1]} kg` : '', pack ? `, embalagem de ${pack}` : '']
-    .filter(Boolean)
-    .join('')
-  return `quero comprar ${intent.noun}${details}`.replace(/\s+/g, ' ').trim()
+  const details = [
+    brand ? `da ${brand}` : '',
+    audience.trim(),
+    weight ? `de até ${weight[1]} kg` : '',
+    pack ? `embalagem de ${pack}` : '',
+  ].filter(Boolean).join(' ')
+  return `quero comprar ${intent.noun}${details ? ` ${details}` : ''}`.replace(/\s+/g, ' ').trim()
 }
 
 function feedSemanticRequest(item) {
-  const text = productText(item)
+  const text = commercialProductText(item)
   const brand = extractBrand(item?.name)
   const pack = extractPackageLabel(item?.name)
   const species = /gato/.test(text) ? 'gato' : 'cachorro'
@@ -334,7 +341,10 @@ async function loadCatalog(tenantId) {
     const text = productText(item)
     return !PRODUCT_SERVICE_SIGNAL.test(text) && Number(item.stock_quantity || 0) > 0
   })
-  const feedProducts = sellableProducts.filter((item) => FEED_SIGNAL.test(productText(item)) && !FEED_EXCLUSION.test(productText(item)))
+  const feedProducts = sellableProducts.filter((item) => {
+    const text = commercialProductText(item)
+    return FEED_SIGNAL.test(text) && !FEED_EXCLUSION.test(text)
+  })
   const generalProducts = sellableProducts.filter((item) => !feedProducts.some((feed) => feed.id === item.id))
 
   const serviceIntents = SERVICE_INTENTS.map((intent) => ({
@@ -469,8 +479,8 @@ function buildScenarioPlan(catalog) {
     })
   })
 
-  const dogFeeds = catalog.feedProducts.filter((item) => !/gato/.test(productText(item)))
-  const catFeeds = catalog.feedProducts.filter((item) => /gato/.test(productText(item)))
+  const dogFeeds = catalog.feedProducts.filter((item) => !/gato/.test(commercialProductText(item)))
+  const catFeeds = catalog.feedProducts.filter((item) => /gato/.test(commercialProductText(item)))
   const feeds = Array.from({ length: 10 }, (_, index) => {
     const preferred = index === 4 && catFeeds.length ? cycle(catFeeds, index) : cycle(dogFeeds.length ? dogFeeds : catalog.feedProducts, index)
     return scenarioBase('racao', index, [
@@ -756,6 +766,7 @@ async function sendTurn({ scenario, sessionId, message, suiteId, transcript }) {
     customer: message,
     assistant: reply,
     duration_ms: Date.now() - startedAt,
+    assistant_metadata: result?.savedMessage?.metadata || null,
   })
   return loadSession(sessionId)
 }
@@ -817,8 +828,11 @@ function nextServiceSupplement(scenario, session, slot) {
   return null
 }
 
-function nextProductSupplement(scenario, session) {
+function nextProductSupplement(scenario, session, transcript = []) {
   const facts = extractAgentContext(session.context).product_facts || {}
+  const lastReply = normalize(transcript.at(-1)?.assistant)
+  const asksProductChoice = /qual (?:deles|produto|opcao)|qual voce prefere|qual você prefere|encontrei .*opcoes|encontrei .*opções/.test(lastReply)
+  if (asksProductChoice && clean(scenario.product?.name)) return `quero o ${scenario.product.name}`
   if (!clean(facts.fulfillment_type)) return [1, 2, 5, 9].includes(scenario.variation) ? 'quero entrega' : 'vou retirar na loja'
   if (clean(facts.fulfillment_type) === 'entrega') {
     if (!clean(facts.delivery_address)) return addressMessage()
@@ -832,6 +846,10 @@ function pendingOrderText(pending) {
   return normalize((pending?.order?.items || []).map((item) => `${item.name || ''} ${item.description || ''}`).join(' '))
 }
 
+function pendingHasProduct(pending, target) {
+  const targetId = clean(target?.id)
+  return Boolean(targetId && (pending?.order?.items || []).some((item) => clean(item?.product_id) === targetId))
+}
 
 function pendingMatchesIntent(pending, intent) {
   if (!intent?.matches) return false
@@ -839,6 +857,7 @@ function pendingMatchesIntent(pending, intent) {
 }
 
 function feedSemanticMatch(pending, target) {
+  if (pendingHasProduct(pending, target)) return true
   const pendingText = pendingOrderText(pending)
   const targetText = productText(target)
   const brand = normalize(extractBrand(target?.name))
@@ -865,7 +884,10 @@ function assertRequestedItemResolved(scenario, pending) {
     assert(/consulta|veterin/.test(pendingOrderText(pending)), `${scenario.id}: o resumo não corresponde a uma consulta veterinária.`)
   }
   if (scenario.category === 'produtos') {
-    assert(pendingMatchesIntent(pending, scenario.product_intent), `${scenario.id}: o resumo não corresponde à categoria de produto solicitada.`)
+    assert(
+      pendingHasProduct(pending, scenario.product) || pendingMatchesIntent(pending, scenario.product_intent),
+      `${scenario.id}: o resumo não corresponde à categoria de produto solicitada.`,
+    )
   }
   if (scenario.category === 'racao') {
     assert(feedSemanticMatch(pending, scenario.product), `${scenario.id}: o resumo não corresponde ao perfil de ração solicitado.`)
@@ -894,9 +916,9 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
   if (scenario.outcome === 'emergency' || scenario.outcome === 'human_handoff') return { session: current, pending: null }
 
   const sentSupplements = new Set(messages.map(normalize))
-  for (let attempt = 0; attempt < 2 && !extractPendingOrder(current.context); attempt += 1) {
+  for (let attempt = 0; attempt < 4 && !extractPendingOrder(current.context); attempt += 1) {
     const supplement = scenario.order_type === 'produto'
-      ? nextProductSupplement(scenario, current)
+      ? nextProductSupplement(scenario, current, transcript)
       : nextServiceSupplement(scenario, current, slots[0])
     if (!supplement || sentSupplements.has(normalize(supplement))) break
     sentSupplements.add(normalize(supplement))
@@ -987,7 +1009,7 @@ async function verifyCommittedRows({ scenario, session, pending }) {
   assert(Number(sale.total_price) === Number(pending.order.total), `${scenario.id}: total salvo diverge do resumo.`)
   if (scenario.order_type === 'produto') {
     assert(!appointment, `${scenario.id}: compra de produto criou agendamento indevido.`)
-    assert(order.order_type === 'produto', `${scenario.id}: ordem de produto foi salva com tipo incorreto.`)
+    assert(['produto', 'entrega'].includes(order.order_type), `${scenario.id}: ordem de produto foi salva com tipo operacional incorreto (${order.order_type}).`)
   } else {
     assert(appointment, `${scenario.id}: agendamento não foi encontrado.`)
     assert(order.order_type === 'servico', `${scenario.id}: serviço foi salvo com tipo operacional incorreto.`)

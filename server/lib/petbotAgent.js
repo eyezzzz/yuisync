@@ -509,10 +509,18 @@ function inferServiceSpecies({ species = '', speciesTarget = '', name = '', cate
 
 function serviceKind(value = '') {
   const text = normalize(value)
+  if (/tosa/.test(text) && /tesour/.test(text)) return 'tosa_tesoura'
+  if (/tosa/.test(text) && /maquin|lamina|pente/.test(text)) return 'tosa_maquina'
+  if (/escov.*dent|dent.*escov/.test(text)) return 'escovacao_dental'
+  if (/hidrat/.test(text)) return 'hidratacao'
+  if (/unha/.test(text)) return 'corte_unhas'
+  if (/ouvido/.test(text)) return 'limpeza_ouvidos'
+  if (/desemb/.test(text)) return 'desembolo'
+  if (/retorno/.test(text) && /vet|consulta|clin/.test(text)) return 'retorno_veterinario'
+  if (/consulta/.test(text)) return 'consulta_veterinaria'
   if (/banho.*tosa|tosa.*banho/.test(text)) return 'banho_e_tosa'
   if (/tosa/.test(text)) return 'tosa'
   if (/banho/.test(text)) return 'banho'
-  if (/consulta/.test(text)) return 'consulta'
   if (/vacina/.test(text)) return 'vacina'
   return normalizeCode(value) || null
 }

@@ -132,7 +132,10 @@ export function verifyToolResult(toolResult = {}) {
       const result = toolResult.result || toolResult
       const status = text(result?.status, 100)
       if (['committed', 'already_committed'].includes(status)) {
-        const hasIds = Boolean(result?.appointment_id && (result?.sale_id || result?.order_id))
+        // A confirmação genérica pode representar produto ou serviço. Venda e ordem
+        // são comuns aos dois contratos; appointment_id é obrigatório somente para
+        // service_booking e é validado em verifyOperationTurn com o tipo da operação.
+        const hasIds = Boolean(result?.sale_id && result?.order_id)
         if (!hasIds) {
           issues.push(issue(
             LUNA_ERROR_CODES.PERSISTENCE_PARTIAL_FAILURE,

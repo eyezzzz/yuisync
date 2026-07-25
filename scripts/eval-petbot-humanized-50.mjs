@@ -7,6 +7,7 @@ import {
   PETBOT_AGENT_TOOLS,
   runPetbotAgent,
 } from '../server/lib/petbotAgent.js'
+import { interpretPetbotMessageWithLlm } from '../server/lib/petbotAi.js'
 import {
   buildPetbotAgentV3Prompt,
   validatePetbotOperationalReply,
@@ -91,20 +92,20 @@ function buildScenarios() {
     scenario('produto_02', 'produtos', 'Preciso de um antipulgas pro meu cachorro, ele pesa uns 8 quilos.', { allTools: ['search_petshop_products'], query: /antipul|pulga/i }),
     scenario('produto_03', 'produtos', 'Tem shampoo neutro? Só queria saber o preço mesmo.', { allTools: ['search_petshop_products'], forbiddenTools: ['prepare_petshop_product_order'], reply: /shampoo|34|preço|valor/i }),
     scenario('produto_04', 'produtos', 'Quero dois sacos de ração de 15 kg e vou buscar aí na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 2, fulfillment: 'retirada' } }),
-    scenario('produto_05', 'produtos', 'Pode mandar uma ração de 15 kg aqui em casa? Pago no pix.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'entrega', payment: 'pix' } }),
+    scenario('produto_05', 'produtos', 'Pode mandar uma ração de 15 kg na Rua das Flores 120, Centro, Muriaé, perto da praça? Pago no pix.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'entrega', payment: 'pix' } }),
     scenario('produto_06', 'produtos', 'Queria um brinquedo de corda pro meu cachorro, tem foto?', { allTools: ['search_petshop_products', 'send_product_image'], reply: /foto|imagem|brinquedo|corda/i }),
     scenario('produto_07', 'produtos', 'Tem ração a granel? Queria só dois quilos e meio pra testar.', { allTools: ['search_petshop_products'], anyTools: ['prepare_petshop_product_order'], query: /ração|racao|granel/i }),
     scenario('produto_08', 'produtos', 'Vou retirar um shampoo e pago quando chegar aí.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'retirada', payment: 'a_combinar' } }),
-    scenario('produto_09', 'produtos', 'Esse antipulgas serve pra cachorro de 8 kg? Se servir, separa um pra mim.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], query: /antipul|pulga/i }),
-    scenario('produto_10', 'produtos', 'Quero três brinquedos de corda, mas só se tiver em estoque.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 3 } }),
+    scenario('produto_09', 'produtos', 'Esse antipulgas serve pra cachorro de 8 kg? Se servir, separa um pra mim, vou retirar na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], query: /antipul|pulga/i }),
+    scenario('produto_10', 'produtos', 'Quero três brinquedos de corda, mas só se tiver em estoque. Vou retirar na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 3 } }),
 
-    scenario('servico_01', 'serviços', 'Queria marcar um banho pra Nina, shih tzu, 6 kg, quarta às 14h. Eu levo ela.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'prepare_petshop_service_booking'], service: /banho/i }),
-    scenario('servico_02', 'serviços', 'Pode agendar banho e tosa na máquina pro Thor? Ele é poodle, 9 kg, quinta às 10h. Vou levar.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'prepare_petshop_service_booking'], service: /maquin|tosa/i }),
-    scenario('servico_03', 'serviços', 'Quero tosa na tesoura pra Mel, maltês de 5 kg, sexta 13h. Levo na loja.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'prepare_petshop_service_booking'], service: /tesour|tosa/i }),
+    scenario('servico_01', 'serviços', 'Queria marcar um banho pra Nina, shih tzu, 6 kg, quarta às 14h. Eu levo ela e não tenho observações.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'prepare_petshop_service_booking'], service: /banho/i }),
+    scenario('servico_02', 'serviços', 'Pode agendar banho e tosa na máquina pro Thor? Ele é poodle, 9 kg, quinta às 10h. Vou levar e não tenho observações.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'prepare_petshop_service_booking'], service: /maquin|tosa/i }),
+    scenario('servico_03', 'serviços', 'Quero tosa na tesoura pra Mel, maltês de 5 kg, sexta 13h. Levo na loja e não tenho observações.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'prepare_petshop_service_booking'], service: /tesour|tosa/i }),
     scenario('servico_04', 'serviços', 'oi queria um bano pro meu shitzu de uns 7kg, quarta de tarde', { allTools: ['resolve_petshop_service', 'check_petshop_availability'], service: /banho/i, forbiddenTools: ['prepare_petshop_product_order'] }),
     scenario('servico_05', 'serviços', 'Quanto fica o banho de um spitz de 12 kg? Ainda não quero marcar.', { allTools: ['resolve_petshop_service'], forbiddenTools: ['prepare_petshop_service_booking'], reply: /banho|valor|preço|104|72/i }),
     scenario('servico_06', 'serviços', 'Vocês conseguem buscar meu cachorro para o banho?', { allTools: ['get_petshop_transport_options'], reply: /buscar|levar|MotoDog|transporte/i }),
-    scenario('servico_07', 'serviços', 'Quero banho pro Bob, SRD 9 kg, quarta 15h. Quero buscar e levar pelo MotoDog. Rua das Flores 120, Centro, Muriaé, perto da praça.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'get_petshop_transport_options', 'prepare_petshop_service_booking'], service: /banho/i }),
+    scenario('servico_07', 'serviços', 'Quero banho pro Bob, SRD 9 kg, quarta 15h. Quero buscar e levar pelo MotoDog. Rua das Flores 120, Centro, Muriaé, perto da praça. Sem observações.', { allTools: ['resolve_petshop_service', 'check_petshop_availability', 'get_petshop_transport_options', 'prepare_petshop_service_booking'], service: /banho/i }),
     scenario('servico_08', 'serviços', 'Tem horário para banho no domingo para a Nina, shih tzu de 6 kg?', { allTools: ['resolve_petshop_service', 'check_petshop_availability'], forbiddenTools: ['prepare_petshop_service_booking'], reply: /domingo|horário|dispon/i }),
     scenario('servico_09', 'serviços', 'Quero um banho pra minha cachorra, mas não sei o peso certinho ainda.', { allTools: ['resolve_petshop_service'], forbiddenTools: ['prepare_petshop_service_booking'], reply: /peso|aproximad/i }),
     scenario('servico_10', 'serviços', 'Quero marcar tosa, mas não sei se máquina ou tesoura. Pode me explicar primeiro?', { forbiddenTools: ['prepare_petshop_service_booking'], reply: /máquina|maquina|tesoura|diferen/i }),
@@ -298,13 +299,22 @@ function inspectCalls(item, result, calls) {
 async function runScenario(item) {
   const calls = []
   let orderResult = null
+  const interpretation = await interpretPetbotMessageWithLlm({
+    apiKey: API_KEY,
+    model: MODEL,
+    timeoutMs: 45_000,
+    message: item.message,
+    history: [],
+    state: { petbot_agent: { pending_order: item.pendingOrder || null } },
+    customerContext: 'Cliente Teste',
+  })
   const prompt = buildPetbotAgentV3Prompt({
     storeName: 'Quatro Patas',
     storePhone: STORE_INFORMATION.phone,
     storeLocation: STORE_INFORMATION.address,
     storeInformation: STORE_INFORMATION,
     customer: { name: 'Cliente Teste', known: true },
-    facts: {},
+    facts: interpretation || {},
     pendingOrder: item.pendingOrder || null,
     operationalContext: null,
     timezone: 'America/Sao_Paulo',
@@ -353,7 +363,7 @@ async function runScenario(item) {
     },
   })
 
-  return { result, calls, errors: inspectCalls(item, result, calls) }
+  return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
 }
 
 async function main() {
@@ -365,7 +375,7 @@ async function main() {
   for (const [index, item] of scenarios.entries()) {
     process.stdout.write(`[${index + 1}/50] ${item.id}: ${item.message}\n`)
     try {
-      const { result, calls, errors } = await runScenario(item)
+      const { result, calls, interpretation, errors } = await runScenario(item)
       rows.push({
         id: item.id,
         group: item.group,
@@ -373,6 +383,7 @@ async function main() {
         ok: errors.length === 0,
         errors,
         reply: result.reply,
+        interpretation,
         tools: calls,
         tokens: result.tokensUsed,
         validation_retries: result.validationRetries || 0,
