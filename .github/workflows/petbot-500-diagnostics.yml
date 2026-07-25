@@ -1,0 +1,32 @@
+name: PetBot 500 Diagnostics
+
+on:
+  pull_request:
+    paths:
+      - 'test/petbotHypothetical100Each.test.mjs'
+      - '.github/workflows/petbot-500-diagnostics.yml'
+      - 'docs/petbot-500-diagnostics-trigger.md'
+  workflow_dispatch:
+
+jobs:
+  diagnostics:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - name: Run 500 hypothetical scenarios
+        shell: bash
+        run: |
+          set +e
+          node --test test/petbotHypothetical100Each.test.mjs 2>&1 | tee petbot-500-results.txt
+          status=${PIPESTATUS[0]}
+          echo "exit_code=$status" >> petbot-500-results.txt
+          exit 0
+      - uses: actions/upload-artifact@v4
+        with:
+          name: petbot-500-results
+          path: petbot-500-results.txt
