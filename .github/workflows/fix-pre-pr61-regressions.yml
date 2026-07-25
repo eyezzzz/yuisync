@@ -1,0 +1,89 @@
+name: Fix Pre PR6.1 Regression Expectations
+
+on:
+  push:
+    branches:
+      - feat/pre-pr61-petshop-operations
+
+permissions:
+  contents: write
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/pre-pr61-petshop-operations
+          fetch-depth: 0
+      - name: Align legacy tests with PR6.1 contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          agent = Path('test/petbotAgent.test.mjs')
+          text = agent.read_text()
+          old = """    appointments: [{
+              id: 'busy-1',
+              service_type: 'tosa',
+              scheduled_at: '2026-07-21T15:00:00-03:00',
+              duration_min: 60,
+              status: 'confirmado',
+            }],
+          """
+          new = """    appointments: [{
+              id: 'busy-1',
+              service_type: 'tosa',
+              scheduled_at: '2026-07-21T15:00:00-03:00',
+              duration_min: 60,
+              status: 'confirmado',
+            }, {
+              id: 'busy-2',
+              service_type: 'banho',
+              scheduled_at: '2026-07-21T15:00:00-03:00',
+              duration_min: 60,
+              status: 'agendado',
+            }],
+          """
+          if old not in text:
+              raise SystemExit('occupied-slot fixture not found')
+          text = text.replace(old, new, 1)
+
+          old = """  assert.equal(prepared.order.service_label, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
+            assert.equal(prepared.order.items[0].unit_price, 104)
+            assert.equal(prepared.order.total, 104)
+            assert.match(prepared.summary, /Banho Pet Porte Medio 10,1 A 22 KG \\(Pelo Duplo\\)/)
+            assert.doesNotMatch(prepared.summary, /Pagamento:/)
+          """
+          new = """  assert.equal(prepared.order.service_label, 'Banho Pet Porte Médio')
+            assert.equal(prepared.order.items[0].internal_name, 'Banho Pet Porte Medio 10,1 A 22 KG (Pelo Duplo)')
+            assert.equal(prepared.order.items[0].unit_price, 104)
+            assert.equal(prepared.order.total, 104)
+            assert.match(prepared.summary, /Banho Pet Porte Médio/)
+            assert.doesNotMatch(prepared.summary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)
+          """
+          if old not in text:
+              raise SystemExit('friendly service assertion block not found')
+          agent.write_text(text.replace(old, new, 1))
+
+          modes = Path('test/petbotModes.test.mjs')
+          text = modes.read_text()
+          text = text.replace("scheduled_at: '2026-07-25T14:00:00-03:00'", "scheduled_at: '2026-07-27T14:00:00-03:00'", 1)
+          old = """      petbotBusinessHours: { 6: [{ open: '08:00', close: '18:00' }] },
+          """
+          new = """      veterinaryBusinessHours: { 1: [{ open: '13:00', close: '18:00' }] },
+          """
+          if old not in text:
+              raise SystemExit('veterinary schedule fixture not found')
+          modes.write_text(text.replace(old, new, 1))
+          PY
+          rm -f .github/workflows/pre-pr61-debug.yml
+          rm -f .github/workflows/fix-pre-pr61-regressions.yml
+          git add -A
+          git diff --cached --check
+      - name: Publish regression alignment
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "test(petbot): align regressions with PR6.1 contract [workspace-ready]"
+          git push origin HEAD:feat/pre-pr61-petshop-operations
