@@ -3857,7 +3857,6 @@ async function respondWithPetbotAgent({
         arguments: JSON.stringify({
           ...pendingAtTurnStart.order,
           notes: explicitServiceNoteUpdate,
-          service_grooming_detail: explicitServiceNoteUpdate,
         }),
       },
     }

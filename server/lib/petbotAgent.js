@@ -493,7 +493,9 @@ function normalizeServiceSpecies(value = '') {
   if (['dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino'].includes(text)) return 'dog'
   if (['cat', 'gato', 'gata', 'felino'].includes(text)) return 'cat'
   if (['other', 'outro', 'outra'].includes(text)) return 'other'
-  return normalizeCode(value) || null
+  // Catálogos legados usam valores como all, pet, todos ou textos livres.
+  // Esses valores significam ausência de restrição, nunca incompatibilidade.
+  return null
 }
 
 function inferServiceSpecies({ species = '', speciesTarget = '', name = '', category = '' } = {}) {

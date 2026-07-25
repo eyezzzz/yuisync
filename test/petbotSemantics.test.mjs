@@ -530,3 +530,13 @@ test('resolvedor distingue tosa e cuidados específicos do catálogo', () => {
   assert.equal(resolvePetshopService({ serviceQuery: 'hidratação para o pelo', orderType: 'banho_tosa', services }).service?.id, 'h')
   assert.equal(resolvePetshopService({ serviceQuery: 'consulta', orderType: 'veterinaria', services }).service?.id, 'v')
 })
+
+ test('metadado de espécie genérico não restringe serviço válido', () => {
+  const services = [
+    { id: 'm', code: 'tosa_maquina', name: 'Tosa Máquina', group_type: 'banho_tosa', species: 'all', default_price: 100, active: true },
+    { id: 'v', code: 'consulta_veterinaria', name: 'Consulta Veterinária', group_type: 'veterinaria', species: 'pet', default_price: 180, active: true },
+  ]
+
+  assert.equal(resolvePetshopService({ serviceQuery: 'tosa máquina', orderType: 'banho_tosa', species: 'dog', services }).service?.id, 'm')
+  assert.equal(resolvePetshopService({ serviceQuery: 'consulta', orderType: 'veterinaria', species: 'cat', services }).service?.id, 'v')
+})

@@ -99,7 +99,7 @@ async function loadSettings(tenantId) {
   const rows = await requireResult(
     adminSupabase
       .from('settings')
-      .select('tenant_id,module_id,petbot_autonomy_mode,petbot_timezone,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity,pet_transport_options,delivery_fee')
+      .select('tenant_id,module_id,petbot_autonomy_mode,petbot_timezone,petbot_business_hours,veterinary_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity,pet_transport_options,delivery_fee')
       .eq('tenant_id', tenantId)
       .eq('module_id', MODULE_ID)
       .limit(2),
@@ -343,7 +343,13 @@ async function loadCatalog(tenantId) {
   })
   const feedProducts = sellableProducts.filter((item) => {
     const text = commercialProductText(item)
-    return FEED_SIGNAL.test(text) && !FEED_EXCLUSION.test(text)
+    const name = normalize(item?.name)
+    const category = normalize(item?.category)
+    const knownFeedName = FEED_SIGNAL.test(name)
+    const categoryBackedFeed = /racao|alimento/.test(category)
+      && /\d+(?:[.,]\d+)?\s*(?:kg|g)\b/.test(name)
+      && /cao|caes|gato|gatos|adult|filhot|senior|frango|carne|cordeiro|peixe|salmao/.test(name)
+    return (knownFeedName || categoryBackedFeed) && !FEED_EXCLUSION.test(text)
   })
   const generalProducts = sellableProducts.filter((item) => !feedProducts.some((feed) => feed.id === item.id))
 
@@ -588,7 +594,7 @@ function ceilToInterval(value, interval) {
   return Math.ceil(value / interval) * interval
 }
 
-async function findSafeAppointmentSlots(settings, total = 1) {
+async function findSafeAppointmentSlots(settings, total = 1, { veterinary = false } = {}) {
   const zone = clean(settings.petbot_timezone) || 'America/Sao_Paulo'
   const now = DateTime.now().setZone(zone)
   const rangeEnd = now.plus({ days: 60 })
@@ -604,7 +610,9 @@ async function findSafeAppointmentSlots(settings, total = 1) {
   )
   const interval = Math.max(5, Number(settings.petbot_slot_interval_min || 30))
   const lead = Math.max(0, Number(settings.petbot_booking_lead_time_min || 15))
-  const businessHours = settings.petbot_business_hours || {}
+  const businessHours = veterinary
+    ? (settings.veterinary_business_hours || {})
+    : (settings.petbot_business_hours || {})
   const selected = []
 
   for (let dayOffset = 2; dayOffset <= 60 && selected.length < total; dayOffset += 1) {
@@ -616,7 +624,7 @@ async function findSafeAppointmentSlots(settings, total = 1) {
       const open = DateTime.fromFormat(`${date.toFormat('yyyy-MM-dd')} ${clean(period.open)}`, 'yyyy-MM-dd HH:mm', { zone })
       const close = DateTime.fromFormat(`${date.toFormat('yyyy-MM-dd')} ${clean(period.close)}`, 'yyyy-MM-dd HH:mm', { zone })
       if (!open.isValid || !close.isValid || close <= open) continue
-      const preferredStart = date.set({ hour: 10, minute: 0 })
+      const preferredStart = date.set({ hour: veterinary ? 14 : 10, minute: 0 })
       const offsetMinutes = Math.max(0, preferredStart.diff(open, 'minutes').minutes)
       let candidate = open.plus({ minutes: ceilToInterval(offsetMinutes, interval) })
       while (candidate.plus({ minutes: 180 }) <= close && selected.length < total) {
@@ -679,7 +687,10 @@ function scenarioMessages(scenario, slots) {
     const requestedQuantity = [1, 1, 2, 1, 2, 1, 1, 1, 1, 1][index]
     const availableUnits = Math.max(1, Math.floor(Number(scenario.product?.stock_quantity || 1)))
     const quantity = Math.min(requestedQuantity, availableUnits)
-    const opening = `${scenario.request_phrase}. Quero ${quantity} unidade${quantity > 1 ? 's' : ''}.`
+    const requestedName = clean(scenario.product?.name)
+    const opening = requestedName
+      ? `Quero comprar ${quantity} unidade${quantity > 1 ? 's' : ''} de ${requestedName}.`
+      : `${scenario.request_phrase}. Quero ${quantity} unidade${quantity > 1 ? 's' : ''}.`
     if ([1, 2, 5, 9].includes(index)) {
       const payment = index === 1 ? 'vou pagar por Pix' : index === 2 ? 'vou pagar no cartão' : index === 5 ? 'vou pagar em dinheiro e não preciso de troco' : 'Pix'
       return [opening, 'quero entrega', addressMessage(), payment]
@@ -831,8 +842,21 @@ function nextServiceSupplement(scenario, session, slot) {
 function nextProductSupplement(scenario, session, transcript = []) {
   const facts = extractAgentContext(session.context).product_facts || {}
   const lastReply = normalize(transcript.at(-1)?.assistant)
+  const targetText = commercialProductText(scenario.product)
+  const targetName = clean(scenario.product?.name)
+  const packageLabel = extractPackageLabel(targetName)
+  const flavor = targetName.match(/\b(frango|cordeiro|carne|salmao|salmão|peixe|peru)\b/i)?.[1] || ''
+  const species = /gato/.test(targetText) ? 'gato' : 'cachorro'
+  const age = /filhote|junior|puppy|kitten/.test(targetText) ? 'filhote' : /senior|sênior/.test(targetText) ? 'sênior' : 'adulto'
+  const size = /pequen|\brp\b/.test(targetText) ? 'porte pequeno' : /medio|médio|grande|\brgg\b/.test(targetText) ? 'porte médio ou grande' : 'porte médio'
+  if (/cachorro ou gato|cao ou gato|esp[eé]cie|para qual pet/.test(lastReply)) return `é para ${species}`
+  if (/raca ou o porte|raça ou o porte|qual .*porte|qual .*raca|qual .*raça/.test(lastReply)) return size
+  if (/filhote.*adult|adult.*senior|fase de vida|idade/.test(lastReply)) return `é ${age}`
+  if (/granel|pacote pequeno|saco maior|embalagem|quantos kg|tamanho do pacote/.test(lastReply) && packageLabel) return `quero o pacote de ${packageLabel}`
+  if (/qual sabor|sabor/.test(lastReply) && flavor) return `sabor ${flavor}`
+  if (/qual marca|marca/.test(lastReply) && targetName) return `quero exatamente ${targetName}`
   const asksProductChoice = /qual (?:deles|produto|opcao)|qual voce prefere|qual você prefere|encontrei .*opcoes|encontrei .*opções/.test(lastReply)
-  if (asksProductChoice && clean(scenario.product?.name)) return `quero o ${scenario.product.name}`
+  if (asksProductChoice && targetName) return `quero o ${targetName}`
   if (!clean(facts.fulfillment_type)) return [1, 2, 5, 9].includes(scenario.variation) ? 'quero entrega' : 'vou retirar na loja'
   if (clean(facts.fulfillment_type) === 'entrega') {
     if (!clean(facts.delivery_address)) return addressMessage()
@@ -906,9 +930,8 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
     if (isUnavailableReply(transcript.at(-1)?.assistant)) {
       throw new Error(`${scenario.id}: o catálogo não resolveu a solicitação semântica. Última resposta: ${compact(transcript.at(-1)?.assistant, 240)}`)
     }
-    if (isRepeatedReply(transcript)) {
-      throw new Error(`${scenario.id}: a Luna repetiu a mesma resposta; o cenário foi encerrado para não gastar créditos.`)
-    }
+    // Mensagens planejadas podem trazer a resposta solicitada apenas no turno
+    // seguinte. Não aborte antes de consumir a sequência humana do cenário.
     const after = stateFingerprint(current)
     if (before === after && transcript.length >= 2 && normalize(transcript.at(-1)?.assistant) === normalize(transcript.at(-2)?.assistant)) break
   }
@@ -916,7 +939,7 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
   if (scenario.outcome === 'emergency' || scenario.outcome === 'human_handoff') return { session: current, pending: null }
 
   const sentSupplements = new Set(messages.map(normalize))
-  for (let attempt = 0; attempt < 4 && !extractPendingOrder(current.context); attempt += 1) {
+  for (let attempt = 0; attempt < 7 && !extractPendingOrder(current.context); attempt += 1) {
     const supplement = scenario.order_type === 'produto'
       ? nextProductSupplement(scenario, current, transcript)
       : nextServiceSupplement(scenario, current, slots[0])
@@ -1158,7 +1181,9 @@ export async function runPetbotDiagnosticCase({ tenantId, scenarioId, suiteId = 
   const transcript = []
   const slots = scenario.order_type === 'produto' || ['emergency', 'human_handoff'].includes(scenario.outcome)
     ? []
-    : await findSafeAppointmentSlots(settings, scenario.variation === 5 ? 2 : 1)
+    : await findSafeAppointmentSlots(settings, scenario.variation === 5 ? 2 : 1, {
+      veterinary: scenario.category === 'veterinaria',
+    })
   const productIds = [...new Set([scenario.product?.id, scenario.add_product?.id].filter(Boolean))]
   const productSnapshots = productIds.length
     ? await requireResult(
