@@ -1,4 +1,5 @@
 import { DateTime } from 'luxon'
+import { friendlyPetshopServiceLabel } from '../../shared/petshopOperations.js'
 import { HttpError } from './http.js'
 import { serverEnv } from './env.js'
 import { logger } from './logger.js'
@@ -82,6 +83,24 @@ import {
   validatePetbotConversationReply,
   validatePetbotOperationalReply,
 } from './petbotGrounding.js'
+
+function assistantDashboardTurnVersion(options = {}) {
+  const version = Number(options?.assistantMetadata?.dashboard_turn_version || 0)
+  return Number.isInteger(version) && version > 0 ? version : null
+}
+
+function detectPetbotPricingConcern(message = '', interpretation = {}) {
+  const text = normalizeSearchText(message)
+  if (!text) return false
+  if (interpretation?.wants_discount === true) return true
+  return Boolean(
+    /\b(?:desconto|negociar|abaixar|reduzir|melhor preco|mais barato|caro demais|muito caro)\b/.test(text)
+    || /\b(?:por que|porque|como)\b.{0,45}\b(?:preco|valor|custa|cobrado|cobranca)\b/.test(text)
+    || /\b(?:preco|valor)\b.{0,45}\b(?:certo|correto|errado|diferente|mudou|aumentou|caro|absurdo)\b/.test(text)
+    || /\b(?:muda|varia|diferenca)\b.{0,45}\b(?:peso|raca|pelagem|porte|preco|valor)\b/.test(text)
+    || /\b(?:peso|raca|pelagem|porte)\b.{0,45}\b(?:muda|altera|aumenta|diminui)\b.{0,30}\b(?:preco|valor)\b/.test(text)
+  )
+}
 
 const SUPPORTED_MODULES = new Set(['petshop'])
 const PRODUCT_CONTEXT_LIMIT = 18
@@ -1056,7 +1075,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
   return cachedLoad(storeSettingsCache, scopeCacheKey(moduleId, tenantId), SETTINGS_CACHE_MS, async () => {
     let query = supabase
       .from('settings')
-      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist,petbot_timezone,store_business_hours,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity')
+      .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee,pet_transport_fee,pix_key,pix_holder_name,message_templates,pet_transport_options,petbot_autonomy_mode,petbot_autonomy_allowlist,petbot_timezone,store_business_hours,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity,veterinary_name,veterinary_business_hours,petshop_operational_staff,petshop_service_durations,appointment_reminder_enabled,appointment_reminder_lead_min,appointment_reminder_template_name')
       .eq('module_id', moduleId)
 
     if (tenantId) {
@@ -1064,7 +1083,7 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
     }
 
     let result = await query.maybeSingle()
-    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist|petbot_timezone|store_business_hours|petbot_business_hours|petbot_slot_interval_min|petbot_booking_lead_time_min|petbot_booking_capacity)/i.test(String(result.error.message || ''))) {
+    if (result.error && /(pet_transport_fee|pix_key|pix_holder_name|message_templates|pet_transport_options|petbot_autonomy_mode|petbot_autonomy_allowlist|petbot_timezone|store_business_hours|petbot_business_hours|petbot_slot_interval_min|petbot_booking_lead_time_min|petbot_booking_capacity|veterinary_name|veterinary_business_hours|petshop_operational_staff|petshop_service_durations|appointment_reminder_enabled|appointment_reminder_lead_min|appointment_reminder_template_name)/i.test(String(result.error.message || ''))) {
       let fallbackQuery = supabase
         .from('settings')
         .select('store_name,store_phone,store_address,store_neighborhood,store_city,bot_prompt,delivery_fee')
@@ -1106,7 +1125,18 @@ async function loadStoreSettings(supabase, moduleId, tenantId) {
         : null,
       petbotSlotIntervalMin: Number(data?.petbot_slot_interval_min || 30),
       petbotBookingLeadTimeMin: Number(data?.petbot_booking_lead_time_min || 15),
-      petbotBookingCapacity: Number(data?.petbot_booking_capacity || 1),
+      petbotBookingCapacity: Number(data?.petbot_booking_capacity || 2),
+      veterinaryName: data?.veterinary_name || 'Dra. Taina Campos',
+      veterinaryBusinessHours: data?.veterinary_business_hours && typeof data.veterinary_business_hours === 'object'
+        ? data.veterinary_business_hours
+        : null,
+      petshopOperationalStaff: Array.isArray(data?.petshop_operational_staff) ? data.petshop_operational_staff : [],
+      petshopServiceDurations: data?.petshop_service_durations && typeof data.petshop_service_durations === 'object'
+        ? data.petshop_service_durations
+        : null,
+      appointmentReminderEnabled: Boolean(data?.appointment_reminder_enabled),
+      appointmentReminderLeadMin: Number(data?.appointment_reminder_lead_min || 60),
+      appointmentReminderTemplateName: data?.appointment_reminder_template_name || 'appointment_arrival_reminder',
     }
   })
 }
@@ -1354,7 +1384,7 @@ async function loadAppointmentsFresh(supabase, moduleId, tenantId, settings = {}
 async function loadRecentMessages(supabase, sessionId) {
   const { data, error } = await supabase
     .from('chat_messages')
-    .select('id, role, content, metadata, tokens_used, sent_at')
+    .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
     .eq('session_id', sessionId)
     .order('sent_at', { ascending: false })
     .limit(RECENT_HISTORY_LIMIT)
@@ -1881,6 +1911,14 @@ function buildVerifiedStoreInformation(settings = {}) {
         .filter((period) => period !== '-'),
     ]),
   )
+  const veterinaryHours = Object.fromEntries(
+    Object.entries(settings.veterinaryBusinessHours || {}).map(([weekday, periods]) => [
+      weekdayLabels[weekday] || weekday,
+      (Array.isArray(periods) ? periods : [])
+        .map((period) => `${cleanText(period?.open)}-${cleanText(period?.close)}`)
+        .filter((period) => period !== '-'),
+    ]),
+  )
   const approvedMessages = Object.fromEntries(
     Object.entries(settings.messageTemplates || {})
       .filter(([, value]) => typeof value === 'string' && cleanText(value))
@@ -1914,6 +1952,10 @@ function buildVerifiedStoreInformation(settings = {}) {
     address: [settings.storeAddress, settings.storeNeighborhood, settings.storeCity].filter(Boolean).join(' - ') || null,
     phone: cleanText(settings.storePhone) || null,
     business_hours: businessHours,
+    veterinary: {
+      name: cleanText(settings.veterinaryName) || null,
+      business_hours: veterinaryHours,
+    },
     product_payment_methods: ['Pix', 'dinheiro', 'cartão'],
     service_payment_policy: 'Pagamento após a conclusão do serviço.',
     approved_messages: approvedMessages,
@@ -2062,6 +2104,7 @@ async function respondToAlreadyCommittedConfirmation({
     .insert({
       session_id: session.id,
       role: 'assistant',
+      dashboard_turn_version: assistantDashboardTurnVersion(options),
       content: reply,
       metadata: {
         source: options.source || 'dashboard_simulation',
@@ -2077,7 +2120,7 @@ async function respondToAlreadyCommittedConfirmation({
       tokens_used: 0,
       sent_at: sentAt,
     })
-    .select('id, role, content, metadata, tokens_used, sent_at')
+    .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
     .single()
   if (replyInsertError) throw new HttpError(500, 'Unable to save assistant response.')
 
@@ -2707,9 +2750,10 @@ async function respondWithPetbotAgent({
     trimmedMessage,
     llmInterpretation?.veterinary_risk,
   )
+  const pricingConcern = detectPetbotPricingConcern(trimmedMessage, llmInterpretation || {})
   const requestedHandoffTarget = effectiveVeterinaryRisk === 'emergency'
     ? 'veterinaria'
-    : explicitHandoffTarget || acceptedHandoffTarget
+    : explicitHandoffTarget || acceptedHandoffTarget || (pricingConcern ? 'atendente' : '')
   const shouldStartVeterinaryFlow = Boolean(
     veterinaryConsultationAccepted
     || veterinaryConsultationQuestion
@@ -2893,7 +2937,7 @@ async function respondWithPetbotAgent({
           id: resolvedServiceThisTurn.id,
           product_id: resolvedServiceThisTurn.product_id || null,
           code: resolvedServiceThisTurn.code,
-          name: resolvedServiceThisTurn.name,
+          name: resolvedServiceThisTurn.display_name || friendlyPetshopServiceLabel(resolvedServiceThisTurn, { weightKg: serviceFacts.weight_kg }),
         }
         : null,
       intent: cleanText(llmInterpretation?.intent) || null,
@@ -3621,9 +3665,11 @@ async function respondWithPetbotAgent({
     needsHuman = true
     handoffTarget = requestedHandoffTarget
     agentResult = {
-      reply: handoffTarget === 'veterinaria'
-        ? 'Claro. Vou transferir seu atendimento para nossa equipe veterinária agora.'
-        : 'Claro. Vou transferir seu atendimento para um atendente agora.',
+      reply: pricingConcern
+        ? 'Entendi sua dúvida sobre o valor. Para conferir a precificação com toda atenção e evitar qualquer informação incorreta, vou chamar um atendente para continuar com você por aqui. 😊'
+        : handoffTarget === 'veterinaria'
+          ? 'Claro. Vou transferir seu atendimento para nossa equipe veterinária agora.'
+          : 'Claro. Vou transferir seu atendimento para um atendente agora.',
       toolRuns: [...preloadedToolRuns, {
         name: 'handoff_to_human',
         ok: true,
@@ -3633,7 +3679,7 @@ async function respondWithPetbotAgent({
           ok: true,
           action: 'handoff_to_human',
           target: handoffTarget,
-          reason: 'Solicitação explícita do cliente.',
+          reason: pricingConcern ? 'Dúvida ou contestação sobre precificação.' : 'Solicitação explícita do cliente.',
         },
       }],
       tokensUsed: 0,
@@ -4260,6 +4306,7 @@ async function respondWithPetbotAgent({
     .insert({
       session_id: sessionId,
       role: 'assistant',
+      dashboard_turn_version: assistantDashboardTurnVersion(options),
       content: reply,
       metadata: {
         source: options.source || 'dashboard_simulation',
@@ -4290,7 +4337,7 @@ async function respondWithPetbotAgent({
       tokens_used: agentResult.tokensUsed,
       sent_at: botSentAt,
     })
-    .select('id, role, content, metadata, tokens_used, sent_at')
+    .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
     .single()
 
   if (replyInsertError) throw new HttpError(500, 'Unable to save assistant response.')
@@ -4434,6 +4481,7 @@ async function respondWithPetbotRecoverableFailure({
     .insert({
       session_id: sessionId,
       role: 'assistant',
+      dashboard_turn_version: assistantDashboardTurnVersion(options),
       content: reply,
       metadata: {
         source: options.source || 'dashboard_simulation',
@@ -4446,7 +4494,7 @@ async function respondWithPetbotRecoverableFailure({
       tokens_used: 0,
       sent_at: botSentAt,
     })
-    .select('id, role, content, metadata, tokens_used, sent_at')
+    .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
     .single()
   if (replyError) throw new HttpError(500, 'Unable to save recoverable PetBot reply.')
 
@@ -4511,6 +4559,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       .insert({
         session_id: sessionId,
         role: 'assistant',
+        dashboard_turn_version: assistantDashboardTurnVersion(options),
         content: reply,
         metadata: {
           source: options.source || 'dashboard_simulation',
@@ -4520,7 +4569,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         tokens_used: 0,
         sent_at: botSentAt,
       })
-      .select('id, role, content, metadata, tokens_used, sent_at')
+      .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
       .single()
 
     if (replyInsertError) {
@@ -4541,6 +4590,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
       .insert({
         session_id: sessionId,
         role: 'assistant',
+        dashboard_turn_version: assistantDashboardTurnVersion(options),
         content: reply,
         metadata: {
           source: options.source || 'dashboard_simulation',
@@ -4550,7 +4600,7 @@ export async function respondToChatMessage(supabase, sessionId, message, options
         tokens_used: 0,
         sent_at: botSentAt,
       })
-      .select('id, role, content, metadata, tokens_used, sent_at')
+      .select('id, role, content, metadata, tokens_used, sent_at, dashboard_turn_version')
       .single()
 
     if (replyInsertError) {

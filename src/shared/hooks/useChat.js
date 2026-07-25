@@ -17,19 +17,30 @@ function createPendingClientMessage(content) {
   }
 }
 
+function effectiveTurnVersion(message = {}) {
+  const version = Number(message.dashboard_turn_version ?? message.metadata?.dashboard_turn_version ?? 0)
+  return Number.isInteger(version) && version > 0 ? version : 0
+}
+
 function normalizeIncomingMessage(message) {
   return {
     ...message,
     sent_at: message.sent_at || null,
-    dashboard_turn_version: message.dashboard_turn_version ?? null,
+    dashboard_turn_version: effectiveTurnVersion(message) || null,
   }
 }
 
-function sortChatMessages(messages) {
+const CHAT_ROLE_ORDER = { user: 0, assistant: 1, human_agent: 1, system: 2 }
+
+export function sortChatMessages(messages) {
   return [...messages].sort((left, right) => {
-    const leftPending = left?.metadata?.local_only === true
-    const rightPending = right?.metadata?.local_only === true
-    if (leftPending !== rightPending) return leftPending ? 1 : -1
+    const leftVersion = effectiveTurnVersion(left)
+    const rightVersion = effectiveTurnVersion(right)
+    if (leftVersion > 0 && rightVersion > 0) {
+      if (leftVersion !== rightVersion) return leftVersion - rightVersion
+      const roleDiff = (CHAT_ROLE_ORDER[left?.role] ?? 9) - (CHAT_ROLE_ORDER[right?.role] ?? 9)
+      if (roleDiff !== 0) return roleDiff
+    }
 
     const leftTime = new Date(left?.sent_at || 0).getTime()
     const rightTime = new Date(right?.sent_at || 0).getTime()
@@ -37,9 +48,15 @@ function sortChatMessages(messages) {
       return leftTime - rightTime
     }
 
-    const leftVersion = Number(left?.dashboard_turn_version || 0)
-    const rightVersion = Number(right?.dashboard_turn_version || 0)
-    if (leftVersion !== rightVersion) return leftVersion - rightVersion
+    if (leftVersion !== rightVersion) {
+      if (!leftVersion) return -1
+      if (!rightVersion) return 1
+      return leftVersion - rightVersion
+    }
+
+    const leftPending = left?.metadata?.local_only === true
+    const rightPending = right?.metadata?.local_only === true
+    if (leftPending !== rightPending) return leftPending ? 1 : -1
 
     return String(left?.id || '').localeCompare(String(right?.id || ''))
   })

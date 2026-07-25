@@ -6,7 +6,7 @@ import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '..
 
 const APPOINTMENT_BASE_FIELDS = `
   id, pet_id, client_id, service_type, service_group, service_items, scheduled_at, duration_min, price, status, notes, source, created_at,
-  employee_id, groomer_id, live_status, checkin_at, ready_at, subscription_id, subscription_benefit_used
+  employee_id, groomer_id, responsible_staff_key, responsible_staff_name, live_status, checkin_at, ready_at, subscription_id, subscription_benefit_used
 `
 const APPOINTMENT_SELECT = `${APPOINTMENT_BASE_FIELDS},
   clients ( id, name, document, phone, email, address, neighborhood, city, details )
@@ -107,6 +107,7 @@ function mapAppointmentRow(appointment) {
       pet_name: normalized.clients.details?.pet_name || '',
       species: normalized.clients.details?.species || '',
       breed: normalized.clients.details?.breed || '',
+      weight_kg: normalized.clients.details?.weight_kg || null,
     },
     clients: undefined,
   }
@@ -432,6 +433,22 @@ export function useAppointments() {
 
     if (response.error) throw response.error
 
+    if (payload.responsible_staff_key || payload.responsible_staff_name) {
+      const assignment = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+        let query = supabase
+          .from('appointments')
+          .update({
+            responsible_staff_key: payload.responsible_staff_key || null,
+            responsible_staff_name: payload.responsible_staff_name || null,
+          })
+          .eq('id', response.data?.appointment_id)
+          .eq('module_id', activeModuleId)
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query
+      })
+      if (assignment.error) throw assignment.error
+    }
+
     const created = await fetchAppointmentById(response.data?.appointment_id)
     setAppointments((prev) => [...prev, created].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
     return created
@@ -440,6 +457,14 @@ export function useAppointments() {
   const update = useCallback(async (id, payload) => {
     if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar o agendamento.')
     const apiPayload = normalizeAppointmentPayload(payload)
+    const operationalAssignment = {
+      responsible_staff_key: apiPayload.responsible_staff_key || null,
+      responsible_staff_name: apiPayload.responsible_staff_name || null,
+    }
+    const hasOperationalAssignment = Object.prototype.hasOwnProperty.call(apiPayload, 'responsible_staff_key')
+      || Object.prototype.hasOwnProperty.call(apiPayload, 'responsible_staff_name')
+    delete apiPayload.responsible_staff_key
+    delete apiPayload.responsible_staff_name
     if (apiPayload.client_id) {
       apiPayload.pet_id = await ensurePetRecordForClient(activeModuleId, activeTenantId, apiPayload.client_id)
     }
@@ -482,6 +507,19 @@ export function useAppointments() {
         return query
       })
       if (response.error) throw response.error
+    }
+
+    if (hasOperationalAssignment) {
+      const assignment = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+        let query = supabase
+          .from('appointments')
+          .update(operationalAssignment)
+          .eq('id', id)
+          .eq('module_id', activeModuleId)
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query
+      })
+      if (assignment.error) throw assignment.error
     }
 
     const updated = await fetchAppointmentById(id)
