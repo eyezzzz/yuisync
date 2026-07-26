@@ -26,7 +26,21 @@ jobs:
           cache: npm
 
       - name: Apply fixes
-        run: python3 scripts/apply-petbot-product-terminal-fixes.py
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply-petbot-product-terminal-fixes.py')
+          source = path.read_text(encoding='utf-8')
+          start_marker = "workflow_path = '.github/workflows/petbot-final-humanized-100.yml'"
+          end_marker = "test_file = r'''"
+          if start_marker in source:
+              start = source.index(start_marker)
+              end = source.index(end_marker, start)
+              source = source[:start] + source[end:]
+              path.write_text(source, encoding='utf-8')
+          PY
+          python3 scripts/apply-petbot-product-terminal-fixes.py
 
       - run: npm ci
 
@@ -45,7 +59,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git status --short
-          git add server/lib/chat.js server/lib/petbotProductFollowup.js scripts/eval-petbot-humanized-50.mjs test/petbotProductFollowup.test.mjs .github/workflows/petbot-final-humanized-100.yml
+          git add server/lib/chat.js server/lib/petbotProductFollowup.js scripts/eval-petbot-humanized-50.mjs test/petbotProductFollowup.test.mjs
           git diff --cached --stat
           git commit -m "fix(petbot): encadear preparação e imagem de produtos"
           git pull --rebase origin test/petbot-predictive-100x
