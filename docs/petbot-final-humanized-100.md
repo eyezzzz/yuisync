@@ -31,15 +31,37 @@ A validação final possui 100 conversas com LLM:
 As primeiras rodadas foram usadas como diagnóstico e revelaram tanto defeitos reais quanto problemas da própria matriz. A bateria foi corrigida para:
 
 - distinguir tosa à máquina, tosa à tesoura e cuidados específicos no resolvedor;
+- preservar o serviço exato do catálogo entre data, horário, transporte e confirmação;
+- tratar as variantes de Escovação Dental cadastradas como escolhas reais do catálogo;
 - tratar retirada de produto como modalidade de compra, nunca como MotoDog;
 - aceitar confirmação de produto com venda e ordem, sem exigir agendamento;
 - interpretar metadados de espécie genéricos ou antigos como ausência de restrição;
+- separar ração de antipulgas, xampu, bebedouro e demais produtos mesmo com peso ou metadados antigos;
+- manter o produto exato selecionado até retirada/entrega, pagamento e resumo;
 - usar a jornada veterinária para gerar horários seguros de consulta;
-- preservar observações de serviço sem convertê-las em acabamento de tosa;
-- descartar falsos positivos de ração causados por categoria ou metadados antigos;
+- preservar e repreparar observações de serviço antes da confirmação;
+- exigir consulta de agenda antes da preparação de serviços;
+- exigir catálogo e `send_product_image` antes de afirmar preço, estoque ou foto;
+- bloquear promoções, serviços e informações comerciais não verificadas;
 - selecionar explicitamente o produto real e responder às qualificações solicitadas pela Luna;
 - consumir a sequência planejada antes de classificar uma resposta repetida como loop;
 - registrar metadados da resposta para auditar as ferramentas executadas no runtime.
+
+## Migration obrigatória para a rodada viva
+
+A RPC transacional instalada no Supabase precisa aceitar serviços universais importados com espécie `all`, `todos`, `qualquer`, `pet` ou equivalente. Aplique antes de considerar o resultado dos 50 fluxos vivos:
+
+```text
+supabase/migrations/20260725003000_petbot_universal_service_species.sql
+```
+
+Pela CLI vinculada ao projeto correto:
+
+```bash
+supabase db push
+```
+
+A migration é idempotente, preserva as correções anteriores da RPC e mantém execução restrita ao `service_role`.
 
 ## Execução
 
