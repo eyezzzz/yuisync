@@ -3101,7 +3101,23 @@ async function respondWithPetbotAgent({
         active: product.active !== false,
         image_available: Boolean(cleanText(product.image_url)),
       }))
-      const differentiation = analyzeProductDifferentiation(found.slice(0, 12), known)
+      const normalizedRequest = normalizeSearchText(
+        [trimmedMessage, cleanText(args.query)].filter(Boolean).join(' '),
+      )
+      const exactNameMatches = lastProductCandidates.filter((candidate) => {
+        const normalizedName = normalizeSearchText(candidate.name)
+        return Boolean(normalizedName && normalizedRequest.includes(normalizedName))
+      })
+      const automaticallySelected = exactNameMatches.length === 1
+        ? exactNameMatches[0]
+        : lastProductCandidates.length === 1
+          ? lastProductCandidates[0]
+          : null
+      if (automaticallySelected) selectedRecentProductCandidate = automaticallySelected
+
+      const differentiation = automaticallySelected
+        ? { status: 'resolved', differentiators: [] }
+        : analyzeProductDifferentiation(found.slice(0, 12), known)
       return {
         ok: true,
         checked: true,
@@ -3110,6 +3126,7 @@ async function respondWithPetbotAgent({
         status: differentiation.status,
         differentiators: differentiation.differentiators,
         requested_quantity: requestedQuantity,
+        ...(automaticallySelected ? { selected_candidate: automaticallySelected } : {}),
         products: lastProductCandidates,
       }
     }
@@ -3590,7 +3607,9 @@ async function respondWithPetbotAgent({
       storeInformation: verifiedStoreInformation,
     }) || buildUnknownStoreQuestionReply({ storeInformation: verifiedStoreInformation })
     : ''
-  const rationQualificationReply = !pendingAtTurnStart && !serviceOrderType
+  const rationQualificationReply = !pendingAtTurnStart
+    && !serviceOrderType
+    && !selectedRecentProductCandidate
     ? buildRationQualificationReply({
       message: trimmedMessage,
       facts: productFacts,
@@ -3849,28 +3868,45 @@ async function respondWithPetbotAgent({
     }
   } else if (currentMessageUpdatesServiceNotes) {
     const noteUpdateStartedAt = Date.now()
-    const noteUpdateToolCall = {
-      id: `service-note-${pendingAtTurnStart.id}`,
-      type: 'function',
-      function: {
-        name: 'prepare_petshop_service_booking',
-        arguments: JSON.stringify({
-          ...pendingAtTurnStart.order,
-          notes: explicitServiceNoteUpdate,
-        }),
-      },
+    await refreshServiceCatalog({ required: true })
+    const appointmentRefresh = await refreshAppointmentContext()
+    if (!appointmentRefresh.ok) {
+      throw new HttpError(409, 'Não foi possível revalidar a agenda para atualizar a observação.')
     }
-    const noteUpdateResult = await executeTool(noteUpdateToolCall)
+    const noteFacts = {
+      ...serviceFacts,
+      service_notes: explicitServiceNoteUpdate,
+      service_notes_resolved: true,
+      service_notes_explicit: true,
+    }
+    const noteUpdateResult = preparePetshopOrderDraft({
+      args: groundPetbotServiceArgs({
+        ...pendingAtTurnStart.order,
+        notes: explicitServiceNoteUpdate,
+      }, noteFacts),
+      products: liveProducts,
+      services: liveServices,
+      appointments: appointmentRefresh.appointments,
+      subscriptionBenefits: liveSubscriptionBenefits,
+      settings: storeSettings,
+    })
     const noteUpdateRun = {
       name: 'prepare_petshop_service_booking',
-      ok: noteUpdateResult?.ok !== false,
-      status: cleanText(noteUpdateResult?.status) || null,
+      ok: noteUpdateResult?.ok === true,
+      status: noteUpdateResult?.ok ? 'prepared' : 'needs_input',
       duration_ms: Date.now() - noteUpdateStartedAt,
       result: noteUpdateResult,
     }
-    if (!noteUpdateRun.ok || noteUpdateRun.status !== 'prepared') {
+    if (!noteUpdateResult?.ok) {
       throw new HttpError(409, 'Não foi possível atualizar a observação do agendamento com os dados atuais.')
     }
+    pendingOrder = {
+      id: noteUpdateResult.pending_order_id,
+      order: noteUpdateResult.order,
+      summary: noteUpdateResult.summary,
+      prepared_at: new Date().toISOString(),
+    }
+    serviceFacts = noteFacts
     agentResult = {
       reply: noteUpdateResult.summary,
       toolRuns: [...preloadedToolRuns, noteUpdateRun],
@@ -4044,6 +4080,73 @@ async function respondWithPetbotAgent({
       }
     },
   })
+
+  // The model may correctly search an exact product and still stop with a
+  // conversational response. Once every transactional fact is grounded, the
+  // server completes the preparation deterministically instead of asking the
+  // customer to repeat delivery or payment information.
+  const canCompleteProductPreparation = Boolean(
+    !pendingAtTurnStart
+    && !serviceOrderType
+    && !pendingOrder
+    && selectedRecentProductCandidate
+    && Number(productFacts.quantity || 0) > 0
+    && ['entrega', 'retirada'].includes(cleanText(productFacts.fulfillment_type))
+    && (
+      (cleanText(productFacts.fulfillment_type) === 'retirada'
+        && cleanText(productFacts.payment_method) === 'a_combinar')
+      || (cleanText(productFacts.fulfillment_type) === 'entrega'
+        && ['pix', 'dinheiro', 'cartao'].includes(cleanText(productFacts.payment_method)))
+    )
+  )
+  const alreadyPreparedProduct = (agentResult.toolRuns || []).some((run) => (
+    run?.name === 'prepare_petshop_product_order'
+    && run?.ok !== false
+    && cleanText(run?.result?.status || run?.status) === 'prepared'
+  ))
+  if (canCompleteProductPreparation && !alreadyPreparedProduct) {
+    const forcedPreparationStartedAt = Date.now()
+    const forcedPreparationArgs = {
+      customer_name: trustedCustomerName() || 'Cliente',
+      order_type: 'produto',
+      items: [{
+        product_id: selectedRecentProductCandidate.id,
+        name: selectedRecentProductCandidate.name,
+        quantity: Number(productFacts.quantity),
+        upsell: false,
+      }],
+      payment_method: cleanText(productFacts.payment_method),
+      fulfillment_type: cleanText(productFacts.fulfillment_type),
+      delivery_address: cleanText(productFacts.delivery_address) || null,
+      delivery_neighborhood: cleanText(productFacts.delivery_neighborhood) || null,
+      delivery_city: cleanText(productFacts.delivery_city) || null,
+      delivery_reference: cleanText(productFacts.delivery_reference) || null,
+      change_for: Number(llmInterpretation?.change_for || 0) || null,
+      notes: null,
+    }
+    const forcedPreparationResult = await executeTool({
+      id: `force-product-prepare-${sessionId}`,
+      type: 'function',
+      function: {
+        name: 'prepare_petshop_product_order',
+        arguments: JSON.stringify(forcedPreparationArgs),
+      },
+    })
+    const forcedPreparationRun = {
+      name: 'prepare_petshop_product_order',
+      ok: forcedPreparationResult?.ok !== false,
+      status: cleanText(forcedPreparationResult?.status) || null,
+      duration_ms: Date.now() - forcedPreparationStartedAt,
+      result: forcedPreparationResult,
+    }
+    agentResult = {
+      ...agentResult,
+      ...(forcedPreparationRun.ok && forcedPreparationRun.status === 'prepared'
+        ? { reply: cleanText(forcedPreparationResult.summary), terminal: true }
+        : {}),
+      toolRuns: [...(agentResult.toolRuns || []), forcedPreparationRun],
+    }
+  }
 
   if (cleanText(agentResult.reply) === PETBOT_PREPARATION_RECOVERY_HANDOFF_REPLY) {
     needsHuman = true

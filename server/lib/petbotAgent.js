@@ -96,7 +96,16 @@ function mergePetbotServiceType(currentValue = '', previousValue = '') {
   const currentCode = normalizeCode(current)
   const previousCode = normalizeCode(previous)
   const previousIsSpecificGrooming = /^tosa_(?:tesoura|maquina|total|higienica)$/.test(previousCode)
-  if (previousIsSpecificGrooming && ['tosa', 'banho_tosa', 'servico'].includes(currentCode)) {
+  const previousIsExactCatalogService = /^catalog_[a-z0-9]+$/.test(previousCode)
+  const currentIsGeneric = [
+    'servico', 'banho_tosa', 'banho', 'tosa',
+    'consulta', 'consulta_veterinaria', 'veterinaria',
+  ].includes(currentCode)
+
+  // Date, time and transport turns commonly make the small interpreter emit a
+  // generic service label. Never let that erase the exact catalog product that
+  // was already resolved and priced in a previous turn.
+  if ((previousIsSpecificGrooming || previousIsExactCatalogService) && currentIsGeneric) {
     return previous
   }
   return current

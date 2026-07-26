@@ -24,7 +24,7 @@ const TYPE_ALIASES = {
   petisco: ['petisco', 'bifinho', 'snack', 'dental', 'ossinho', 'osso', 'sache', 'filezitos', 'canister'],
   antipulgas: ['antipulga', 'antipulgas', 'pulga', 'carrapato', 'bravecto', 'nexgard', 'simparic', 'credeli', 'advocate'],
   areia: ['areia', 'higienica'],
-  higiene: ['shampoo', 'condicionador', 'perfume', 'sabonete', 'higiene', 'limpeza'],
+  higiene: ['shampoo', 'xampu', 'condicionador', 'perfume', 'sabonete', 'higiene', 'limpeza'],
   acessorio: ['coleira', 'guia', 'brinquedo', 'tapete', 'comedouro', 'bebedouro'],
 }
 
@@ -39,6 +39,16 @@ const NEGATIVE_RATION_TERMS = [
   'filezitos',
   'canister',
   'shampoo',
+  'xampu',
+  'condicionador',
+  'perfume',
+  'sabonete',
+  'bebedouro',
+  'comedouro',
+  'coleira',
+  'guia',
+  'brinquedo',
+  'mordedor',
   'antipulga',
   'bravecto',
   'nexgard',
@@ -245,12 +255,14 @@ export function classifyProduct(product = {}) {
   const packageKg = isBulk ? null : (metadataPackageKg > 0 ? metadataPackageKg : extractPackageKg(text))
   let type = normalizeCatalogText(metadata.product_type || metadata.type) || 'outro'
 
+  // Explicit commercial signals in the name/category are stronger than stale
+  // metadata imported by legacy catalogs. A shampoo, antiparasitic or feeder
+  // must never enter the ration qualification flow merely because it contains
+  // a weight/volume or was once tagged as food/service.
   if (isBulk) {
     type = 'granel'
   } else if (/\bracao\b/.test(category)) {
     type = 'racao'
-  } else if (type !== 'outro') {
-    // Editable catalog metadata wins over name heuristics.
   } else if (hasAny(text, TYPE_ALIASES.antipulgas)) {
     type = 'antipulgas'
   } else if (hasAny(text, TYPE_ALIASES.areia)) {
@@ -259,13 +271,16 @@ export function classifyProduct(product = {}) {
     type = 'higiene'
   } else if (hasAny(text, TYPE_ALIASES.petisco)) {
     type = 'petisco'
+  } else if (hasAny(text, TYPE_ALIASES.acessorio)) {
+    type = 'acessorio'
   } else if (
-    hasAny(text, TYPE_ALIASES.racao)
+    ['racao', 'food', 'alimento'].includes(type)
+    || hasAny(text, TYPE_ALIASES.racao)
     || (brand && /\b(kg|adult|filhote|castrad|senior|racas|raca|porte|cao|caes|gato|gatos)\b/.test(text))
   ) {
     type = 'racao'
-  } else if (hasAny(text, TYPE_ALIASES.acessorio)) {
-    type = 'acessorio'
+  } else if (type !== 'outro') {
+    // Preserve other explicit metadata only after concrete catalog signals.
   }
 
   if (type === 'racao' && NEGATIVE_RATION_TERMS.some((term) => text.includes(normalizeCatalogText(term)))) {
@@ -305,19 +320,23 @@ export function detectCatalogRequest(message = '', state = {}) {
     packageKg,
   )
   const wantsBulk = packagePreference === 'granel'
+  const wantsFlea = hasAny(text, TYPE_ALIASES.antipulgas) || productKind === 'flea'
+  const wantsLitter = hasAny(text, TYPE_ALIASES.areia) || productKind === 'litter'
+  const wantsHygiene = hasAny(text, TYPE_ALIASES.higiene)
+  const wantsTreat = hasAny(text, TYPE_ALIASES.petisco)
+  const wantsAccessory = hasAny(text, TYPE_ALIASES.acessorio)
   const wantsRation = /racao|alimento|comida|premier|royal|golden|pedigree|whiskas|special dog|formula natural|gran plus|quatree/.test(text)
     || productKind === 'food'
     || wantsBulk
-    || Boolean(packageKg)
-  const wantsFlea = hasAny(text, TYPE_ALIASES.antipulgas) || productKind === 'flea'
-  const wantsLitter = hasAny(text, TYPE_ALIASES.areia) || productKind === 'litter'
 
-  if (wantsFlea) return { type: 'antipulgas', packageKg, wantsBulk, packagePreference }
-  if (wantsLitter) return { type: 'areia', packageKg, wantsBulk, packagePreference }
+  // A number followed by kg may be the pet's weight or an antiparasitic range.
+  // It is not sufficient evidence of ration on its own.
+  if (wantsFlea) return { type: 'antipulgas', packageKg, wantsBulk: false, packagePreference: '' }
+  if (wantsLitter) return { type: 'areia', packageKg, wantsBulk: false, packagePreference: '' }
+  if (wantsHygiene) return { type: 'higiene', packageKg, wantsBulk: false, packagePreference: '' }
+  if (wantsTreat) return { type: 'petisco', packageKg, wantsBulk: false, packagePreference: '' }
+  if (wantsAccessory) return { type: 'acessorio', packageKg, wantsBulk: false, packagePreference: '' }
   if (wantsRation) return { type: wantsBulk ? 'granel' : 'racao', packageKg, wantsBulk, packagePreference }
-  if (hasAny(text, TYPE_ALIASES.higiene)) return { type: 'higiene', packageKg, wantsBulk, packagePreference }
-  if (hasAny(text, TYPE_ALIASES.petisco)) return { type: 'petisco', packageKg, wantsBulk, packagePreference }
-  if (hasAny(text, TYPE_ALIASES.acessorio)) return { type: 'acessorio', packageKg, wantsBulk, packagePreference }
   return { type: '', packageKg, wantsBulk, packagePreference }
 }
 
@@ -357,7 +376,7 @@ function scoreMetadata(metadata, state = {}, message = '') {
   let score = 0
 
   if (request.type && !allowedTypeForRequest(request.type, metadata)) return -999
-  if (!allowedPackageForPreference(request.packagePreference, metadata)) return -999
+  if (rationRequest && !allowedPackageForPreference(request.packagePreference, metadata)) return -999
   if (rationRequest && state.species && metadata.species && metadata.species !== state.species) return -999
   if (rationRequest && requestedAge && metadata.age && metadata.age !== requestedAge) return -999
   if (rationRequest && requestedBrand && !matchesRequestedBrand) return -999

@@ -820,8 +820,16 @@ function assistantRequestsSimpleConfirmation(reply) {
   return /(?:confirma|posso adicionar|deseja adicionar|quer adicionar|pode incluir|você quer incluir|voce quer incluir)/i.test(clean(reply))
 }
 
-function nextServiceSupplement(scenario, session, slot) {
+function nextServiceSupplement(scenario, session, slot, transcript = []) {
   const facts = extractFacts(session.context)
+  const lastReply = normalize(transcript.at(-1)?.assistant)
+  const exactServiceName = clean(scenario.service?.name)
+  if (
+    exactServiceName
+    && /material empresa|material tutor|qual .*opcao|qual .*opção|qual .*servico|qual .*serviço|escolha .*servico|escolha .*serviço/.test(lastReply)
+  ) {
+    return `quero exatamente o serviço ${exactServiceName}`
+  }
   if (!clean(facts.pet_name)) return 'o nome do pet é Teste'
   if (!clean(facts.species)) return 'é cachorro'
   if (!clean(facts.breed) && !clean(facts.size)) return 'é sem raça definida e porte pequeno'
@@ -942,13 +950,13 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
   for (let attempt = 0; attempt < 7 && !extractPendingOrder(current.context); attempt += 1) {
     const supplement = scenario.order_type === 'produto'
       ? nextProductSupplement(scenario, current, transcript)
-      : nextServiceSupplement(scenario, current, slots[0])
+      : nextServiceSupplement(scenario, current, slots[0], transcript)
     if (!supplement || sentSupplements.has(normalize(supplement))) break
     sentSupplements.add(normalize(supplement))
     const before = stateFingerprint(current)
     current = await sendTurn({ scenario, sessionId: session.id, message: supplement, suiteId, transcript })
     if (extractPendingOrder(current.context)) break
-    if (isUnavailableReply(transcript.at(-1)?.assistant) || isRepeatedReply(transcript) || before === stateFingerprint(current)) break
+    if (isUnavailableReply(transcript.at(-1)?.assistant) || isRepeatedReply(transcript)) break
   }
 
   let pending = extractPendingOrder(current.context)
@@ -975,7 +983,7 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
   const additionItem = scenario.add_service_intent?.item || scenario.add_product_intent?.item
   if (additionIntent && additionItem) {
     const naturalRequest = scenario.add_service_intent
-      ? `Antes de confirmar, pode acrescentar ${additionIntent.request}?`
+      ? `Antes de confirmar, pode acrescentar o serviço ${clean(additionItem.name) || additionIntent.request}?`
       : `Antes de confirmar, acrescente também ${productSemanticRequest(additionItem, additionIntent)}.`
     current = await sendTurn({ scenario, sessionId: session.id, message: naturalRequest, suiteId, transcript })
     pending = extractPendingOrder(current.context)
