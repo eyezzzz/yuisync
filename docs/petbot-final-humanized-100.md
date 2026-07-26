@@ -81,4 +81,4 @@ Os relatórios são salvos em `artifacts/petbot-humanized-50.json` e `artifacts/
 
 ## Status atual
 
-As correções de runtime, roteamento de ferramentas e validação factual foram aplicadas. Quality, matriz preditiva e a bateria viva devem ser executadas novamente sobre este commit; o objetivo de encerramento permanece em **100 aprovados e 0 reprovados**, sem remover cenários válidos para atingir o placar.
+As correções de runtime, roteamento de ferramentas e validação factual foram aplicadas e verificadas diretamente no `head` da PR após o round 2B. Quality, matriz preditiva e a bateria viva devem ser executadas novamente sobre este commit; o objetivo de encerramento permanece em **100 aprovados e 0 reprovados**, sem remover cenários válidos para atingir o placar.
