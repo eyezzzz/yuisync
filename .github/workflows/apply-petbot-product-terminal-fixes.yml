@@ -1,0 +1,54 @@
+name: Apply PetBot Product Terminal Fixes
+
+on:
+  pull_request:
+    paths:
+      - scripts/apply-petbot-product-terminal-fixes.py
+      - .github/workflows/apply-petbot-product-terminal-fixes.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/petbot-predictive-100x
+          fetch-depth: 1
+          show-progress: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply fixes
+        run: python3 scripts/apply-petbot-product-terminal-fixes.py
+
+      - run: npm ci
+
+      - name: Validate deterministic product paths
+        run: |
+          node --check server/lib/petbotProductFollowup.js
+          node --check server/lib/chat.js
+          node --check scripts/eval-petbot-humanized-50.mjs
+          node --test test/petbotProductFollowup.test.mjs
+          node --test test/petbotFinalRuntimeFixes.test.mjs
+          node --test test/petbotSemantics.test.mjs
+          npm run test:petbot
+
+      - name: Remove temporary patch files
+        run: |
+          rm scripts/apply-petbot-product-terminal-fixes.py
+          rm .github/workflows/apply-petbot-product-terminal-fixes.yml
+
+      - name: Commit fixes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(petbot): encadear preparação e imagem de produtos"
+          git push origin HEAD:test/petbot-predictive-100x
