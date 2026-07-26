@@ -26,22 +26,43 @@ jobs:
 
       - run: npm ci
 
-      - name: Apply and validate fixes
+      - id: patch
+        name: Apply and validate fixes
         shell: bash
         run: |
-          set -euo pipefail
-          node --check scripts/apply-petbot-final-fixes-round2b.mjs
-          node scripts/apply-petbot-final-fixes-round2b.mjs
-          node --check server/lib/petbotGrounding.js
-          node --check scripts/eval-petbot-humanized-50.mjs
-          node --test test/petbotHumanizedHarness.test.mjs
-          node --test test/petbotFinalRuntimeFixes.test.mjs
-          node --test test/petbotSemantics.test.mjs
+          set +e
+          set -o pipefail
+          {
+            node --check scripts/apply-petbot-final-fixes-round2b.mjs
+            node scripts/apply-petbot-final-fixes-round2b.mjs
+            node --check server/lib/petbotGrounding.js
+            node --check scripts/eval-petbot-humanized-50.mjs
+            node --test test/petbotHumanizedHarness.test.mjs
+            node --test test/petbotFinalRuntimeFixes.test.mjs
+            node --test test/petbotSemantics.test.mjs
+          } > petbot-round2b.log 2>&1
+          code=$?
+          cat petbot-round2b.log
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Upload complete diagnostic
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petbot-round2b-diagnostic
+          path: petbot-round2b.log
+          retention-days: 2
+
+      - name: Stop when validation failed
+        if: steps.patch.outputs.exit_code != '0'
+        run: exit 1
 
       - name: Remove temporary patch workflow
         run: |
           rm scripts/apply-petbot-final-fixes-round2b.mjs
           rm .github/workflows/apply-petbot-final-fixes-round2b.yml
+          rm -f petbot-round2b.log
 
       - name: Commit fixes
         run: |
