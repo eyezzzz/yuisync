@@ -31,6 +31,24 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p artifacts
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply-petbot-final-fixes-round2b.mjs')
+          source = path.read_text()
+          source = source.replace(
+              "      ? `${String(Number(preferredMatch[1])).padStart(2, '0')}:${preferredMatch[2] || '00'}`",
+              "      ? String(Number(preferredMatch[1])).padStart(2, '0') + ':' + (preferredMatch[2] || '00')",
+          )
+          source = source.replace(
+              "    const scheduledAt = `${date}T${time}:00-03:00`",
+              "    const scheduledAt = date + 'T' + time + ':00-03:00'",
+          )
+          source = source.replace(
+              "    'const scheduledAt = `${date}T${time}:00-03:00`',",
+              "    \"const scheduledAt = date + 'T' + time + ':00-03:00'\",",
+          )
+          path.write_text(source)
+          PY
           set -o pipefail
           {
             node --check scripts/apply-petbot-final-fixes-round2b.mjs
