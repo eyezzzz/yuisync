@@ -15,7 +15,7 @@ on:
 
 concurrency:
   group: petbot-final-humanized-100-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   final-humanized-100:
