@@ -62,5 +62,4 @@ jobs:
           git add server/lib/chat.js server/lib/petbotProductFollowup.js scripts/eval-petbot-humanized-50.mjs test/petbotProductFollowup.test.mjs
           git diff --cached --stat
           git commit -m "fix(petbot): encadear preparação e imagem de produtos"
-          git pull --rebase origin test/petbot-predictive-100x
           git push origin HEAD:test/petbot-predictive-100x
