@@ -64,8 +64,8 @@ jobs:
         shell: bash
         run: |
           set +e
-          npm run test:petbot:humanized 2>&1 | tee artifacts/petbot-humanized-50.log
-          code=${PIPESTATUS[0]}
+          npm run test:petbot:humanized > artifacts/petbot-humanized-50.log 2>&1
+          code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -74,10 +74,44 @@ jobs:
         shell: bash
         run: |
           set +e
-          npm run test:petbot:diagnostic:50 2>&1 | tee artifacts/petbot-diagnostic-50.log
-          code=${PIPESTATUS[0]}
+          npm run test:petbot:diagnostic:50 > artifacts/petbot-diagnostic-50.log 2>&1
+          code=$?
           echo "exit_code=$code" >> "$GITHUB_OUTPUT"
           exit 0
+
+      - name: Print compact result summary
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const files = [
+            ['Humanized', 'artifacts/petbot-humanized-50.json'],
+            ['Runtime', 'artifacts/petbot-diagnostic-50.json'],
+          ]
+          const lines = ['# PetBot Final 100 — resumo']
+          for (const [label, path] of files) {
+            if (!fs.existsSync(path)) {
+              lines.push(`\n## ${label}\nRelatório não gerado.`)
+              continue
+            }
+            const report = JSON.parse(fs.readFileSync(path, 'utf8'))
+            lines.push(`\n## ${label}: ${report.passed || 0}/${report.total || 0} aprovados, ${report.failed || 0} reprovados`)
+            if (Array.isArray(report.groups)) {
+              for (const group of report.groups) lines.push(`- ${group.group || group.category || group.label}: ${group.passed || 0}/${group.total || 0}`)
+            }
+            const rows = Array.isArray(report.report) ? report.report : Array.isArray(report.results) ? report.results : []
+            for (const row of rows.filter((item) => item && item.ok === false)) {
+              const errors = Array.isArray(row.errors) ? row.errors.join(' | ') : (row.error || row.reason || 'falha sem motivo registrado')
+              lines.push(`- FAIL ${row.id || row.scenario_id || 'sem-id'}: ${errors}`)
+            }
+            if (Array.isArray(report.uncovered_tools) && report.uncovered_tools.length) lines.push(`- Tools sem cobertura: ${report.uncovered_tools.join(', ')}`)
+          }
+          const output = `${lines.join('\n')}\n`
+          console.log(output)
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, output)
+          fs.writeFileSync('artifacts/petbot-final-compact-summary.md', output)
+          NODE
 
       - name: Upload complete reports
         if: always()
