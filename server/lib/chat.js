@@ -83,6 +83,13 @@ import {
   validatePetbotConversationReply,
   validatePetbotOperationalReply,
 } from './petbotGrounding.js'
+import {
+  buildForcedProductPreparationArgs,
+  productPreparationReady,
+  resolveProductPreparationFacts,
+  selectedProductCandidateFromToolRuns,
+  shouldForceProductImage,
+} from './petbotProductFollowup.js'
 
 function assistantDashboardTurnVersion(options = {}) {
   const version = Number(options?.assistantMetadata?.dashboard_turn_version || 0)
@@ -2671,7 +2678,7 @@ async function respondWithPetbotAgent({
     facts: productFacts,
     savedPets: [...savedPets, ...profilePet],
   })
-  const currentProductFactsSignature = productFactsSignature(productFacts)
+  let currentProductFactsSignature = productFactsSignature(productFacts)
   const previousCandidateState = previousAgentContext.last_product_candidates
     && typeof previousAgentContext.last_product_candidates === 'object'
     ? previousAgentContext.last_product_candidates
@@ -4081,6 +4088,47 @@ async function respondWithPetbotAgent({
     },
   })
 
+  const candidateFromProductSearch = selectedProductCandidateFromToolRuns(agentResult.toolRuns)
+  if (!selectedRecentProductCandidate && candidateFromProductSearch) {
+    selectedRecentProductCandidate = candidateFromProductSearch
+  }
+  productFacts = resolveProductPreparationFacts({
+    message: trimmedMessage,
+    facts: productFacts,
+    candidate: selectedRecentProductCandidate,
+  })
+  currentProductFactsSignature = productFactsSignature(productFacts)
+
+  if (shouldForceProductImage({
+    message: trimmedMessage,
+    candidate: selectedRecentProductCandidate,
+    toolRuns: agentResult.toolRuns,
+  })) {
+    const forcedImageStartedAt = Date.now()
+    const forcedImageResult = await executeTool({
+      id: `force-product-image-${sessionId}`,
+      type: 'function',
+      function: {
+        name: 'send_product_image',
+        arguments: JSON.stringify({ product_id: selectedRecentProductCandidate.id }),
+      },
+    })
+    const forcedImageRun = {
+      name: 'send_product_image',
+      ok: forcedImageResult?.ok !== false,
+      status: cleanText(forcedImageResult?.status) || null,
+      duration_ms: Date.now() - forcedImageStartedAt,
+      result: forcedImageResult,
+    }
+    agentResult = {
+      ...agentResult,
+      ...(forcedImageRun.ok && forcedImageResult?.image_attached === true
+        ? { reply: `Aqui está a foto de ${cleanText(selectedRecentProductCandidate.name) || 'produto solicitado'}.`, terminal: true }
+        : {}),
+      toolRuns: [...(agentResult.toolRuns || []), forcedImageRun],
+    }
+  }
+
   // The model may correctly search an exact product and still stop with a
   // conversational response. Once every transactional fact is grounded, the
   // server completes the preparation deterministically instead of asking the
@@ -4089,15 +4137,7 @@ async function respondWithPetbotAgent({
     !pendingAtTurnStart
     && !serviceOrderType
     && !pendingOrder
-    && selectedRecentProductCandidate
-    && Number(productFacts.quantity || 0) > 0
-    && ['entrega', 'retirada'].includes(cleanText(productFacts.fulfillment_type))
-    && (
-      (cleanText(productFacts.fulfillment_type) === 'retirada'
-        && cleanText(productFacts.payment_method) === 'a_combinar')
-      || (cleanText(productFacts.fulfillment_type) === 'entrega'
-        && ['pix', 'dinheiro', 'cartao'].includes(cleanText(productFacts.payment_method)))
-    )
+    && productPreparationReady({ facts: productFacts, candidate: selectedRecentProductCandidate })
   )
   const alreadyPreparedProduct = (agentResult.toolRuns || []).some((run) => (
     run?.name === 'prepare_petshop_product_order'
@@ -4106,24 +4146,12 @@ async function respondWithPetbotAgent({
   ))
   if (canCompleteProductPreparation && !alreadyPreparedProduct) {
     const forcedPreparationStartedAt = Date.now()
-    const forcedPreparationArgs = {
-      customer_name: trustedCustomerName() || 'Cliente',
-      order_type: 'produto',
-      items: [{
-        product_id: selectedRecentProductCandidate.id,
-        name: selectedRecentProductCandidate.name,
-        quantity: Number(productFacts.quantity),
-        upsell: false,
-      }],
-      payment_method: cleanText(productFacts.payment_method),
-      fulfillment_type: cleanText(productFacts.fulfillment_type),
-      delivery_address: cleanText(productFacts.delivery_address) || null,
-      delivery_neighborhood: cleanText(productFacts.delivery_neighborhood) || null,
-      delivery_city: cleanText(productFacts.delivery_city) || null,
-      delivery_reference: cleanText(productFacts.delivery_reference) || null,
-      change_for: Number(llmInterpretation?.change_for || 0) || null,
-      notes: null,
-    }
+    const forcedPreparationArgs = buildForcedProductPreparationArgs({
+      facts: productFacts,
+      candidate: selectedRecentProductCandidate,
+      customerName: trustedCustomerName() || 'Cliente',
+      changeFor: llmInterpretation?.change_for,
+    })
     const forcedPreparationResult = await executeTool({
       id: `force-product-prepare-${sessionId}`,
       type: 'function',

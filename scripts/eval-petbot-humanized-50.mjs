@@ -11,8 +11,16 @@ import { interpretPetbotMessageWithLlm } from '../server/lib/petbotAi.js'
 import {
   buildPetbotAgentV3Prompt,
   buildUnknownStoreQuestionReply,
+  mergeProductQueryFacts,
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
+import {
+  buildForcedProductPreparationArgs,
+  productPreparationReady,
+  resolveProductPreparationFacts,
+  selectedProductCandidateFromToolRuns,
+  shouldForceProductImage,
+} from '../server/lib/petbotProductFollowup.js'
 
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini'
 const API_KEY = process.env.OPENAI_API_KEY || ''
@@ -95,7 +103,7 @@ function buildScenarios() {
     scenario('produto_04', 'produtos', 'Quero dois sacos de ração de 15 kg para cachorro adulto de porte médio e vou buscar aí na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 2, fulfillment: 'retirada' } }),
     scenario('produto_05', 'produtos', 'Pode mandar uma ração de 15 kg para cachorro adulto de porte médio na Rua das Flores 120, Centro, Muriaé, perto da praça? Pago no pix.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'entrega', payment: 'pix' } }),
     scenario('produto_06', 'produtos', 'Queria um brinquedo de corda pro meu cachorro, tem foto?', { allTools: ['search_petshop_products', 'send_product_image'], reply: /foto|imagem|brinquedo|corda/i }),
-    scenario('produto_07', 'produtos', 'Tem ração a granel? Queria só dois quilos e meio pra testar.', { allTools: ['search_petshop_products'], anyTools: ['prepare_petshop_product_order'], query: /ração|racao|granel/i }),
+    scenario('produto_07', 'produtos', 'Tem ração a granel? Queria só dois quilos e meio pra testar.', { allTools: ['search_petshop_products'], forbiddenTools: ['prepare_petshop_product_order'], query: /ração|racao|granel/i, reply: /cachorro|gato|espécie|especie|retirar|entrega|ração|racao/i }),
     scenario('produto_08', 'produtos', 'Vou retirar um shampoo e pago quando chegar aí.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'retirada', payment: 'a_combinar' } }),
     scenario('produto_09', 'produtos', 'Esse antipulgas serve pra cachorro de 8 kg? Se servir, separa um pra mim, vou retirar na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], query: /antipul|pulga/i }),
     scenario('produto_10', 'produtos', 'Quero três brinquedos de corda, mas só se tiver em estoque. Vou retirar na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 3 } }),
@@ -413,7 +421,7 @@ async function runScenario(item) {
                 ? { type: 'function', function: { name: 'resolve_petshop_service' } }
                 : 'auto'
 
-  const result = await runPetbotAgent({
+  let result = await runPetbotAgent({
     model: MODEL,
     temperature: 0.1,
     systemPrompt: prompt,
@@ -471,6 +479,53 @@ async function runScenario(item) {
       return validation.ok ? { ok: true } : { ok: false, instruction: `Reescreva sem dados não validados: ${validation.problems.join('; ')}.` }
     },
   })
+
+  const selectedCandidate = selectedProductCandidateFromToolRuns(result.toolRuns)
+  const mergedProductFacts = mergeProductQueryFacts({
+    interpretation: interpretation || {},
+    previousFacts: {},
+    serviceFacts: {},
+    message: item.message,
+  })
+  const resolvedProductFacts = resolveProductPreparationFacts({
+    message: item.message,
+    facts: mergedProductFacts,
+    candidate: selectedCandidate,
+  })
+
+  if (shouldForceProductImage({ message: item.message, candidate: selectedCandidate, toolRuns: result.toolRuns })) {
+    const args = { product_id: selectedCandidate.id }
+    calls.push({ name: 'send_product_image', args })
+    const response = toolResult('send_product_image', args, item)
+    result = {
+      ...result,
+      reply: `Aqui está a foto de ${selectedCandidate.name}.`,
+      terminal: true,
+      toolRuns: [...(result.toolRuns || []), { name: 'send_product_image', ok: response.ok !== false, status: response.status, result: response }],
+    }
+  }
+
+  const alreadyPrepared = (result.toolRuns || []).some((run) => (
+    run?.name === 'prepare_petshop_product_order'
+    && run?.ok !== false
+    && (run?.result?.status || run?.status) === 'prepared'
+  ))
+  if (!item.pendingOrder && !alreadyPrepared && productPreparationReady({ facts: resolvedProductFacts, candidate: selectedCandidate })) {
+    const args = buildForcedProductPreparationArgs({
+      facts: resolvedProductFacts,
+      candidate: selectedCandidate,
+      customerName: 'Cliente Teste',
+      changeFor: interpretation?.change_for,
+    })
+    calls.push({ name: 'prepare_petshop_product_order', args })
+    const response = toolResult('prepare_petshop_product_order', args, item)
+    result = {
+      ...result,
+      reply: response.summary,
+      terminal: true,
+      toolRuns: [...(result.toolRuns || []), { name: 'prepare_petshop_product_order', ok: response.ok !== false, status: response.status, result: response }],
+    }
+  }
 
   return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
 }
