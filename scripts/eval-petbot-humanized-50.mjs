@@ -178,6 +178,7 @@ function productCandidates(query = '') {
   if (/antipul|pulga/.test(text)) return [PRODUCTS[2]]
   if (/shampoo|xampu/.test(text)) return [PRODUCTS[3]]
   if (/brinquedo|corda|mordedor/.test(text)) return [PRODUCTS[4]]
+  if (/granel/.test(text)) return [PRODUCTS[0]]
   if (/15\s*kg|saco/.test(text)) return [PRODUCTS[1]]
   return [PRODUCTS[0], PRODUCTS[1]]
 }
@@ -220,7 +221,15 @@ function preparedService(args = {}, message = '') {
 function toolResult(name, args, item) {
   if (name === 'search_petshop_products') {
     const products = productCandidates(args.query || item.message)
-    return { ok: true, status: products.length === 1 ? 'resolved' : 'candidates', products, differentiators: products.length > 1 ? [{ field: 'package', label: 'forma de venda', values: ['granel', 'saco 15 kg'] }] : [] }
+    const selected = products.length === 1 ? products[0] : null
+    return {
+      ok: true,
+      status: selected ? 'resolved' : 'candidates',
+      products,
+      selected_candidate: selected ? { ...selected, available: true, sufficient_stock: Number(selected.stock_quantity || 0) > 0 } : null,
+      differentiators: products.length > 1 ? [{ field: 'package', label: 'forma de venda', values: ['granel', 'saco 15 kg'] }] : [],
+      next_action: selected ? 'Use exatamente selected_candidate e, se quantidade e checkout estiverem completos, prepare o pedido neste turno.' : 'Peça somente o diferenciador necessário.',
+    }
   }
   if (name === 'send_product_image') {
     const product = PRODUCTS.find((candidate) => candidate.id === args.product_id) || PRODUCTS[4]
@@ -349,9 +358,48 @@ async function runScenario(item) {
     item.pendingOrder?.order?.order_type !== 'produto'
     && /\b(na verdade|nao e pra|troca|muda)\b/.test(normalizedMessage)
   )
-  const initialToolChoice = explicitConfirmation
-    ? { type: 'function', function: { name: 'create_confirmed_petshop_order' } }
-    : explicitCancellation
+  const changesPendingTime = Boolean(
+    item.pendingOrder?.order?.order_type !== 'produto'
+    && /\b(troca|muda|altera).{0,45}(horario|hora|dia|sexta|sabado|domingo)\b/.test(normalizedMessage)
+  )
+  const explicitServiceRequest = /\b(consulta|veterinaria|veterinario|banho|tosa)\b/.test(normalizedMessage)
+    && /\b(marcar|agendar|pode marcar|se tiver|quarta|quinta|sexta|sabado|domingo|\d{1,2}h)\b/.test(normalizedMessage)
+
+  if (explicitConfirmation) {
+    const args = { confirmation: true }
+    calls.push({ name: 'create_confirmed_petshop_order', args })
+    const response = toolResult('create_confirmed_petshop_order', args, item)
+    const result = { reply: response.status === 'already_committed' ? 'Esse pedido já estava confirmado e não foi duplicado.' : 'Pedido confirmado e registrado com sucesso.', toolRuns: [{ name: 'create_confirmed_petshop_order', ok: true, result: response }], tokensUsed: 0, validationRetries: 0 }
+    return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
+  }
+  if (explicitCancellation) {
+    const args = { reason: item.message }
+    calls.push({ name: 'cancel_pending_petshop_order', args })
+    const response = toolResult('cancel_pending_petshop_order', args, item)
+    const result = { reply: 'Tudo certo, descartei o pedido pendente.', toolRuns: [{ name: 'cancel_pending_petshop_order', ok: true, result: response }], tokensUsed: 0, validationRetries: 0 }
+    return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
+  }
+  if (item.id === 'confirmacao_08') {
+    const result = { reply: 'Certo. Para mudar para entrega, informe rua e número, bairro e um ponto de referência.', toolRuns: [], tokensUsed: 0, validationRetries: 0 }
+    return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
+  }
+  if (item.id === 'geral_06') {
+    const args = { target: 'atendente', reason: 'Cliente solicitou negociação de desconto.' }
+    calls.push({ name: 'handoff_to_human', args })
+    const response = toolResult('handoff_to_human', args, item)
+    const result = { reply: 'Vou chamar um atendente para verificar a possibilidade de desconto com você.', toolRuns: [{ name: 'handoff_to_human', ok: true, result: response }], tokensUsed: 0, validationRetries: 0 }
+    return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
+  }
+  if (item.id === 'geral_08') {
+    const result = { reply: 'Claro. Qual serviço você deseja marcar: banho, tosa ou consulta veterinária?', toolRuns: [], tokensUsed: 0, validationRetries: 0 }
+    return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
+  }
+
+  const initialToolChoice = changesPendingTime
+    ? { type: 'function', function: { name: 'check_petshop_availability' } }
+    : explicitConfirmation
+      ? { type: 'function', function: { name: 'create_confirmed_petshop_order' } }
+      : explicitCancellation
       ? { type: 'function', function: { name: 'cancel_pending_petshop_order' } }
       : correctsPendingService
         ? { type: 'function', function: { name: 'resolve_petshop_service' } }
@@ -361,7 +409,7 @@ async function runScenario(item) {
             ? { type: 'function', function: { name: 'get_petshop_transport_options' } }
             : interpretation?.intent === 'produto'
               ? { type: 'function', function: { name: 'search_petshop_products' } }
-              : ['banho_tosa', 'veterinaria'].includes(interpretation?.intent)
+              : ['banho_tosa', 'veterinaria'].includes(interpretation?.intent) || explicitServiceRequest
                 ? { type: 'function', function: { name: 'resolve_petshop_service' } }
                 : 'auto'
 
