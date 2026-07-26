@@ -263,14 +263,22 @@ export function resolvePetbotTurnSemantics({
   if (data.confirmation && !data.negation && !['correct', 'cancel'].includes(action)) action = 'affirm'
 
   const contextualTarget = pickEnum(expectedReplyTarget, REPLY_TARGETS)
-  const target = data.reply_target
-    || (
-      contextualTarget
-      && ['ask', 'inform', 'select', 'affirm', 'other'].includes(action)
-        ? contextualTarget
-        : ''
-    )
-    || (hasPendingOrder && (data.confirmation || action === 'affirm') ? 'final_confirmation' : '')
+  const explicitProductFulfillment = Boolean(
+    data.intent === 'produto'
+    && data.fulfillment_type
+    && !data.negation
+    && !['deny', 'cancel'].includes(action),
+  )
+  const target = explicitProductFulfillment
+    ? 'fulfillment'
+    : data.reply_target
+      || (
+        contextualTarget
+        && ['ask', 'inform', 'select', 'affirm', 'other'].includes(action)
+          ? contextualTarget
+          : ''
+      )
+      || (hasPendingOrder && (data.confirmation || action === 'affirm') ? 'final_confirmation' : '')
   const acceptsSlotUpdates = Boolean(
     confident
     && !data.negation
@@ -282,7 +290,9 @@ export function resolvePetbotTurnSemantics({
   )
   const slot = (value, ...targets) => acceptsTarget(...targets) ? value : ''
 
-  const rawTransportMode = slot(data.service_transport_mode, 'service_transport')
+  const rawTransportMode = explicitProductFulfillment
+    ? ''
+    : slot(data.service_transport_mode, 'service_transport')
   const transportOptionIndex = acceptsTarget('service_transport')
     && target === 'service_transport'
     ? data.option_index
@@ -437,6 +447,7 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Para racao, normalize package_preference como granel, pacote_pequeno ou saco_maior. Use pacote_pequeno para embalagens menores que 7 kg e saco_maior para embalagens de 7 kg ou mais.',
         'Se o estado atual da ração estiver como granel, uma quantidade em kg como "me vê 2 kg" significa quantity=2 e mantém package_preference="granel"; não transforme isso em pacote de 2 kg. Só troque para pacote ou saco quando o cliente disser explicitamente pacote, embalagem, saco ou sacaria.',
         'Em compras, extraia fulfillment_type e payment_method somente quando a mensagem atual trouxer uma escolha explícita do cliente. Nunca complete retirada, entrega, Pix, dinheiro ou cartão por padrão.',
+        'Em conversa de produto, frases como "vou retirar", "vou buscar", "vou pegar" ou "retiro na loja" significam fulfillment_type="retirada" e reply_target="fulfillment". Nunca interprete isso como MotoDog, somente_buscar ou somente_levar.',
         'Pagamento é perguntado somente para entrega. Na retirada, o servidor define pagamento a combinar; não invente payment_method.',
         'Quando o cliente informar a raça, extraia breed. O servidor deriva o porte das raças cadastradas; não invente outro porte nem peça peso para escolher ração.',
         'Para banho/tosa e veterinaria, pagamento nao e obrigatorio no chat; extraia payment_method somente quando o cliente falar pagamento espontaneamente.',

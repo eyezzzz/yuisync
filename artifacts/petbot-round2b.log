@@ -1,0 +1,187 @@
+Correções finais round 2b aplicadas com sucesso.
+TAP version 13
+# Subtest: foto markdown sem tool é rejeitada
+ok 1 - foto markdown sem tool é rejeitada
+  ---
+  duration_ms: 3.050581
+  type: 'test'
+  ...
+# Subtest: serviço não verificado recebe resposta segura
+ok 2 - serviço não verificado recebe resposta segura
+  ---
+  duration_ms: 0.155094
+  type: 'test'
+  ...
+1..2
+# tests 2
+# suites 0
+# pass 2
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 66.097645
+TAP version 13
+# Subtest: peso de antipulgas não transforma o pedido em ração
+ok 1 - peso de antipulgas não transforma o pedido em ração
+  ---
+  duration_ms: 1.594615
+  type: 'test'
+  ...
+# Subtest: xampu e bebedouro prevalecem sobre metadados antigos
+ok 2 - xampu e bebedouro prevalecem sobre metadados antigos
+  ---
+  duration_ms: 1.733742
+  type: 'test'
+  ...
+# Subtest: serviço exato do catálogo sobrevive a turnos genéricos
+ok 3 - serviço exato do catálogo sobrevive a turnos genéricos
+  ---
+  duration_ms: 0.844139
+  type: 'test'
+  ...
+# Subtest: migration aceita espécies universais sem remover validação real
+ok 4 - migration aceita espécies universais sem remover validação real
+  ---
+  duration_ms: 6.72207
+  type: 'test'
+  ...
+1..4
+# tests 4
+# suites 0
+# pass 4
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 76.134274
+TAP version 13
+# Subtest: confirmação semântica depende do estado transacional e não de uma palavra específica
+ok 1 - confirmação semântica depende do estado transacional e não de uma palavra específica
+  ---
+  duration_ms: 3.186918
+  type: 'test'
+  ...
+# Subtest: baixa confiança não altera escolhas críticas e mantém o fallback seguro
+ok 2 - baixa confiança não altera escolhas críticas e mantém o fallback seguro
+  ---
+  duration_ms: 0.98422
+  type: 'test'
+  ...
+# Subtest: intenção de transporte separa pergunta, escolha nominal e escolha ordinal
+ok 3 - intenção de transporte separa pergunta, escolha nominal e escolha ordinal
+  ---
+  duration_ms: 0.349732
+  type: 'test'
+  ...
+# Subtest: contexto pendente de transporte completa alvo sem transformar pergunta em seleção
+ok 4 - contexto pendente de transporte completa alvo sem transformar pergunta em seleção
+  ---
+  duration_ms: 0.21047
+  type: 'test'
+  ...
+# Subtest: venda aceita significado estruturado mesmo quando a frase não pertence ao dicionário lexical
+ok 5 - venda aceita significado estruturado mesmo quando a frase não pertence ao dicionário lexical
+  ---
+  duration_ms: 6.391152
+  type: 'test'
+  ...
+# Subtest: mudança semântica de embalagem substitui a escolha anterior sem exigir grafia exata
+ok 6 - mudança semântica de embalagem substitui a escolha anterior sem exigir grafia exata
+  ---
+  duration_ms: 1.492612
+  type: 'test'
+  ...
+# Subtest: banho e veterinária compartilham atos semânticos sem compartilhar regras operacionais
+ok 7 - banho e veterinária compartilham atos semânticos sem compartilhar regras operacionais
+  ---
+  duration_ms: 0.77222
+  type: 'test'
+  ...
+# Subtest: pedido de atendimento humano é uma intenção canônica com destino estruturado
+ok 8 - pedido de atendimento humano é uma intenção canônica com destino estruturado
+  ---
+  duration_ms: 0.234901
+  type: 'test'
+  ...
+# Subtest: normalização preserva a taxonomia semântica e quantidade fracionada
+ok 9 - normalização preserva a taxonomia semântica e quantidade fracionada
+  ---
+  duration_ms: 0.398127
+  type: 'test'
+  ...
+# Subtest: memória de serviço preserva fatos quando peso chega depois de outras mensagens
+ok 10 - memória de serviço preserva fatos quando peso chega depois de outras mensagens
+  ---
+  duration_ms: 1.220664
+  type: 'test'
+  ...
+# Subtest: pergunta sobre conteúdo do banho usa mensagem aprovada sem virar troca de serviço
+ok 11 - pergunta sobre conteúdo do banho usa mensagem aprovada sem virar troca de serviço
+  ---
+  duration_ms: 1.234758
+  type: 'test'
+  ...
+# Subtest: MotoDog distingue modalidade generica das tres opcoes reais e preserva endereco
+ok 12 - MotoDog distingue modalidade generica das tres opcoes reais e preserva endereco
+  ---
+  duration_ms: 0.346429
+  type: 'test'
+  ...
+# Subtest: veterinária prioriza pergunta objetiva de consulta mesmo quando há sintoma urgente
+ok 13 - veterinária prioriza pergunta objetiva de consulta mesmo quando há sintoma urgente
+  ---
+  duration_ms: 16.256391
+  type: 'test'
+  ...
+# Subtest: pedido de remédio oferece consulta antes de atendimento humano
+ok 14 - pedido de remédio oferece consulta antes de atendimento humano
+  ---
+  duration_ms: 1.654375
+  type: 'test'
+  ...
+# Subtest: aceite continua consulta e recusa apenas oferece atendimento humano
+ok 15 - aceite continua consulta e recusa apenas oferece atendimento humano
+  ---
+  duration_ms: 1.191361
+  type: 'test'
+  ...
+# Subtest: consulta ausente oferece confirmação humana sem transferir automaticamente
+ok 16 - consulta ausente oferece confirmação humana sem transferir automaticamente
+  ---
+  duration_ms: 0.327482
+  type: 'test'
+  ...
+# Subtest: risco veterinário só vira emergência automática com sinal explícito
+ok 17 - risco veterinário só vira emergência automática com sinal explícito
+  ---
+  duration_ms: 1.095341
+  type: 'test'
+  ...
+# Subtest: retirada de produto tem prioridade semântica sobre transporte do pet
+ok 18 - retirada de produto tem prioridade semântica sobre transporte do pet
+  ---
+  duration_ms: 0.240565
+  type: 'test'
+  ...
+# Subtest: resolvedor distingue tosa e cuidados específicos do catálogo
+ok 19 - resolvedor distingue tosa e cuidados específicos do catálogo
+  ---
+  duration_ms: 4.277722
+  type: 'test'
+  ...
+# Subtest: metadado de espécie genérico não restringe serviço válido
+ok 20 - metadado de espécie genérico não restringe serviço válido
+  ---
+  duration_ms: 0.577457
+  type: 'test'
+  ...
+1..20
+# tests 20
+# suites 0
+# pass 20
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 125.299319

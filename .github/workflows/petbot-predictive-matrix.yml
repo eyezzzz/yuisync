@@ -1,0 +1,62 @@
+name: PetBot Predictive Matrix
+
+# Final validation gate for the deterministic 100x scenario families.
+on:
+  pull_request:
+    paths:
+      - 'test/petbotPredictive100x.test.mjs'
+      - 'test/petbotAgent.test.mjs'
+      - 'server/lib/petbotAgent.js'
+      - 'shared/petshopOperations.js'
+      - 'package.json'
+      - '.github/workflows/petbot-predictive-matrix.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: petbot-predictive-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  predictive-matrix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - id: matrix
+        name: Run predictive matrix
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot:predictive 2>&1 | tee predictive-matrix.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - id: full_petbot
+        name: Run full PetBot suite
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot 2>&1 | tee full-petbot.log
+          code=${PIPESTATUS[0]}
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload PetBot reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petbot-predictive-and-full-report
+          path: |
+            predictive-matrix.log
+            full-petbot.log
+          retention-days: 2
+      - name: Enforce predictive result
+        if: steps.matrix.outputs.exit_code != '0'
+        run: exit 1
+      - name: Enforce full PetBot result
+        if: steps.full_petbot.outputs.exit_code != '0'
+        run: exit 1

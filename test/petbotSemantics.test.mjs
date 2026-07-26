@@ -6,7 +6,7 @@ import {
   resolveEffectiveVeterinaryRisk,
   resolvePetbotTurnSemantics,
 } from '../server/lib/petbotAi.js'
-import { mergeInterpretedPetbotServiceFacts } from '../server/lib/petbotAgent.js'
+import { mergeInterpretedPetbotServiceFacts, resolvePetshopService } from '../server/lib/petbotAgent.js'
 import {
   detectExplicitProductFulfillmentType,
   detectExplicitProductPaymentMethod,
@@ -497,4 +497,46 @@ test('risco veterinário só vira emergência automática com sinal explícito',
   assert.equal(resolveEffectiveVeterinaryRisk('meu cachorro está vomitando bastante', 'emergency'), 'urgent')
   assert.equal(resolveEffectiveVeterinaryRisk('ele está com dificuldade para respirar', 'urgent'), 'emergency')
   assert.equal(resolveEffectiveVeterinaryRisk('quanto custa a consulta?', 'none'), 'none')
+})
+
+test('retirada de produto tem prioridade semântica sobre transporte do pet', () => {
+  const result = resolvePetbotTurnSemantics({
+    interpretation: {
+      intent: 'produto',
+      dialogue_act: 'select',
+      reply_target: 'service_transport',
+      fulfillment_type: 'retirada',
+      service_transport_mode: 'somente_levar',
+      confidence: 0.99,
+    },
+  })
+
+  assert.equal(result.target, 'fulfillment')
+  assert.equal(result.fulfillment_type, 'retirada')
+  assert.equal(result.transport_intent, '')
+  assert.equal(result.service_transport_mode, '')
+})
+
+test('resolvedor distingue tosa e cuidados específicos do catálogo', () => {
+  const services = [
+    { id: 'm', code: 'tosa_maquina', name: 'Tosa na Máquina', group_type: 'banho_tosa', default_price: 100, active: true },
+    { id: 't', code: 'tosa_tesoura', name: 'Tosa na Tesoura', group_type: 'banho_tosa', default_price: 140, active: true },
+    { id: 'h', code: 'hidratacao', name: 'Hidratação do Pelo', group_type: 'banho_tosa', default_price: 35, active: true },
+    { id: 'v', code: 'consulta_veterinaria', name: 'Consulta Veterinária', group_type: 'veterinaria', default_price: 180, active: true },
+  ]
+
+  assert.equal(resolvePetshopService({ serviceQuery: 'tosa na máquina', orderType: 'banho_tosa', services }).service?.id, 'm')
+  assert.equal(resolvePetshopService({ serviceQuery: 'tosa na tesoura', orderType: 'banho_tosa', services }).service?.id, 't')
+  assert.equal(resolvePetshopService({ serviceQuery: 'hidratação para o pelo', orderType: 'banho_tosa', services }).service?.id, 'h')
+  assert.equal(resolvePetshopService({ serviceQuery: 'consulta', orderType: 'veterinaria', services }).service?.id, 'v')
+})
+
+ test('metadado de espécie genérico não restringe serviço válido', () => {
+  const services = [
+    { id: 'm', code: 'tosa_maquina', name: 'Tosa Máquina', group_type: 'banho_tosa', species: 'all', default_price: 100, active: true },
+    { id: 'v', code: 'consulta_veterinaria', name: 'Consulta Veterinária', group_type: 'veterinaria', species: 'pet', default_price: 180, active: true },
+  ]
+
+  assert.equal(resolvePetshopService({ serviceQuery: 'tosa máquina', orderType: 'banho_tosa', species: 'dog', services }).service?.id, 'm')
+  assert.equal(resolvePetshopService({ serviceQuery: 'consulta', orderType: 'veterinaria', species: 'cat', services }).service?.id, 'v')
 })

@@ -112,9 +112,14 @@ function inferredSizeLabel(service = {}, weightKg = null) {
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
   const weight = Number(weightKg)
-  if (/pequeno|0\s*kg|ate\s*10|0\s*a\s*10/.test(text) || (Number.isFinite(weight) && weight < 10)) return 'Porte Pequeno'
-  if (/medio|10\s*kg|10\s*a\s*22|10\s*a\s*21/.test(text) || (Number.isFinite(weight) && weight >= 10 && weight < 22)) return 'Porte Médio'
-  if (/grande|acima\s*de\s*22|mais\s*de\s*22/.test(text) || (Number.isFinite(weight) && weight >= 22)) return 'Porte Grande'
+  if (Number.isFinite(weight) && weight >= 0) {
+    if (weight < 10) return 'Porte Pequeno'
+    if (weight < 22) return 'Porte Médio'
+    return 'Porte Grande'
+  }
+  if (/pequeno|0\s*kg|ate\s*10|0\s*a\s*10/.test(text)) return 'Porte Pequeno'
+  if (/medio|10\s*kg|10\s*a\s*22|10\s*a\s*21/.test(text)) return 'Porte Médio'
+  if (/grande|acima\s*de\s*22|mais\s*de\s*22/.test(text)) return 'Porte Grande'
   return ''
 }
 

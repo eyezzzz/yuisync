@@ -96,7 +96,16 @@ function mergePetbotServiceType(currentValue = '', previousValue = '') {
   const currentCode = normalizeCode(current)
   const previousCode = normalizeCode(previous)
   const previousIsSpecificGrooming = /^tosa_(?:tesoura|maquina|total|higienica)$/.test(previousCode)
-  if (previousIsSpecificGrooming && ['tosa', 'banho_tosa', 'servico'].includes(currentCode)) {
+  const previousIsExactCatalogService = /^catalog_[a-z0-9]+$/.test(previousCode)
+  const currentIsGeneric = [
+    'servico', 'banho_tosa', 'banho', 'tosa',
+    'consulta', 'consulta_veterinaria', 'veterinaria',
+  ].includes(currentCode)
+
+  // Date, time and transport turns commonly make the small interpreter emit a
+  // generic service label. Never let that erase the exact catalog product that
+  // was already resolved and priced in a previous turn.
+  if ((previousIsSpecificGrooming || previousIsExactCatalogService) && currentIsGeneric) {
     return previous
   }
   return current
@@ -493,7 +502,9 @@ function normalizeServiceSpecies(value = '') {
   if (['dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino'].includes(text)) return 'dog'
   if (['cat', 'gato', 'gata', 'felino'].includes(text)) return 'cat'
   if (['other', 'outro', 'outra'].includes(text)) return 'other'
-  return normalizeCode(value) || null
+  // Catálogos legados usam valores como all, pet, todos ou textos livres.
+  // Esses valores significam ausência de restrição, nunca incompatibilidade.
+  return null
 }
 
 function inferServiceSpecies({ species = '', speciesTarget = '', name = '', category = '' } = {}) {
@@ -509,10 +520,18 @@ function inferServiceSpecies({ species = '', speciesTarget = '', name = '', cate
 
 function serviceKind(value = '') {
   const text = normalize(value)
+  if (/tosa/.test(text) && /tesour/.test(text)) return 'tosa_tesoura'
+  if (/tosa/.test(text) && /maquin|lamina|pente/.test(text)) return 'tosa_maquina'
+  if (/escov.*dent|dent.*escov/.test(text)) return 'escovacao_dental'
+  if (/hidrat/.test(text)) return 'hidratacao'
+  if (/unha/.test(text)) return 'corte_unhas'
+  if (/ouvido/.test(text)) return 'limpeza_ouvidos'
+  if (/desemb/.test(text)) return 'desembolo'
+  if (/retorno/.test(text) && /vet|consulta|clin/.test(text)) return 'retorno_veterinario'
+  if (/consulta/.test(text)) return 'consulta_veterinaria'
   if (/banho.*tosa|tosa.*banho/.test(text)) return 'banho_e_tosa'
   if (/tosa/.test(text)) return 'tosa'
   if (/banho/.test(text)) return 'banho'
-  if (/consulta/.test(text)) return 'consulta'
   if (/vacina/.test(text)) return 'vacina'
   return normalizeCode(value) || null
 }
@@ -2186,7 +2205,7 @@ export function preparePetshopOrderDraft({ args = {}, products = [], services = 
       delivery_neighborhood: deliveryNeighborhood,
       delivery_city: deliveryCity,
       delivery_reference: deliveryReference,
-      total: subtotal + deliveryFee,
+      total: Number((subtotal + deliveryFee).toFixed(2)),
     }
     const pendingOrderId = buildPendingOrderId(order)
     return {

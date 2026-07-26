@@ -73,3 +73,18 @@ test('verificador retorna semântica operacional para cada ferramenta', () => {
   assert.equal(timeout.requires_retry, true)
   assert.equal(timeout.requires_human, false)
 })
+
+test('confirmação de produto aceita venda e ordem sem appointment', () => {
+  const result = verifyToolResult({
+    schema_version: 1,
+    tool_name: 'create_confirmed_petshop_order',
+    ok: true,
+    status: 'committed',
+    requires_confirmation: true,
+    result: { status: 'committed', sale_id: 'sale_1', order_id: 'order_1', appointment_id: null },
+  })
+
+  assert.equal(result.result_consistent, true)
+  assert.equal(result.tool_succeeded, true)
+  assert.deepEqual(result.issues, [])
+})

@@ -1,0 +1,126 @@
+name: PetBot Final Humanized 100
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: petbot-final-humanized-100-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  final-humanized-100:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+      OPENAI_MODEL: ${{ secrets.OPENAI_MODEL || 'gpt-4o-mini' }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_ANON_KEY: ${{ secrets.SUPABASE_ANON_KEY || secrets.VITE_SUPABASE_ANON_KEY }}
+      SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+      PETBOT_E2E_TENANT_ID: ${{ secrets.PETBOT_E2E_TENANT_ID }}
+      PETBOT_HUMANIZED_REPORT: artifacts/petbot-humanized-50.json
+      PETBOT_DIAGNOSTIC_REPORT: artifacts/petbot-diagnostic-50.json
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: test/petbot-predictive-100x
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Validate final-suite scripts
+        run: |
+          node --check scripts/eval-petbot-humanized-50.mjs
+          node --check scripts/run-petbot-diagnostic-50.mjs
+          mkdir -p artifacts
+
+      - name: Validate live-test credentials
+        shell: bash
+        run: |
+          missing=0
+          for name in OPENAI_API_KEY SUPABASE_URL SUPABASE_ANON_KEY SUPABASE_SERVICE_ROLE_KEY PETBOT_E2E_TENANT_ID; do
+            if [ -z "${!name}" ]; then
+              echo "::error::$name não está configurado nos GitHub Actions Secrets."
+              missing=1
+            fi
+          done
+          exit "$missing"
+
+      - id: humanized
+        name: Run 50 humanized LLM and tool-routing conversations
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot:humanized > artifacts/petbot-humanized-50.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - id: live
+        name: Run 50 real runtime, tool, order and connection conversations
+        shell: bash
+        run: |
+          set +e
+          npm run test:petbot:diagnostic:50 > artifacts/petbot-diagnostic-50.log 2>&1
+          code=$?
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Print compact result summary
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const files = [
+            ['Humanized', 'artifacts/petbot-humanized-50.json'],
+            ['Runtime', 'artifacts/petbot-diagnostic-50.json'],
+          ]
+          const lines = ['# PetBot Final 100 — resumo']
+          for (const [label, path] of files) {
+            if (!fs.existsSync(path)) {
+              lines.push(`\n## ${label}\nRelatório não gerado.`)
+              continue
+            }
+            const report = JSON.parse(fs.readFileSync(path, 'utf8'))
+            const summary = report.summary || report
+            lines.push(`\n## ${label}: ${summary.passed || 0}/${summary.total || 0} aprovados, ${summary.failed || 0} reprovados`)
+            const groups = Array.isArray(report.groups) ? report.groups : Array.isArray(summary.categories) ? summary.categories : []
+            for (const group of groups) lines.push(`- ${group.group || group.category || group.label}: ${group.passed || 0}/${group.total || 0}`)
+            const rows = Array.isArray(report.report) ? report.report : Array.isArray(report.results) ? report.results : []
+            for (const row of rows.filter((item) => item && (item.ok === false || item.success === false))) {
+              const errors = Array.isArray(row.errors) ? row.errors.join(' | ') : (row.error || row.reason || 'falha sem motivo registrado')
+              lines.push(`- FAIL ${row.id || row.scenario_id || row.scenario?.id || 'sem-id'}: ${errors}`)
+            }
+            if (Array.isArray(report.uncovered_tools) && report.uncovered_tools.length) lines.push(`- Tools sem cobertura: ${report.uncovered_tools.join(', ')}`)
+          }
+          const output = `${lines.join('\n')}\n`
+          console.log(output)
+          fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, output)
+          fs.writeFileSync('artifacts/petbot-final-compact-summary.md', output)
+          NODE
+
+      - name: Upload complete reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: petbot-final-humanized-100-report
+          path: artifacts/
+          retention-days: 7
+
+      - name: Enforce humanized LLM result
+        if: steps.humanized.outputs.exit_code != '0'
+        run: exit 1
+
+      - name: Enforce live runtime result
+        if: steps.live.outputs.exit_code != '0'
+        run: exit 1

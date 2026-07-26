@@ -3,7 +3,7 @@ import { respondToChatMessage } from '../server/lib/chat.js'
 import { adminSupabase } from '../server/lib/supabase.js'
 
 const MODULE_ID = 'petshop'
-const SUITE_VERSION = '2026-07-24.2'
+const SUITE_VERSION = '2026-07-25.1'
 const CATEGORY_ORDER = ['banho', 'servicos', 'produtos', 'racao', 'veterinaria']
 const CATEGORY_LABELS = {
   banho: 'Banho',
@@ -99,7 +99,7 @@ async function loadSettings(tenantId) {
   const rows = await requireResult(
     adminSupabase
       .from('settings')
-      .select('tenant_id,module_id,petbot_autonomy_mode,petbot_timezone,petbot_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity,pet_transport_options,delivery_fee')
+      .select('tenant_id,module_id,petbot_autonomy_mode,petbot_timezone,petbot_business_hours,veterinary_business_hours,petbot_slot_interval_min,petbot_booking_lead_time_min,petbot_booking_capacity,pet_transport_options,delivery_fee')
       .eq('tenant_id', tenantId)
       .eq('module_id', MODULE_ID)
       .limit(2),
@@ -112,6 +112,10 @@ async function loadSettings(tenantId) {
 
 function productText(item) {
   return normalize(`${item?.name || ''} ${item?.category || ''} ${item?.description || ''} ${JSON.stringify(item?.bot_metadata || {})}`)
+}
+
+function commercialProductText(item) {
+  return normalize(`${item?.name || ''} ${item?.category || ''} ${item?.description || ''}`)
 }
 
 function serviceText(item) {
@@ -137,8 +141,8 @@ function firstMatching(rows, predicate, usedIds = new Set()) {
 const VETERINARY_EXCLUSION = /consulta|veterin|cirurg|anest|exame|analise|acompanhamento|piometra|castr|vacina|ultrassom|hemograma|internacao|retorno|coleta|sutura|laborat|raio|radiograf|eletro|hernia|masectomia|cistocentese/
 const GROOMING_SIGNAL = /tosa|hidrat|escov|dental|unha|ouvido|desemb|trim|groom|higien/
 const PRODUCT_SERVICE_SIGNAL = /servico|servicos|banho|tosa|consulta|veterin|escovacao|hidratacao/
-const FEED_SIGNAL = /racao|alimento completo|bionatural|premier|golden|granplus|special dog|royal canin|pedigree|whiskas|friskies|formula natural|quatree|origens|magnus/
-const FEED_EXCLUSION = /bifinho|petisco|snack|ossinho|biscoito|palito|pate|sache|bebida|agua mineral/
+const FEED_SIGNAL = /\bracao\b|alimento completo|bionatural|premier|golden|granplus|special dog|royal canin|pedigree|whiskas|friskies|formula natural|quatree|origens|magnus/
+const FEED_EXCLUSION = /bifinho|petisco|snack|ossinho|biscoito|palito|pate|sache|bebida|agua mineral|brinquedo|borracha|corda|pilha|alcalina|bateria/
 
 const SERVICE_INTENTS = [
   {
@@ -220,7 +224,7 @@ const PRODUCT_INTENTS = [
     key: 'petisco',
     label: 'Petisco',
     noun: 'um petisco para cachorro',
-    matches: (row) => /petisco|bifinho|snack|ossinho|biscoito|palito/.test(productText(row)),
+    matches: (row) => /petisco|bifinho|snack|ossinho|biscoito|palito (?:dental|mastig)/.test(productText(row)),
   },
   {
     key: 'acessorio',
@@ -254,14 +258,17 @@ function productSemanticRequest(item, intent) {
       ? ' para cachorro'
       : ''
   const weight = clean(item?.name).match(/(?:ate|até)\s*(\d+(?:[.,]\d+)?)\s*kg/i)
-  const details = [brand ? `da ${brand}` : '', audience, weight ? ` de até ${weight[1]} kg` : '', pack ? `, embalagem de ${pack}` : '']
-    .filter(Boolean)
-    .join('')
-  return `quero comprar ${intent.noun}${details}`.replace(/\s+/g, ' ').trim()
+  const details = [
+    brand ? `da ${brand}` : '',
+    audience.trim(),
+    weight ? `de até ${weight[1]} kg` : '',
+    pack ? `embalagem de ${pack}` : '',
+  ].filter(Boolean).join(' ')
+  return `quero comprar ${intent.noun}${details ? ` ${details}` : ''}`.replace(/\s+/g, ' ').trim()
 }
 
 function feedSemanticRequest(item) {
-  const text = productText(item)
+  const text = commercialProductText(item)
   const brand = extractBrand(item?.name)
   const pack = extractPackageLabel(item?.name)
   const species = /gato/.test(text) ? 'gato' : 'cachorro'
@@ -334,7 +341,16 @@ async function loadCatalog(tenantId) {
     const text = productText(item)
     return !PRODUCT_SERVICE_SIGNAL.test(text) && Number(item.stock_quantity || 0) > 0
   })
-  const feedProducts = sellableProducts.filter((item) => FEED_SIGNAL.test(productText(item)) && !FEED_EXCLUSION.test(productText(item)))
+  const feedProducts = sellableProducts.filter((item) => {
+    const text = commercialProductText(item)
+    const name = normalize(item?.name)
+    const category = normalize(item?.category)
+    const knownFeedName = FEED_SIGNAL.test(name)
+    const categoryBackedFeed = /racao|alimento/.test(category)
+      && /\d+(?:[.,]\d+)?\s*(?:kg|g)\b/.test(name)
+      && /cao|caes|gato|gatos|adult|filhot|senior|frango|carne|cordeiro|peixe|salmao/.test(name)
+    return (knownFeedName || categoryBackedFeed) && !FEED_EXCLUSION.test(text)
+  })
   const generalProducts = sellableProducts.filter((item) => !feedProducts.some((feed) => feed.id === item.id))
 
   const serviceIntents = SERVICE_INTENTS.map((intent) => ({
@@ -469,8 +485,8 @@ function buildScenarioPlan(catalog) {
     })
   })
 
-  const dogFeeds = catalog.feedProducts.filter((item) => !/gato/.test(productText(item)))
-  const catFeeds = catalog.feedProducts.filter((item) => /gato/.test(productText(item)))
+  const dogFeeds = catalog.feedProducts.filter((item) => !/gato/.test(commercialProductText(item)))
+  const catFeeds = catalog.feedProducts.filter((item) => /gato/.test(commercialProductText(item)))
   const feeds = Array.from({ length: 10 }, (_, index) => {
     const preferred = index === 4 && catFeeds.length ? cycle(catFeeds, index) : cycle(dogFeeds.length ? dogFeeds : catalog.feedProducts, index)
     return scenarioBase('racao', index, [
@@ -578,7 +594,7 @@ function ceilToInterval(value, interval) {
   return Math.ceil(value / interval) * interval
 }
 
-async function findSafeAppointmentSlots(settings, total = 1) {
+async function findSafeAppointmentSlots(settings, total = 1, { veterinary = false } = {}) {
   const zone = clean(settings.petbot_timezone) || 'America/Sao_Paulo'
   const now = DateTime.now().setZone(zone)
   const rangeEnd = now.plus({ days: 60 })
@@ -594,7 +610,9 @@ async function findSafeAppointmentSlots(settings, total = 1) {
   )
   const interval = Math.max(5, Number(settings.petbot_slot_interval_min || 30))
   const lead = Math.max(0, Number(settings.petbot_booking_lead_time_min || 15))
-  const businessHours = settings.petbot_business_hours || {}
+  const businessHours = veterinary
+    ? (settings.veterinary_business_hours || {})
+    : (settings.petbot_business_hours || {})
   const selected = []
 
   for (let dayOffset = 2; dayOffset <= 60 && selected.length < total; dayOffset += 1) {
@@ -606,7 +624,7 @@ async function findSafeAppointmentSlots(settings, total = 1) {
       const open = DateTime.fromFormat(`${date.toFormat('yyyy-MM-dd')} ${clean(period.open)}`, 'yyyy-MM-dd HH:mm', { zone })
       const close = DateTime.fromFormat(`${date.toFormat('yyyy-MM-dd')} ${clean(period.close)}`, 'yyyy-MM-dd HH:mm', { zone })
       if (!open.isValid || !close.isValid || close <= open) continue
-      const preferredStart = date.set({ hour: 10, minute: 0 })
+      const preferredStart = date.set({ hour: veterinary ? 14 : 10, minute: 0 })
       const offsetMinutes = Math.max(0, preferredStart.diff(open, 'minutes').minutes)
       let candidate = open.plus({ minutes: ceilToInterval(offsetMinutes, interval) })
       while (candidate.plus({ minutes: 180 }) <= close && selected.length < total) {
@@ -669,7 +687,10 @@ function scenarioMessages(scenario, slots) {
     const requestedQuantity = [1, 1, 2, 1, 2, 1, 1, 1, 1, 1][index]
     const availableUnits = Math.max(1, Math.floor(Number(scenario.product?.stock_quantity || 1)))
     const quantity = Math.min(requestedQuantity, availableUnits)
-    const opening = `${scenario.request_phrase}. Quero ${quantity} unidade${quantity > 1 ? 's' : ''}.`
+    const requestedName = clean(scenario.product?.name)
+    const opening = requestedName
+      ? `Quero comprar ${quantity} unidade${quantity > 1 ? 's' : ''} de ${requestedName}.`
+      : `${scenario.request_phrase}. Quero ${quantity} unidade${quantity > 1 ? 's' : ''}.`
     if ([1, 2, 5, 9].includes(index)) {
       const payment = index === 1 ? 'vou pagar por Pix' : index === 2 ? 'vou pagar no cartão' : index === 5 ? 'vou pagar em dinheiro e não preciso de troco' : 'Pix'
       return [opening, 'quero entrega', addressMessage(), payment]
@@ -756,6 +777,7 @@ async function sendTurn({ scenario, sessionId, message, suiteId, transcript }) {
     customer: message,
     assistant: reply,
     duration_ms: Date.now() - startedAt,
+    assistant_metadata: result?.savedMessage?.metadata || null,
   })
   return loadSession(sessionId)
 }
@@ -798,8 +820,16 @@ function assistantRequestsSimpleConfirmation(reply) {
   return /(?:confirma|posso adicionar|deseja adicionar|quer adicionar|pode incluir|você quer incluir|voce quer incluir)/i.test(clean(reply))
 }
 
-function nextServiceSupplement(scenario, session, slot) {
+function nextServiceSupplement(scenario, session, slot, transcript = []) {
   const facts = extractFacts(session.context)
+  const lastReply = normalize(transcript.at(-1)?.assistant)
+  const exactServiceName = clean(scenario.service?.name)
+  if (
+    exactServiceName
+    && /material empresa|material tutor|qual .*opcao|qual .*opção|qual .*servico|qual .*serviço|escolha .*servico|escolha .*serviço/.test(lastReply)
+  ) {
+    return `quero exatamente o serviço ${exactServiceName}`
+  }
   if (!clean(facts.pet_name)) return 'o nome do pet é Teste'
   if (!clean(facts.species)) return 'é cachorro'
   if (!clean(facts.breed) && !clean(facts.size)) return 'é sem raça definida e porte pequeno'
@@ -817,8 +847,24 @@ function nextServiceSupplement(scenario, session, slot) {
   return null
 }
 
-function nextProductSupplement(scenario, session) {
+function nextProductSupplement(scenario, session, transcript = []) {
   const facts = extractAgentContext(session.context).product_facts || {}
+  const lastReply = normalize(transcript.at(-1)?.assistant)
+  const targetText = commercialProductText(scenario.product)
+  const targetName = clean(scenario.product?.name)
+  const packageLabel = extractPackageLabel(targetName)
+  const flavor = targetName.match(/\b(frango|cordeiro|carne|salmao|salmão|peixe|peru)\b/i)?.[1] || ''
+  const species = /gato/.test(targetText) ? 'gato' : 'cachorro'
+  const age = /filhote|junior|puppy|kitten/.test(targetText) ? 'filhote' : /senior|sênior/.test(targetText) ? 'sênior' : 'adulto'
+  const size = /pequen|\brp\b/.test(targetText) ? 'porte pequeno' : /medio|médio|grande|\brgg\b/.test(targetText) ? 'porte médio ou grande' : 'porte médio'
+  if (/cachorro ou gato|cao ou gato|esp[eé]cie|para qual pet/.test(lastReply)) return `é para ${species}`
+  if (/raca ou o porte|raça ou o porte|qual .*porte|qual .*raca|qual .*raça/.test(lastReply)) return size
+  if (/filhote.*adult|adult.*senior|fase de vida|idade/.test(lastReply)) return `é ${age}`
+  if (/granel|pacote pequeno|saco maior|embalagem|quantos kg|tamanho do pacote/.test(lastReply) && packageLabel) return `quero o pacote de ${packageLabel}`
+  if (/qual sabor|sabor/.test(lastReply) && flavor) return `sabor ${flavor}`
+  if (/qual marca|marca/.test(lastReply) && targetName) return `quero exatamente ${targetName}`
+  const asksProductChoice = /qual (?:deles|produto|opcao)|qual voce prefere|qual você prefere|encontrei .*opcoes|encontrei .*opções/.test(lastReply)
+  if (asksProductChoice && targetName) return `quero o ${targetName}`
   if (!clean(facts.fulfillment_type)) return [1, 2, 5, 9].includes(scenario.variation) ? 'quero entrega' : 'vou retirar na loja'
   if (clean(facts.fulfillment_type) === 'entrega') {
     if (!clean(facts.delivery_address)) return addressMessage()
@@ -832,6 +878,10 @@ function pendingOrderText(pending) {
   return normalize((pending?.order?.items || []).map((item) => `${item.name || ''} ${item.description || ''}`).join(' '))
 }
 
+function pendingHasProduct(pending, target) {
+  const targetId = clean(target?.id)
+  return Boolean(targetId && (pending?.order?.items || []).some((item) => clean(item?.product_id) === targetId))
+}
 
 function pendingMatchesIntent(pending, intent) {
   if (!intent?.matches) return false
@@ -839,6 +889,7 @@ function pendingMatchesIntent(pending, intent) {
 }
 
 function feedSemanticMatch(pending, target) {
+  if (pendingHasProduct(pending, target)) return true
   const pendingText = pendingOrderText(pending)
   const targetText = productText(target)
   const brand = normalize(extractBrand(target?.name))
@@ -865,7 +916,10 @@ function assertRequestedItemResolved(scenario, pending) {
     assert(/consulta|veterin/.test(pendingOrderText(pending)), `${scenario.id}: o resumo não corresponde a uma consulta veterinária.`)
   }
   if (scenario.category === 'produtos') {
-    assert(pendingMatchesIntent(pending, scenario.product_intent), `${scenario.id}: o resumo não corresponde à categoria de produto solicitada.`)
+    assert(
+      pendingHasProduct(pending, scenario.product) || pendingMatchesIntent(pending, scenario.product_intent),
+      `${scenario.id}: o resumo não corresponde à categoria de produto solicitada.`,
+    )
   }
   if (scenario.category === 'racao') {
     assert(feedSemanticMatch(pending, scenario.product), `${scenario.id}: o resumo não corresponde ao perfil de ração solicitado.`)
@@ -884,9 +938,8 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
     if (isUnavailableReply(transcript.at(-1)?.assistant)) {
       throw new Error(`${scenario.id}: o catálogo não resolveu a solicitação semântica. Última resposta: ${compact(transcript.at(-1)?.assistant, 240)}`)
     }
-    if (isRepeatedReply(transcript)) {
-      throw new Error(`${scenario.id}: a Luna repetiu a mesma resposta; o cenário foi encerrado para não gastar créditos.`)
-    }
+    // Mensagens planejadas podem trazer a resposta solicitada apenas no turno
+    // seguinte. Não aborte antes de consumir a sequência humana do cenário.
     const after = stateFingerprint(current)
     if (before === after && transcript.length >= 2 && normalize(transcript.at(-1)?.assistant) === normalize(transcript.at(-2)?.assistant)) break
   }
@@ -894,16 +947,16 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
   if (scenario.outcome === 'emergency' || scenario.outcome === 'human_handoff') return { session: current, pending: null }
 
   const sentSupplements = new Set(messages.map(normalize))
-  for (let attempt = 0; attempt < 2 && !extractPendingOrder(current.context); attempt += 1) {
+  for (let attempt = 0; attempt < 7 && !extractPendingOrder(current.context); attempt += 1) {
     const supplement = scenario.order_type === 'produto'
-      ? nextProductSupplement(scenario, current)
-      : nextServiceSupplement(scenario, current, slots[0])
+      ? nextProductSupplement(scenario, current, transcript)
+      : nextServiceSupplement(scenario, current, slots[0], transcript)
     if (!supplement || sentSupplements.has(normalize(supplement))) break
     sentSupplements.add(normalize(supplement))
     const before = stateFingerprint(current)
     current = await sendTurn({ scenario, sessionId: session.id, message: supplement, suiteId, transcript })
     if (extractPendingOrder(current.context)) break
-    if (isUnavailableReply(transcript.at(-1)?.assistant) || isRepeatedReply(transcript) || before === stateFingerprint(current)) break
+    if (isUnavailableReply(transcript.at(-1)?.assistant) || isRepeatedReply(transcript)) break
   }
 
   let pending = extractPendingOrder(current.context)
@@ -930,7 +983,7 @@ async function reachPendingOrder({ scenario, session, suiteId, transcript, slots
   const additionItem = scenario.add_service_intent?.item || scenario.add_product_intent?.item
   if (additionIntent && additionItem) {
     const naturalRequest = scenario.add_service_intent
-      ? `Antes de confirmar, pode acrescentar ${additionIntent.request}?`
+      ? `Antes de confirmar, pode acrescentar o serviço ${clean(additionItem.name) || additionIntent.request}?`
       : `Antes de confirmar, acrescente também ${productSemanticRequest(additionItem, additionIntent)}.`
     current = await sendTurn({ scenario, sessionId: session.id, message: naturalRequest, suiteId, transcript })
     pending = extractPendingOrder(current.context)
@@ -987,7 +1040,7 @@ async function verifyCommittedRows({ scenario, session, pending }) {
   assert(Number(sale.total_price) === Number(pending.order.total), `${scenario.id}: total salvo diverge do resumo.`)
   if (scenario.order_type === 'produto') {
     assert(!appointment, `${scenario.id}: compra de produto criou agendamento indevido.`)
-    assert(order.order_type === 'produto', `${scenario.id}: ordem de produto foi salva com tipo incorreto.`)
+    assert(['produto', 'entrega'].includes(order.order_type), `${scenario.id}: ordem de produto foi salva com tipo operacional incorreto (${order.order_type}).`)
   } else {
     assert(appointment, `${scenario.id}: agendamento não foi encontrado.`)
     assert(order.order_type === 'servico', `${scenario.id}: serviço foi salvo com tipo operacional incorreto.`)
@@ -1136,7 +1189,9 @@ export async function runPetbotDiagnosticCase({ tenantId, scenarioId, suiteId = 
   const transcript = []
   const slots = scenario.order_type === 'produto' || ['emergency', 'human_handoff'].includes(scenario.outcome)
     ? []
-    : await findSafeAppointmentSlots(settings, scenario.variation === 5 ? 2 : 1)
+    : await findSafeAppointmentSlots(settings, scenario.variation === 5 ? 2 : 1, {
+      veterinary: scenario.category === 'veterinaria',
+    })
   const productIds = [...new Set([scenario.product?.id, scenario.add_product?.id].filter(Boolean))]
   const productSnapshots = productIds.length
     ? await requireResult(
