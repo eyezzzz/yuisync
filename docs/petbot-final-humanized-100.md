@@ -78,3 +78,7 @@ Variáveis necessárias:
 - `PETBOT_E2E_TENANT_ID`.
 
 Os relatórios são salvos em `artifacts/petbot-humanized-50.json` e `artifacts/petbot-diagnostic-50.json`.
+
+## Status atual
+
+As correções de runtime, roteamento de ferramentas e validação factual foram aplicadas. Quality, matriz preditiva e a bateria viva devem ser executadas novamente sobre este commit; o objetivo de encerramento permanece em **100 aprovados e 0 reprovados**, sem remover cenários válidos para atingir o placar.
