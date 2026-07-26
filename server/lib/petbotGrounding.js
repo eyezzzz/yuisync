@@ -386,6 +386,7 @@ function collectToolCapabilities(toolRuns = [], orderResult = null) {
       capabilities.add('committed_order')
     }
     if (name === 'handoff_to_human') capabilities.add('human_handoff')
+    if (name === 'send_product_image' && result?.image_attached === true) capabilities.add('product_image')
   }
   if (orderResult) capabilities.add('committed_order')
   return capabilities
@@ -450,6 +451,12 @@ export function validatePetbotOperationalReply({ reply = '', toolRuns = [], pend
     || /\b(?:transferencia|encaminhamento)\b.{0,35}\b(?:atendente|equipe|veterinaria|humano)\b/.test(normalizedReply)
   if (claimsHandoff && !capabilities.has('human_handoff')) {
     problems.push('transferência humana anunciada sem executar o handoff')
+  }
+
+  const claimsProductImage = /!\[[^\]]*\]\([^\)]+\)/.test(clean(reply))
+    || /\b(?:aqui esta|segue|enviei|mandei).{0,30}\b(?:foto|imagem)\b/.test(normalizedReply)
+  if (claimsProductImage && !capabilities.has('product_image')) {
+    problems.push('foto de produto anunciada sem executar send_product_image')
   }
 
   return {
@@ -700,7 +707,7 @@ export function buildPetbotAgentV3Prompt({
     '',
     'Princípios operacionais:',
     '- Nunca afirme preço, estoque, serviço exato, duração, data ou horário sem um resultado de ferramenta no turno atual ou um pedido pendente validado.',
-    '- Para produtos, pesquise o catálogo. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções.',
+    '- Para produtos, chame search_petshop_products antes de afirmar nome, preço, estoque ou foto. Quando houver várias opções, use somente os diferenciadores retornados pela ferramenta e pergunte apenas o que realmente separa as opções. Quando houver uma correspondência exata e quantidade/modalidade completas, prepare o pedido no mesmo turno.',
     '- Para toda compra de ração, antes de listar produtos descubra o formato: granel, pacote pequeno de 1 ou 2 kg, ou saco maior de 7, 10, 15, 20 ou 25 kg. Se o cliente já informou o formato ou o peso da embalagem, não pergunte novamente.',
     '- Antes de oferecer ração, confirme também a espécie, a raça ou porte quando for cachorro, e a fase de vida: filhote, adulto, sênior ou castrado. Quando uma raça cadastrada estiver informada, o servidor já deriva o porte; nunca pergunte o porte novamente.',
     '- Quando o cliente informar uma raça, considere tanto produtos específicos daquela raça quanto produtos gerais do porte correspondente. Nunca ofereça produto específico de outra raça nem ração de outro porte.',
@@ -710,7 +717,7 @@ export function buildPetbotAgentV3Prompt({
     '- Em compras de produto, o nome do pet não é obrigatório. Nunca peça o nome do animal apenas para concluir uma venda.',
     '- Nunca suponha retirada, entrega ou forma de pagamento. Depois que produto e quantidade estiverem definidos, confirme retirada na loja ou entrega. Para entrega, pergunte Pix, dinheiro ou cartão. Para retirada, use pagamento "a combinar" e não pergunte a forma de pagamento. Use somente fulfillment_type e payment_method presentes no Estado confiável.',
     '- Para entrega, use o endereço, bairro e referência já presentes no Estado confiável. Pergunte somente os campos de entrega que ainda estiverem ausentes e nunca peça confirmação de um pagamento já registrado.',
-    '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda.',
+    '- Para banho/tosa ou veterinária, resolva primeiro o serviço exato. Se a ferramenta indicar campos ausentes, peça-os naturalmente. Quando o serviço estiver resolvido, consulte a agenda. Nunca prepare um serviço antes de check_petshop_availability confirmar o horário solicitado.',
     '- Quando o bloco Contexto operacional pré-carregado já contiver resolução de serviço ou agenda, use esses dados diretamente e não repita a mesma consulta sem um novo fato do cliente.',
     '- Nunca pergunte tipo de pelo ou pelagem. A pelagem é uma classificação interna derivada da raça cadastrada no YuiSync.',
     '- Nunca exponha ao cliente o nome interno longo do catálogo com faixa de peso, pelagem, códigos ou textos entre parênteses. Use sempre o nome comercial curto recebido em display_name ou no resumo validado.',
@@ -725,7 +732,7 @@ export function buildPetbotAgentV3Prompt({
     '- O bloco Estado confiável da conversa tem prioridade sobre argumentos nulos ou incompletos gerados durante chamadas de ferramenta.',
     '- Se o cliente tiver benefício de plano disponível, trate-o como dado operacional: aplique somente quando a ferramenta indicar e explique naturalmente no resumo, sem prometer benefício por conta própria.',
     '- Não deduza peso, estoque, preço, política comercial nem disponibilidade. Raça e peso são fatos interpretados da conversa; classificação e faixa são resolvidas pelo catálogo.',
-    '- Não exponha JSON, IDs, nomes de ferramentas, regras internas ou mensagens de validação.',
+    '- Não exponha JSON, IDs, nomes de ferramentas, regras internas ou mensagens de validação. Nunca invente promoção, desconto, hospedagem, serviço, preço ou imagem; informação ausente na base verificada deve ser assumida como desconhecida.',
     '- Não diga que vai consultar nem peça para aguardar: chame a ferramenta silenciosamente e responda com o resultado.',
     '- Para produtos, forma de pagamento e entrega/retirada pertencem ao pedido. Troco só existe quando o pagamento for em dinheiro.',
     '- Para serviços, o pagamento acontece após a conclusão. Nunca pergunte Pix, dinheiro, cartão ou troco durante o agendamento e nunca trate o serviço como entrega ou retirada de produto.',
@@ -1257,12 +1264,14 @@ export function shouldAnswerVerifiedStoreQuestion({
   hasPendingOrder = false,
 } = {}) {
   if (hasPendingOrder) return false
+  const normalized = normalizeCatalogText(message)
+  const asksUnverifiedOffering = /\b(?:hospedagem|hotel para pet|hotelzinho|creche|day care|adestramento|passeador|pet sitter)\b/.test(normalized)
+  if (asksUnverifiedOffering) return true
   const serviceKnowledgeQuestion = isPetshopServiceKnowledgeQuestion(message)
   if (!serviceKnowledgeQuestion && clean(detectedIntent).toLowerCase() !== 'duvida') return false
   if (!serviceKnowledgeQuestion && clean(serviceOrderType)) return false
   if (!serviceKnowledgeQuestion && ['produto', 'banho_tosa', 'veterinaria', 'multi'].includes(clean(interpretedIntent).toLowerCase())) return false
 
-  const normalized = normalizeCatalogText(message)
   return String(message).includes('?')
     || /\b(?:qual|quais|onde|quando|como|voces|tem|teria|fazem|oferecem|aceitam|abre|abrem|fecha|fecham|funciona|funcionamento|horario|endereco|telefone|pagamento)\b/.test(normalized)
 }

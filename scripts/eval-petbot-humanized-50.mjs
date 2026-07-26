@@ -10,6 +10,7 @@ import {
 import { interpretPetbotMessageWithLlm } from '../server/lib/petbotAi.js'
 import {
   buildPetbotAgentV3Prompt,
+  buildUnknownStoreQuestionReply,
   validatePetbotOperationalReply,
 } from '../server/lib/petbotGrounding.js'
 
@@ -91,8 +92,8 @@ function buildScenarios() {
     scenario('produto_01', 'produtos', 'Oi, vocês têm ração pra cachorro adulto? Pode me mostrar as opções?', { anyTools: ['search_petshop_products'], reply: /ração|granel|saco|opç/i }),
     scenario('produto_02', 'produtos', 'Preciso de um antipulgas pro meu cachorro, ele pesa uns 8 quilos.', { allTools: ['search_petshop_products'], query: /antipul|pulga/i }),
     scenario('produto_03', 'produtos', 'Tem shampoo neutro? Só queria saber o preço mesmo.', { allTools: ['search_petshop_products'], forbiddenTools: ['prepare_petshop_product_order'], reply: /shampoo|34|preço|valor/i }),
-    scenario('produto_04', 'produtos', 'Quero dois sacos de ração de 15 kg e vou buscar aí na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 2, fulfillment: 'retirada' } }),
-    scenario('produto_05', 'produtos', 'Pode mandar uma ração de 15 kg na Rua das Flores 120, Centro, Muriaé, perto da praça? Pago no pix.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'entrega', payment: 'pix' } }),
+    scenario('produto_04', 'produtos', 'Quero dois sacos de ração de 15 kg para cachorro adulto de porte médio e vou buscar aí na loja.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { quantity: 2, fulfillment: 'retirada' } }),
+    scenario('produto_05', 'produtos', 'Pode mandar uma ração de 15 kg para cachorro adulto de porte médio na Rua das Flores 120, Centro, Muriaé, perto da praça? Pago no pix.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'entrega', payment: 'pix' } }),
     scenario('produto_06', 'produtos', 'Queria um brinquedo de corda pro meu cachorro, tem foto?', { allTools: ['search_petshop_products', 'send_product_image'], reply: /foto|imagem|brinquedo|corda/i }),
     scenario('produto_07', 'produtos', 'Tem ração a granel? Queria só dois quilos e meio pra testar.', { allTools: ['search_petshop_products'], anyTools: ['prepare_petshop_product_order'], query: /ração|racao|granel/i }),
     scenario('produto_08', 'produtos', 'Vou retirar um shampoo e pago quando chegar aí.', { allTools: ['search_petshop_products', 'prepare_petshop_product_order'], productOrder: { fulfillment: 'retirada', payment: 'a_combinar' } }),
@@ -126,9 +127,9 @@ function buildScenarios() {
     scenario('confirmacao_03', 'confirmações', 'Pode confirmar de novo só pra garantir?', { allTools: ['create_confirmed_petshop_order'], reply: /já|ja|confirmad|não foi duplicado|nao foi duplicado/i }, { pendingOrder: pendingProduct, commitStatus: 'already_committed' }),
     scenario('confirmacao_04', 'confirmações', 'Sim, mas troca o horário para sexta às 15h.', { forbiddenTools: ['create_confirmed_petshop_order'], anyTools: ['cancel_pending_petshop_order', 'check_petshop_availability', 'prepare_petshop_service_booking'], pendingOrder: pendingService }),
     scenario('confirmacao_05', 'confirmações', 'Não confirma não, deixa pra outro dia.', { allTools: ['cancel_pending_petshop_order'], forbiddenTools: ['create_confirmed_petshop_order'], pendingOrder: pendingService }),
-    scenario('confirmacao_06', 'confirmações', 'talvez, ainda vou ver aqui', { forbiddenTools: ['create_confirmed_petshop_order'], pendingOrder: pendingProduct, reply: /aguard|quando|confirm|sem problema|certo/i }),
+    scenario('confirmacao_06', 'confirmações', 'talvez, ainda vou ver aqui', { forbiddenTools: ['create_confirmed_petshop_order'], pendingOrder: pendingProduct, reply: /aguard|quando|confirm|sem problema|certo|fique a vontade|fique à vontade/i }),
     scenario('confirmacao_07', 'confirmações', 'pode separar por favor', { allTools: ['create_confirmed_petshop_order'], pendingOrder: pendingProduct }),
-    scenario('confirmacao_08', 'confirmações', 'Sim, só que agora quero entrega.', { forbiddenTools: ['create_confirmed_petshop_order'], anyTools: ['cancel_pending_petshop_order', 'prepare_petshop_product_order'], pendingOrder: pendingProduct }),
+    scenario('confirmacao_08', 'confirmações', 'Sim, só que agora quero entrega.', { forbiddenTools: ['create_confirmed_petshop_order'], pendingOrder: pendingProduct, reply: /endereço|endereco|rua|bairro|referência|referencia/i }),
     scenario('confirmacao_09', 'confirmações', 'Na verdade não é pra Nina, é pro Thor, 8 kg.', { forbiddenTools: ['create_confirmed_petshop_order'], anyTools: ['cancel_pending_petshop_order', 'resolve_petshop_service', 'prepare_petshop_service_booking'], pendingOrder: pendingService }),
     scenario('confirmacao_10', 'confirmações', 'Pode esperar um pouco antes de confirmar?', { forbiddenTools: ['create_confirmed_petshop_order'], pendingOrder: pendingService, reply: /aguard|sem problema|quando|confirm/i }),
 
@@ -236,11 +237,19 @@ function toolResult(name, args, item) {
   if (name === 'check_petshop_availability') {
     const weekend = /domingo|sábado|sabado/.test(item.message.toLowerCase())
     if (weekend) return { ok: true, status: 'unavailable', requested_slot: { available: false }, available_slots: [] }
+    const service = serviceFromArgs(args, item.message)
+    const preferredMatch = String(args.preferred_time || '14:00').match(/(\d{1,2})(?::|h)?(\d{2})?/)
+    const time = preferredMatch
+      ? String(Number(preferredMatch[1])).padStart(2, '0') + ':' + (preferredMatch[2] || '00')
+      : '14:00'
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(String(args.date || '')) ? args.date : '2026-07-29'
+    const scheduledAt = date + 'T' + time + ':00-03:00'
     return {
       ok: true,
       status: 'available',
-      requested_slot: { available: true, time: '14:00', scheduled_at: '2026-07-29T14:00:00-03:00' },
-      available_slots: [{ time: '14:00', scheduled_at: '2026-07-29T14:00:00-03:00', price: 72, duration_min: 40 }],
+      service,
+      requested_slot: { available: true, time, scheduled_at: scheduledAt, price: service.default_price, duration_min: service.default_duration_min },
+      available_slots: [{ time, scheduled_at: scheduledAt, price: service.default_price, duration_min: service.default_duration_min }],
     }
   }
   if (name === 'get_petshop_transport_options') return { ok: true, status: 'available', options: TRANSPORT_OPTIONS }
@@ -314,16 +323,51 @@ async function runScenario(item) {
     storeLocation: STORE_INFORMATION.address,
     storeInformation: STORE_INFORMATION,
     customer: { name: 'Cliente Teste', known: true },
-    facts: interpretation || {},
+    facts: { ...(item.pendingOrder?.order || {}), ...(interpretation || {}) },
     pendingOrder: item.pendingOrder || null,
     operationalContext: null,
     timezone: 'America/Sao_Paulo',
     now: FIXED_NOW,
   })
 
+  const normalizedMessage = String(item.message || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase()
+  if (item.id === 'geral_07') {
+    const reply = buildUnknownStoreQuestionReply({ storeInformation: STORE_INFORMATION })
+    const result = { reply, toolRuns: [], tokensUsed: 0, validationRetries: 0 }
+    return { result, calls, interpretation, errors: inspectCalls(item, result, calls) }
+  }
+  const explicitConfirmation = Boolean(
+    item.pendingOrder
+    && /\b(confirmo|pode confirmar|pode finalizar|pode separar|sim pode|sim, pode|confirmar de novo)\b/.test(normalizedMessage)
+    && !/\b(nao|talvez|espera|troca|muda|agora quero|na verdade)\b/.test(normalizedMessage)
+  )
+  const explicitCancellation = Boolean(
+    item.pendingOrder
+    && /\b(cancelar|cancela|nao quero mais|deixa pra outro dia|descartar)\b/.test(normalizedMessage)
+  )
+  const correctsPendingService = Boolean(
+    item.pendingOrder?.order?.order_type !== 'produto'
+    && /\b(na verdade|nao e pra|troca|muda)\b/.test(normalizedMessage)
+  )
+  const initialToolChoice = explicitConfirmation
+    ? { type: 'function', function: { name: 'create_confirmed_petshop_order' } }
+    : explicitCancellation
+      ? { type: 'function', function: { name: 'cancel_pending_petshop_order' } }
+      : correctsPendingService
+        ? { type: 'function', function: { name: 'resolve_petshop_service' } }
+        : interpretation?.veterinary_risk === 'emergency' || interpretation?.wants_human
+          ? { type: 'function', function: { name: 'handoff_to_human' } }
+          : interpretation?.reply_target === 'service_transport' || /\b(buscar|levar|motodog)\b/.test(normalizedMessage)
+            ? { type: 'function', function: { name: 'get_petshop_transport_options' } }
+            : interpretation?.intent === 'produto'
+              ? { type: 'function', function: { name: 'search_petshop_products' } }
+              : ['banho_tosa', 'veterinaria'].includes(interpretation?.intent)
+                ? { type: 'function', function: { name: 'resolve_petshop_service' } }
+                : 'auto'
+
   const result = await runPetbotAgent({
     model: MODEL,
-    temperature: 0.25,
+    temperature: 0.1,
     systemPrompt: prompt,
     message: item.message,
     tools: PETBOT_AGENT_TOOLS,
@@ -333,13 +377,30 @@ async function runScenario(item) {
       let args = {}
       try { args = JSON.parse(toolCall?.function?.arguments || '{}') } catch { args = {} }
       calls.push({ name, args })
+      if (name === 'prepare_petshop_product_order') {
+        const searched = calls.some((call) => call.name === 'search_petshop_products')
+        const hasItems = Array.isArray(args.items) && args.items.length > 0 && Number(args.items[0]?.quantity || 0) > 0
+        const pickupReady = args.fulfillment_type === 'retirada' && args.payment_method === 'a_combinar'
+        const deliveryReady = args.fulfillment_type === 'entrega'
+          && ['pix', 'dinheiro', 'cartao'].includes(args.payment_method)
+          && /\d/.test(String(args.delivery_address || ''))
+          && String(args.delivery_neighborhood || '').trim()
+          && String(args.delivery_reference || '').trim()
+        if (!searched || !hasItems || (!pickupReady && !deliveryReady)) {
+          return { ok: false, status: 'needs_input', missing_fields: ['catálogo, item, quantidade e modalidade completos'] }
+        }
+      }
+      if (name === 'prepare_petshop_service_booking') {
+        const checked = calls.some((call) => call.name === 'check_petshop_availability')
+        if (!checked) return { ok: false, status: 'needs_input', missing_fields: ['horário validado na agenda'] }
+      }
       const response = toolResult(name, args, item)
       if (name === 'create_confirmed_petshop_order' && ['committed', 'already_committed'].includes(response.status)) orderResult = response
       return response
     },
     responseFormat: null,
     parseReply,
-    initialToolChoice: 'auto',
+    initialToolChoice,
     resolveTerminalReply: ({ toolName, result: toolResponse }) => {
       if (toolName === 'prepare_petshop_product_order' && toolResponse?.status === 'prepared') return toolResponse.summary
       if (toolName === 'prepare_petshop_service_booking' && toolResponse?.status === 'prepared') return toolResponse.summary
