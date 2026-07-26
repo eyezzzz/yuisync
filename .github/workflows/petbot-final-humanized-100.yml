@@ -13,6 +13,9 @@ on:
       - '.github/workflows/petbot-final-humanized-100.yml'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 concurrency:
   group: petbot-final-humanized-100-${{ github.ref }}
   cancel-in-progress: false
@@ -33,6 +36,9 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: test/petbot-predictive-100x
+          fetch-depth: 1
 
       - uses: actions/setup-node@v4
         with:
@@ -112,6 +118,19 @@ jobs:
           fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, output)
           fs.writeFileSync('artifacts/petbot-final-compact-summary.md', output)
           NODE
+
+      - name: Publish compact summary on branch
+        if: always()
+        shell: bash
+        run: |
+          cp artifacts/petbot-final-compact-summary.md docs/petbot-final-latest-summary.md
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/petbot-final-latest-summary.md
+          if ! git diff --cached --quiet; then
+            git commit -m "docs(petbot): publicar resultado mais recente da bateria final"
+            git push origin HEAD:test/petbot-predictive-100x
+          fi
 
       - name: Upload complete reports
         if: always()
