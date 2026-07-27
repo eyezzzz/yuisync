@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   apply:
@@ -22,33 +23,60 @@ jobs:
           fetch-depth: 0
 
       - name: Apply infrastructure patch
+        id: applicator
+        continue-on-error: true
+        shell: bash
+        run: node scripts/apply-agenda-operational-infra.mjs > /tmp/agenda-applicator.log 2>&1
+
+      - name: Report applicator failure
+        if: steps.applicator.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         shell: bash
         run: |
-          node scripts/apply-agenda-operational-infra.mjs > /tmp/agenda-applicator.log 2>&1 || {
+          {
+            echo '### Falha do aplicador da infraestrutura da agenda'
+            echo
+            echo '```text'
             cat /tmp/agenda-applicator.log
-            exit 1
-          }
-          cat /tmp/agenda-applicator.log
+            echo '```'
+          } > /tmp/agenda-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agenda-comment.md
+
+      - name: Stop after applicator failure
+        if: steps.applicator.outcome == 'failure'
+        run: exit 1
+
+      - name: Show applicator result
+        if: steps.applicator.outcome == 'success'
+        run: cat /tmp/agenda-applicator.log
 
       - name: Setup Node
+        if: steps.applicator.outcome == 'success'
         uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
 
       - name: Install dependencies
+        if: steps.applicator.outcome == 'success'
         run: npm ci
 
       - name: Run focused tests
+        if: steps.applicator.outcome == 'success'
         run: node --test test/agendaOperationalInfrastructure.test.mjs
 
       - name: Typecheck
+        if: steps.applicator.outcome == 'success'
         run: npm run typecheck
 
       - name: Build
+        if: steps.applicator.outcome == 'success'
         run: npm run build
 
       - name: Publish applied changes and remove applicator
+        if: steps.applicator.outcome == 'success'
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
