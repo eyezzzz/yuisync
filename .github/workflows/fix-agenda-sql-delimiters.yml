@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   fix:
@@ -34,7 +35,30 @@ jobs:
         run: npm ci
 
       - name: Focused and transactional tests
-        run: npm run test:transactions
+        id: tests
+        continue-on-error: true
+        shell: bash
+        run: npm run test:transactions > /tmp/agenda-sql-tests.log 2>&1
+
+      - name: Report SQL test failure
+        if: steps.tests.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          {
+            echo '### Falha na regressao dos delimitadores SQL'
+            echo
+            echo '```text'
+            grep -n -B 8 -A 35 '^not ok' /tmp/agenda-sql-tests.log || tail -n 120 /tmp/agenda-sql-tests.log
+            echo '```'
+          } > /tmp/agenda-sql-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agenda-sql-comment.md
+
+      - name: Stop after SQL test failure
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
 
       - name: Typecheck
         run: npm run typecheck
