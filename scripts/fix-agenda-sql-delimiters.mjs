@@ -13,8 +13,8 @@ for (const path of paths) {
     throw new Error(`${path}: esperava 2 pares de delimitadores simples; encontrou ${openMatches.length}/${closeMatches.length}`)
   }
   source = source
-    .replace(/\nas \$\ndeclare/g, '\nas $$\ndeclare')
-    .replace(/\nend;\n\$;/g, '\nend;\n$$;')
+    .replace(/\nas \$\ndeclare/g, () => '\nas $$\ndeclare')
+    .replace(/\nend;\n\$;/g, () => '\nend;\n$$;')
   await writeFile(path, source, 'utf8')
 }
 
