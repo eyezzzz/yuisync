@@ -812,12 +812,18 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
                     <div className="divide-y divide-[var(--border2)] overflow-hidden rounded-xl border border-[var(--border2)] bg-white/[0.03]">
                       {serviceTotals.services.map((service) => {
                         const Icon = service.icon || PawPrint
+                        const displayedDuration = resolvePetshopServiceDuration({
+                          service,
+                          weightKg: selectedClient?.weight_kg ?? appt?.pets?.weight_kg ?? null,
+                          durations: serviceDurations,
+                          fallbackMin: service.duration || 60,
+                        })
                         return (
                           <div key={service.value} className="flex items-center gap-3 px-3 py-2.5">
                             <Icon size={14} className="flex-shrink-0 text-amber-400"/>
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold text-text">{service.label}</span>
-                              <span className="block text-xs text-muted">{fmtCurrency(service.price)} · {service.duration || 60} min</span>
+                              <span className="block text-xs text-muted">{fmtCurrency(service.price)} · {displayedDuration} min</span>
                             </span>
                             <button
                               type="button"
