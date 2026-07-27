@@ -1,25 +1,24 @@
 name: Apply Agenda Operational Infrastructure
 
 on:
-  push:
+  pull_request:
+    types: [opened]
     branches:
-      - feat/agenda-capacity-operational-commissions
-    paths:
-      - '.github/workflows/apply-agenda-operational-infra.yml'
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'chore: run agenda operational infrastructure applicator'
+    if: github.event.pull_request.head.ref == 'feat/agenda-capacity-operational-commissions'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - name: Checkout branch
         uses: actions/checkout@v4
         with:
-          ref: feat/agenda-capacity-operational-commissions
+          ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
       - name: Setup Node
@@ -57,4 +56,4 @@ jobs:
             database/agenda_capacity_operational_commissions.sql
           git diff --cached --quiet && { echo "Nenhuma alteracao produzida."; exit 1; }
           git commit -m "feat: add two-slot agenda and operational commissions"
-          git push origin HEAD:feat/agenda-capacity-operational-commissions
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
