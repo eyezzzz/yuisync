@@ -992,11 +992,17 @@ function AgendaTimelineView({
     <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)]">
         <div>
-          <p className="text-sm font-bold text-text">Agenda semanal</p>
+          <p className="text-sm font-bold text-text">Agenda {days.length === 1 ? 'diaria' : 'semanal'}</p>
           <p className="text-xs text-muted">
-            {days[0]?.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
-            {' ate '}
-            {days[days.length - 1]?.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+            {days.length === 1 ? (
+              days[0]?.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })
+            ) : (
+              <>
+                {days[0]?.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+                {' ate '}
+                {days[days.length - 1]?.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
@@ -1006,8 +1012,8 @@ function AgendaTimelineView({
       </div>
 
       <div className="overflow-x-auto">
-        <div className="min-w-[1160px]">
-          <div className="grid border-b border-[var(--border)] bg-surface/50" style={{ gridTemplateColumns: '76px repeat(7, minmax(250px, 1fr))' }}>
+        <div className={days.length === 1 ? 'min-w-[520px]' : 'min-w-[1160px]'}>
+          <div className="grid border-b border-[var(--border)] bg-surface/50" style={{ gridTemplateColumns: `76px repeat(${days.length}, minmax(${days.length === 1 ? '360px' : '250px'}, 1fr))` }}>
             <div className="px-3 py-3 text-[10px] font-black uppercase tracking-widest text-muted">Hora</div>
             {days.map((day) => {
               const key = isoDate(day)
@@ -1026,7 +1032,7 @@ function AgendaTimelineView({
           </div>
 
           {hours.map((hour) => (
-            <div key={hour} className="grid border-b border-[var(--border)] last:border-b-0" style={{ gridTemplateColumns: '76px repeat(7, minmax(250px, 1fr))' }}>
+            <div key={hour} className="grid border-b border-[var(--border)] last:border-b-0" style={{ gridTemplateColumns: `76px repeat(${days.length}, minmax(${days.length === 1 ? '360px' : '250px'}, 1fr))` }}>
               <div className="px-3 py-3 text-xs font-bold text-muted bg-surface/35">{String(hour).padStart(2, '0')}:00</div>
               {days.map((day) => {
                 const dayKey = isoDate(day)
@@ -1108,6 +1114,7 @@ export default function AgendaPage() {
   const [modal, setModal]           = useState(null)   // null | {} | {appt}
   const [receipt, setReceipt]       = useState(null) // appt to print
   const [view, setView]             = useState('list')  // 'list' | 'kanban' | 'agenda'
+  const [agendaPeriod, setAgendaPeriod] = useState('day') // 'day' | 'week'
   const [filterStatus, setFilterStatus] = useState('')
   const [search, setSearch]         = useState('')
   const [activeAgendaTab, setActiveAgendaTab] = useState('banho_tosa')
@@ -1122,6 +1129,9 @@ export default function AgendaPage() {
   const weekStart = useMemo(() => startOfWeek(selectedDate), [selectedDate])
   const weekDays = useMemo(() => Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)), [weekStart])
   const weekEnd = useMemo(() => addDays(weekStart, 6), [weekStart])
+  const agendaDays = useMemo(() => agendaPeriod === 'day' ? [selectedDate] : weekDays, [agendaPeriod, selectedDate, weekDays])
+  const agendaStart = agendaPeriod === 'day' ? selectedDate : weekStart
+  const agendaEnd = agendaPeriod === 'day' ? selectedDate : weekEnd
 
   useEffect(() => {
     loadPets()
@@ -1131,15 +1141,15 @@ export default function AgendaPage() {
   useEffect(() => {
     if (view === 'agenda') {
       load({
-        startDate: isoDate(weekStart),
-        endDate: isoDate(weekEnd),
+        startDate: isoDate(agendaStart),
+        endDate: isoDate(agendaEnd),
         status: filterStatus || undefined,
       })
       return
     }
 
     load({ date: isoDate(selectedDate), status: filterStatus || undefined })
-  }, [selectedDate, filterStatus, view, weekStart, weekEnd, load])
+  }, [selectedDate, filterStatus, view, agendaPeriod, weekStart, weekEnd, load])
 
   const tabbedAppointments = appointments.filter((appointment) =>
     getAppointmentServiceGroup(appointment, agendaServices) === activeAgendaTab
@@ -1164,7 +1174,7 @@ export default function AgendaPage() {
   const isToday = isoDate(selectedDate) === todayISO()
   const reloadCurrentView = () => {
     if (view === 'agenda') {
-      load({ startDate: isoDate(weekStart), endDate: isoDate(weekEnd), status: filterStatus || undefined })
+      load({ startDate: isoDate(agendaStart), endDate: isoDate(agendaEnd), status: filterStatus || undefined })
       return
     }
     load({ date: isoDate(selectedDate), status: filterStatus || undefined })
@@ -1288,6 +1298,26 @@ export default function AgendaPage() {
           ))}
         </div>
 
+        {view === 'agenda' && (
+          <div className="flex bg-card border border-[var(--border)] rounded-xl p-1">
+            {[
+              { id: 'day', label: 'Diaria' },
+              { id: 'week', label: 'Semanal' },
+            ].map((period) => (
+              <button
+                key={period.id}
+                type="button"
+                onClick={() => setAgendaPeriod(period.id)}
+                className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                  agendaPeriod === period.id ? 'bg-amber-500 text-gray-950' : 'text-muted hover:text-text'
+                }`}
+              >
+                {period.label}
+              </button>
+            ))}
+          </div>
+        )}
+
         <button onClick={reloadCurrentView}
           className="btn btn-ghost btn-sm btn-icon" title="Atualizar">
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''}/>
@@ -1314,7 +1344,7 @@ export default function AgendaPage() {
         </div>
       ) : view === 'agenda' ? (
         <AgendaTimelineView
-          days={weekDays}
+          days={agendaDays}
           selectedDate={selectedDate}
           appointments={displayed}
           serviceLabel={serviceLabel}

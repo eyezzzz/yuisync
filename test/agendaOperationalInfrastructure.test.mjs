@@ -31,12 +31,15 @@ test('comissao operacional usa 10 por cento para tosa e 5 para outros esteticos'
 })
 
 test('infraestrutura conecta capacidade, transporte e responsible_staff_key', async () => {
-  const [migration, agenda, appointments, advanced, commissions] = await Promise.all([
+  const [migration, staffMigration, catalogMigration, agenda, appointments, advanced, commissions, settings] = await Promise.all([
     readFile(new URL('../supabase/migrations/20260727001000_agenda_capacity_operational_commissions.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260727003000_petshop_operational_staff_persistence.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260727004000_reconcile_agenda_service_catalog.sql', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/AgendaPage.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/shared/hooks/useAppointments.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/hooks/usePetshopAdvanced.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/EquipePage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/shared/pages/SettingsPage.jsx', import.meta.url), 'utf8'),
   ])
 
   assert.match(migration, /petbot_booking_capacity = 2/)
@@ -52,6 +55,17 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
   assert.ok(migration.includes('revenue * 0.10'))
   assert.ok(migration.includes('revenue * 0.05'))
   assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))
+  assert.match(agenda, /agendaPeriod/)
+  assert.match(agenda, /days=\{agendaDays\}/)
+  assert.match(agenda, /activeAgendaTab === 'banho_tosa' \? MANUAL_SLOT_CAPACITY : 1/)
+  assert.match(staffMigration, /add column if not exists petshop_operational_staff/)
+  assert.match(catalogMigration, /sync_product_service_to_petshop_services/)
+  assert.match(advanced, /from\('products'\)/)
+  assert.match(advanced, /inferCatalogServiceGroup/)
+  assert.match(advanced, /return 'veterinaria'/)
+  assert.match(advanced, /return 'banho_tosa'/)
+  assert.match(advanced, /source_product_id/)
+  assert.match(settings, /select\('petshop_operational_staff'\)\.single\(\)/)
   assert.match(agenda, /appointmentHourSlotKeys/)
   assert.match(agenda, /appointmentHourSlotKeys\(appt\)\.forEach/)
   assert.match(agenda, /fmtInterval\(appt\)/)
