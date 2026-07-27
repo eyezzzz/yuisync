@@ -130,14 +130,24 @@ const documents = {
 }
 
 export default function PublicLegalPage({ documentKey }) {
-  const document = documents[documentKey]
+  const legalDocument = documents[documentKey]
 
   useEffect(() => {
-    document.title = `${document.title} | YuiSync`
-  }, [document.title])
+    window.document.title = `${legalDocument.title} | YuiSync`
+
+    const previousHtmlOverflow = window.document.documentElement.style.overflow
+    const previousBodyOverflow = window.document.body.style.overflow
+    window.document.documentElement.style.overflow = 'auto'
+    window.document.body.style.overflow = 'auto'
+
+    return () => {
+      window.document.documentElement.style.overflow = previousHtmlOverflow
+      window.document.body.style.overflow = previousBodyOverflow
+    }
+  }, [legalDocument.title])
 
   return (
-    <main className="min-h-screen bg-[#07111f] text-slate-100">
+    <main className="min-h-screen overflow-x-hidden bg-[#07111f] text-slate-100">
       <header className="border-b border-white/10 bg-[#09182a]/95">
         <div className="mx-auto flex max-w-4xl items-center justify-between px-5 py-5">
           <Link to="/" className="text-xl font-black tracking-tight text-white">YuiSync</Link>
@@ -151,12 +161,12 @@ export default function PublicLegalPage({ documentKey }) {
 
       <article className="mx-auto max-w-4xl px-5 py-12 sm:py-16">
         <p className="mb-3 text-sm font-bold uppercase tracking-[0.18em] text-emerald-400">Documento público do YuiSync</p>
-        <h1 className="text-3xl font-black tracking-tight text-white sm:text-5xl">{document.title}</h1>
-        <p className="mt-5 max-w-3xl text-base leading-7 text-slate-300">{document.intro}</p>
+        <h1 className="text-3xl font-black tracking-tight text-white sm:text-5xl">{legalDocument.title}</h1>
+        <p className="mt-5 max-w-3xl text-base leading-7 text-slate-300">{legalDocument.intro}</p>
         <p className="mt-3 text-sm text-slate-400">Última atualização: {LAST_UPDATED}</p>
 
         <div className="mt-10 space-y-8">
-          {document.sections.map(([heading, paragraphs]) => (
+          {legalDocument.sections.map(([heading, paragraphs]) => (
             <section key={heading} className="rounded-2xl border border-white/10 bg-white/[0.035] p-6 sm:p-8">
               <h2 className="text-xl font-bold text-white">{heading}</h2>
               <div className="mt-4 space-y-3 text-sm leading-7 text-slate-300 sm:text-base">
