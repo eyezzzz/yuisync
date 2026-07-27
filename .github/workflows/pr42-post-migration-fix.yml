@@ -1,0 +1,188 @@
+name: Apply PR 42 post-migration fixes
+
+on:
+  push:
+    branches:
+      - feat/agenda-capacity-operational-commissions
+    paths:
+      - .github/workflows/pr42-post-migration-fix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fixes:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: feat/agenda-capacity-operational-commissions
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply source and regression fixes
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          agenda = 'src/modules/petshop/pages/AgendaPage.jsx'
+          advanced = 'src/modules/petshop/hooks/usePetshopAdvanced.js'
+          test_file = 'test/agendaOperationalInfrastructure.test.mjs'
+
+          replace_once(
+              agenda,
+              """const fmtInterval = (iso) => {
+            if (!iso) return '—'
+            const start = new Date(iso)
+            const end = new Date(start.getTime() + 60 * 60 * 1000)
+            const f = (d) => d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })
+            return `${f(start)} - ${f(end)}`
+          }
+          """,
+              """const appointmentHourSlotKeys = (appt = {}) => {
+            if (!appt?.scheduled_at) return []
+            const start = new Date(appt.scheduled_at)
+            if (Number.isNaN(start.getTime())) return []
+
+            const cursor = new Date(start)
+            cursor.setMinutes(0, 0, 0)
+
+            const duration = Math.max(15, Number(appt.duration_min || 60))
+            const end = new Date(start.getTime() + duration * 60 * 1000)
+            const expandOverlappingHours = appointmentOccupiesManualSlot(appt)
+            const keys = []
+
+            do {
+              keys.push(`${localDateKey(cursor)}-${cursor.getHours()}`)
+              cursor.setHours(cursor.getHours() + 1)
+            } while (expandOverlappingHours && cursor < end)
+
+            return keys
+          }
+
+          const fmtInterval = (appt) => fmtAppointmentInterval(appt)
+          """,
+              'agenda interval helper',
+          )
+
+          replace_once(
+              agenda,
+              '{fmtInterval(appt.scheduled_at)}',
+              '{fmtInterval(appt)}',
+              'kanban interval usage',
+          )
+
+          replace_once(
+              agenda,
+              """    ;(appointments || []).forEach((appt) => {
+                const key = `${localDateKey(appt.scheduled_at)}-${localHour(appt.scheduled_at)}`
+                const list = map.get(key) || []
+                list.push(appt)
+                map.set(key, list)
+              })
+          """,
+              """    ;(appointments || []).forEach((appt) => {
+                appointmentHourSlotKeys(appt).forEach((key) => {
+                  const list = map.get(key) || []
+                  list.push(appt)
+                  map.set(key, list)
+                })
+              })
+          """,
+              'agenda slot expansion',
+          )
+
+          replace_once(
+              agenda,
+              '{fmtInterval(a.scheduled_at)}',
+              '{fmtInterval(a)}',
+              'list interval usage',
+          )
+
+          replace_once(
+              advanced,
+              "const getDateBounds = (d = todayISO()) => ({ start: `${d}T00:00:00.000Z`, end: `${d}T23:59:59.999Z` })",
+              """const getDateBounds = (d = todayISO()) => ({
+            start: new Date(`${d}T00:00:00`).toISOString(),
+            end: new Date(`${d}T23:59:59.999`).toISOString(),
+          })""",
+              'local date bounds',
+          )
+
+          replace_once(
+              advanced,
+              """    const start = startDate ? `${startDate}T00:00:00.000Z` : range.start
+              const end = endDate ? `${endDate}T23:59:59.999Z` : range.end
+          """,
+              """    const start = startDate ? getDateBounds(startDate).start : range.start
+              const end = endDate ? getDateBounds(endDate).end : range.end
+          """,
+              'commission selected date range',
+          )
+
+          replace_once(
+              test_file,
+              """  assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))
+            assert.match(agenda, /FICHA DE ATENDIMENTO/)
+          """,
+              """  assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))
+            assert.match(agenda, /appointmentHourSlotKeys/)
+            assert.match(agenda, /appointmentHourSlotKeys\(appt\)\.forEach/)
+            assert.match(agenda, /fmtInterval\(appt\)/)
+            assert.match(agenda, /fmtInterval\(a\)/)
+            assert.match(agenda, /FICHA DE ATENDIMENTO/)
+          """,
+              'agenda regression assertions',
+          )
+
+          replace_once(
+              test_file,
+              """  assert.match(advanced, /calculate_petshop_operational_commissions/)
+            assert.ok(advanced.includes(".is('responsible_staff_key', null)"))
+          """,
+              """  assert.match(advanced, /calculate_petshop_operational_commissions/)
+            assert.match(advanced, /getDateBounds\(startDate\)\.start/)
+            assert.match(advanced, /getDateBounds\(endDate\)\.end/)
+            assert.doesNotMatch(advanced, /\$\{startDate\}T00:00:00\.000Z/)
+            assert.ok(advanced.includes(".is('responsible_staff_key', null)"))
+          """,
+              'commission range regression assertions',
+          )
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run focused validation
+        run: |
+          npm run test:transactions
+          npm run typecheck
+          npm run build
+
+      - name: Commit fixes and remove temporary workflow
+        shell: bash
+        run: |
+          rm .github/workflows/pr42-post-migration-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/petshop/pages/AgendaPage.jsx \
+                  src/modules/petshop/hooks/usePetshopAdvanced.js \
+                  test/agendaOperationalInfrastructure.test.mjs \
+                  .github/workflows/pr42-post-migration-fix.yml
+          git commit -m "fix: align agenda overlaps and commission date range"
+          git push origin HEAD:feat/agenda-capacity-operational-commissions
