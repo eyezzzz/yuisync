@@ -117,7 +117,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 declare
   v_tenant_id uuid := nullif(p_payload->>'tenant_id', '')::uuid;
   v_module_id text := coalesce(nullif(trim(p_payload->>'module_id'), ''), 'petshop');
@@ -190,7 +190,7 @@ begin
     'duplicated', false
   );
 end;
-$;
+$$;
 
 create or replace function public.update_petshop_appointment_transaction(
   p_appointment_id uuid,
@@ -200,7 +200,7 @@ returns jsonb
 language plpgsql
 security definer
 set search_path = public
-as $
+as $$
 declare
   v_current public.appointments%rowtype;
   v_tenant_id uuid := nullif(p_payload->>'tenant_id', '')::uuid;
@@ -285,7 +285,7 @@ begin
     'service_items', v_resolved->'items'
   );
 end;
-$;
+$$;
 
 revoke all on function public.book_petshop_appointment_transaction(jsonb) from public;
 revoke all on function public.update_petshop_appointment_transaction(uuid, jsonb) from public;
