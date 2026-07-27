@@ -10,7 +10,7 @@ const DEFAULT_LOYALTY_SETTINGS = { points_per_real: 1, points_per_service: 10, r
 const CLIENT_SELECT = 'id,name,phone,email,address,neighborhood,city,details'
 const PLAN_SELECT = 'id,name,price,billing_cycle,services,active'
 const ORDER_SELECT = `*,clients(${CLIENT_SELECT}),sales(id,customer_name,payment_method,payment_status,payment_proof_url,payment_proof_received_at,subtotal,discount,total_price,created_at,fulfillment_type,source,notes,sale_items(id,quantity,unit_price,subtotal,upsell,products(id,name,category)))`
-const APPT_BASE_SELECT = 'id,module_id,pet_id,client_id,groomer_id,service_type,scheduled_at,duration_min,price,status,live_status,checkin_at,ready_at,notes,subscription_benefit_used'
+const APPT_BASE_SELECT = 'id,module_id,pet_id,client_id,groomer_id,responsible_staff_key,responsible_staff_name,service_type,service_group,service_items,scheduled_at,duration_min,price,status,live_status,checkin_at,ready_at,notes,subscription_benefit_used,transport_mode,transport_label,transport_address,transport_neighborhood,transport_city,transport_reference'
 const APPT_SELECT = `${APPT_BASE_SELECT},clients(${CLIENT_SELECT})`
 const STAFF_TYPES = ['funcionario', 'banho_tosa', 'veterinaria', 'motodog', 'vendedor_caixa', 'gerente']
 const LIVE_STAFF_TYPES = ['funcionario', 'banho_tosa', 'veterinaria']
@@ -47,7 +47,10 @@ export const CAMPAIGN_TEMPLATES = {
 
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 const toISODate = (d) => new Date(d).toISOString().slice(0, 10)
-const getDateBounds = (d = todayISO()) => ({ start: `${d}T00:00:00.000Z`, end: `${d}T23:59:59.999Z` })
+const getDateBounds = (d = todayISO()) => ({
+  start: new Date(`${d}T00:00:00`).toISOString(),
+  end: new Date(`${d}T23:59:59.999`).toISOString(),
+})
 const getMonthRange = (ref = new Date()) => {
   const start = new Date(ref.getFullYear(), ref.getMonth(), 1)
   const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 0, 23, 59, 59, 999)
@@ -66,6 +69,14 @@ const hasCommissionsSignatureError = (error) => {
 const hasCommissionsV2SignatureError = (error) => {
   const m = String(error?.message || '').toLowerCase()
   return m.includes('calculate_petshop_commissions_v2') && (
+    m.includes('does not exist')
+    || m.includes('schema cache')
+    || m.includes('could not find the function')
+  )
+}
+const hasOperationalCommissionsSignatureError = (error) => {
+  const m = String(error?.message || '').toLowerCase()
+  return m.includes('calculate_petshop_operational_commissions') && (
     m.includes('does not exist')
     || m.includes('schema cache')
     || m.includes('could not find the function')
@@ -576,50 +587,104 @@ export function usePetshopAdvanced() {
 
   const loadTeamSnapshot = useCallback(async ({ startDate, endDate } = {}) => {
     const range = getMonthRange(new Date())
-    const start = startDate ? `${startDate}T00:00:00.000Z` : range.start
-    const end = endDate ? `${endDate}T23:59:59.999Z` : range.end
+    const start = startDate ? getDateBounds(startDate).start : range.start
+    const end = endDate ? getDateBounds(endDate).end : range.end
 
-    let rpcRes = await supabase.rpc('calculate_petshop_commissions_v2', { p_module_id: moduleId, p_start: start, p_end: end, p_tenant_id: activeTenantId || null })
+    let profiles = []
+    let rows = []
     let usingLegacy = false
+    const operationalRes = await supabase.rpc('calculate_petshop_operational_commissions', {
+      p_module_id: moduleId,
+      p_start: start,
+      p_end: end,
+      p_tenant_id: activeTenantId || null,
+    })
 
-    if (rpcRes.error && hasCommissionsV2SignatureError(rpcRes.error)) {
-      usingLegacy = true
-      rpcRes = await supabase.rpc('calculate_commissions', { p_module_id: moduleId, p_start: start, p_end: end, p_tenant_id: activeTenantId || null })
-      if (rpcRes.error && hasCommissionsSignatureError(rpcRes.error)) {
-        rpcRes = await supabase.rpc('calculate_commissions', { p_module_id: moduleId, p_start: start, p_end: end })
+    if (!operationalRes.error) {
+      rows = (operationalRes.data || []).map((entry) => ({
+        ...entry,
+        service_count: Number(entry.service_count || 0),
+        grooming_count: Number(entry.grooming_count || 0),
+        other_service_count: Number(entry.other_service_count || 0),
+        service_revenue: Number(entry.service_revenue || 0),
+        grooming_revenue: Number(entry.grooming_revenue || 0),
+        other_service_revenue: Number(entry.other_service_revenue || 0),
+        grooming_commission: Number(entry.grooming_commission || 0),
+        other_service_commission: Number(entry.other_service_commission || 0),
+        total_commission: Number(entry.total_commission || 0),
+        sales_count: 0,
+        motoboy_count: 0,
+        sales_revenue: 0,
+        motoboy_revenue: 0,
+        sales_commission: 0,
+        motoboy_commission: 0,
+      }))
+    } else {
+      if (!hasOperationalCommissionsSignatureError(operationalRes.error)) throw operationalRes.error
+
+      let rpcRes = await supabase.rpc('calculate_petshop_commissions_v2', { p_module_id: moduleId, p_start: start, p_end: end, p_tenant_id: activeTenantId || null })
+      if (rpcRes.error && hasCommissionsV2SignatureError(rpcRes.error)) {
+        usingLegacy = true
+        rpcRes = await supabase.rpc('calculate_commissions', { p_module_id: moduleId, p_start: start, p_end: end, p_tenant_id: activeTenantId || null })
+        if (rpcRes.error && hasCommissionsSignatureError(rpcRes.error)) {
+          rpcRes = await supabase.rpc('calculate_commissions', { p_module_id: moduleId, p_start: start, p_end: end })
+        }
       }
+      if (rpcRes.error) throw rpcRes.error
+
+      const commissionState = await loadCommissionRules()
+      profiles = commissionState.profiles
+      const ruleMap = new Map((commissionState.rules || []).map((rule) => [rule.profile_id, rule]))
+      rows = (rpcRes.data || []).map((entry) => usingLegacy ? ({
+        ...entry,
+        collaborator_name: entry.groomer_name,
+        service_count: Number(entry.appointments_count || 0),
+        grooming_count: 0,
+        other_service_count: Number(entry.appointments_count || 0),
+        service_revenue: Number(entry.revenue || 0),
+        grooming_commission: 0,
+        other_service_commission: Number(entry.commission || 0),
+        total_commission: Number(entry.commission || 0),
+        rule: ruleMap.get(entry.profile_id) || null,
+      }) : ({
+        ...entry,
+        service_count: Number(entry.service_count || 0),
+        grooming_count: Number(entry.grooming_count || 0),
+        other_service_count: Number(entry.other_service_count || entry.service_count || 0),
+        service_revenue: Number(entry.service_revenue || 0),
+        grooming_commission: Number(entry.grooming_commission || 0),
+        other_service_commission: Number(entry.other_service_commission || entry.service_commission || 0),
+        total_commission: Number(entry.total_commission || 0),
+        rule: ruleMap.get(entry.profile_id) || null,
+      }))
     }
-    if (rpcRes.error) throw rpcRes.error
 
     let pendingRes = await runScoped(async (includeTenant) => {
-      let q = supabase
+      let query = supabase
         .from('appointments')
         .select(APPT_SELECT)
         .eq('module_id', moduleId)
         .eq('status', 'concluido')
-        .is('groomer_id', null)
+        .is('responsible_staff_key', null)
         .gte('scheduled_at', start)
         .lte('scheduled_at', end)
         .order('scheduled_at', { ascending: false })
-
-      return applyTenantFilter(q, activeTenantId, includeTenant)
+      return applyTenantFilter(query, activeTenantId, includeTenant)
     })
 
     if (pendingRes.error && isAppointmentClientRelationError(pendingRes.error)) {
       pendingRes = await runScoped(async (includeTenant) => {
-        let q = supabase
+        let query = supabase
           .from('appointments')
           .select(APPT_BASE_SELECT)
           .eq('module_id', moduleId)
           .eq('status', 'concluido')
-          .is('groomer_id', null)
+          .is('responsible_staff_key', null)
           .gte('scheduled_at', start)
           .lte('scheduled_at', end)
           .order('scheduled_at', { ascending: false })
-
-        return applyTenantFilter(q, activeTenantId, includeTenant)
+        return applyTenantFilter(query, activeTenantId, includeTenant)
       })
-
       if (pendingRes.error) throw pendingRes.error
       const clientMap = await loadClientMap((pendingRes.data || []).map((appointment) => appointment.client_id))
       pendingRes.data = (pendingRes.data || []).map((appointment) => ({
@@ -627,45 +692,7 @@ export function usePetshopAdvanced() {
         clients: clientMap.get(appointment.client_id) || null,
       }))
     }
-
     if (pendingRes.error) throw pendingRes.error
-
-    const { profiles, rules } = await loadCommissionRules()
-    const ruleMap = new Map((rules || []).map((r) => [r.profile_id, r]))
-    const rows = (rpcRes.data || []).map((e) => {
-      if (usingLegacy) {
-        return {
-          ...e,
-          collaborator_name: e.groomer_name,
-          service_count: Number(e.appointments_count || 0),
-          sales_count: 0,
-          motoboy_count: 0,
-          service_revenue: Number(e.revenue || 0),
-          sales_revenue: 0,
-          motoboy_revenue: 0,
-          service_commission: Number(e.commission || 0),
-          sales_commission: 0,
-          motoboy_commission: 0,
-          total_commission: Number(e.commission || 0),
-          rule: ruleMap.get(e.profile_id) || null,
-        }
-      }
-
-      return {
-        ...e,
-        service_count: Number(e.service_count || 0),
-        sales_count: Number(e.sales_count || 0),
-        motoboy_count: Number(e.motoboy_count || 0),
-        service_revenue: Number(e.service_revenue || 0),
-        sales_revenue: Number(e.sales_revenue || 0),
-        motoboy_revenue: Number(e.motoboy_revenue || 0),
-        service_commission: Number(e.service_commission || 0),
-        sales_commission: Number(e.sales_commission || 0),
-        motoboy_commission: Number(e.motoboy_commission || 0),
-        total_commission: Number(e.total_commission || 0),
-        rule: ruleMap.get(e.profile_id) || null,
-      }
-    })
 
     const pendingServices = (pendingRes.data || []).map((appointment) => ({
       ...appointment,
@@ -683,28 +710,43 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, loadClientMap, loadCommissionRules, moduleId, runScoped])
 
   const exportCommissionCsv = useCallback((rows, fileName = 'comissoes-petshop.csv') => {
-    const lines = [
-      ['Colaborador', 'Servicos', 'Vendas', 'Motoboy', 'Faturamento servicos', 'Faturamento vendas', 'Faturamento motoboy', 'Comissao servicos', 'Comissao vendas', 'Comissao motoboy', 'Total comissao'].join(','),
-      ...rows.map((r) => [
-        `"${r.collaborator_name || r.groomer_name || ''}"`,
-        r.service_count || r.appointments_count || 0,
-        r.sales_count || 0,
-        r.motoboy_count || 0,
-        Number(r.service_revenue ?? r.revenue ?? 0).toFixed(2),
-        Number(r.sales_revenue || 0).toFixed(2),
-        Number(r.motoboy_revenue || 0).toFixed(2),
-        Number(r.service_commission ?? r.commission ?? 0).toFixed(2),
-        Number(r.sales_commission || 0).toFixed(2),
-        Number(r.motoboy_commission || 0).toFixed(2),
-        Number(r.total_commission ?? r.commission ?? 0).toFixed(2),
-      ].join(',')),
-    ]
+    const operational = (rows || []).some((row) => row.staff_key)
+    const lines = operational
+      ? [
+        ['Esteticista', 'Servicos', 'Tosas', 'Outros servicos', 'Receita', 'Comissao tosa 10%', 'Comissao outros 5%', 'Total comissao'].join(','),
+        ...(rows || []).map((row) => [
+          `"${row.collaborator_name || row.staff_key || ""}"`,
+          row.service_count || 0,
+          row.grooming_count || 0,
+          row.other_service_count || 0,
+          Number(row.service_revenue || 0).toFixed(2),
+          Number(row.grooming_commission || 0).toFixed(2),
+          Number(row.other_service_commission || 0).toFixed(2),
+          Number(row.total_commission || 0).toFixed(2),
+        ].join(',')),
+      ]
+      : [
+        ['Colaborador', 'Servicos', 'Vendas', 'Motoboy', 'Faturamento servicos', 'Faturamento vendas', 'Faturamento motoboy', 'Comissao servicos', 'Comissao vendas', 'Comissao motoboy', 'Total comissao'].join(','),
+        ...(rows || []).map((row) => [
+          `"${row.collaborator_name || row.groomer_name || ""}"`,
+          row.service_count || row.appointments_count || 0,
+          row.sales_count || 0,
+          row.motoboy_count || 0,
+          Number(row.service_revenue ?? row.revenue ?? 0).toFixed(2),
+          Number(row.sales_revenue || 0).toFixed(2),
+          Number(row.motoboy_revenue || 0).toFixed(2),
+          Number(row.service_commission ?? row.commission ?? 0).toFixed(2),
+          Number(row.sales_commission || 0).toFixed(2),
+          Number(row.motoboy_commission || 0).toFixed(2),
+          Number(row.total_commission ?? row.commission ?? 0).toFixed(2),
+        ].join(',')),
+      ]
     const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileName
-    a.click()
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = fileName
+    anchor.click()
     URL.revokeObjectURL(url)
   }, [])
 

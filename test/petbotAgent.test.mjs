@@ -438,7 +438,12 @@ test('seleciona nome e preco exatos do servico por peso e tipo de pelo', () => {
   assert.equal(prepared.order.items[0].unit_price, 104)
   assert.equal(prepared.order.total, 104)
   assert.match(prepared.summary, /Banho Pet Porte Médio/)
-  assert.doesNotMatch(prepared.summary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)
+  assert.match(prepared.summary, /Pet: Theo \/ dog \/ Spitz Alemão \/ 12 kg \/ pelo duplo/i)
+const operationalSummary = prepared.summary
+  .split('\n')
+  .filter((line) => /• (?:1x|Serviço:|Pagamento:)/i.test(line))
+  .join('\n')
+assert.doesNotMatch(operationalSummary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)
 })
 
 test('codigo especializado retornado pelo catalogo permanece exato', () => {
