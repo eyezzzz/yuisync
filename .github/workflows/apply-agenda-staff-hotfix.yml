@@ -3,9 +3,9 @@ name: Apply agenda staff hotfix
 on:
   push:
     branches:
-      - fix/agenda-staff-settings-capacity
+      - main
     paths:
-      - .github/agenda-staff-trigger
+      - .github/workflows/apply-agenda-staff-hotfix.yml
 
 permissions:
   contents: write
@@ -14,7 +14,7 @@ jobs:
   apply-hotfix:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout branch
+      - name: Checkout hotfix branch
         uses: actions/checkout@v4
         with:
           ref: fix/agenda-staff-settings-capacity
@@ -40,7 +40,7 @@ jobs:
           npm run typecheck
           npm run build
 
-      - name: Commit hotfix
+      - name: Publish hotfix branch
         run: |
           rm .github/workflows/apply-agenda-staff-hotfix.yml
           rm .github/agenda-staff-hotfix.patch
@@ -50,3 +50,11 @@ jobs:
           git add -A
           git commit -m "fix: persist staff names and split agenda capacity"
           git push origin HEAD:fix/agenda-staff-settings-capacity
+
+      - name: Remove temporary executor from main
+        run: |
+          git fetch origin main
+          git checkout -B main origin/main
+          git rm .github/workflows/apply-agenda-staff-hotfix.yml
+          git commit -m "chore: remove agenda staff hotfix executor"
+          git push origin main
