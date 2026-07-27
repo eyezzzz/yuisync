@@ -75,11 +75,40 @@ export function normalizeServiceDurations(value = DEFAULT_PETSHOP_SERVICE_DURATI
   return { small: normalizeRange('small'), medium: normalizeRange('medium') }
 }
 
-export function serviceOperationKind(service = {}) {
-  const text = clean(typeof service === 'string' ? service : [service.code, service.name, service.service_type].filter(Boolean).join(' '))
+function normalizedServiceText(service = {}) {
+  const metadata = service && typeof service === 'object' && !Array.isArray(service)
+    ? (service.bot_metadata || service.metadata || {})
+    : {}
+  const raw = typeof service === 'string'
+    ? service
+    : [
+      service.code,
+      service.value,
+      service.name,
+      service.label,
+      service.service_type,
+      service.operation_kind,
+      service.size,
+      service.pet_size,
+      metadata.service_kind,
+      metadata.service_type,
+      metadata.size,
+      metadata.pet_size,
+    ].filter(Boolean).join(' ')
+  return clean(raw)
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
+}
+
+function normalizedWeight(weightKg) {
+  if (weightKg === null || weightKg === undefined || clean(weightKg) === '') return null
+  const weight = Number(weightKg)
+  return Number.isFinite(weight) && weight >= 0 ? weight : null
+}
+
+export function serviceOperationKind(service = {}) {
+  const text = normalizedServiceText(service)
   if (/tesoura/.test(text)) return 'scissor_grooming'
   if (/tosa|maquina|total|groom/.test(text)) return 'machine_grooming'
   if (/banho/.test(text)) return 'bath'
@@ -87,16 +116,29 @@ export function serviceOperationKind(service = {}) {
 }
 
 function durationRangeForWeight(durations, weightKg) {
-  const weight = Number(weightKg)
-  if (!Number.isFinite(weight) || weight < 0) return null
+  const weight = normalizedWeight(weightKg)
+  if (weight === null) return null
   return Object.values(normalizeServiceDurations(durations)).find((row) => (
     weight >= Number(row.min_weight_kg) && weight <= Number(row.max_weight_kg)
   )) || null
 }
 
+function durationRangeForService(durations, service, weightKg) {
+  const normalizedDurations = normalizeServiceDurations(durations)
+  const byWeight = durationRangeForWeight(normalizedDurations, weightKg)
+  if (byWeight) return byWeight
+
+  const text = normalizedServiceText(service)
+  const smallPattern = /\bpequen[oa]\b|\bporte\s*p\b|\bate\s*10\s*kg\b|\b0\s*(?:kg)?\s*(?:a|ate|-)\s*10\s*kg\b/
+  const mediumPlusPattern = /\bmedi[oa]\b|\bgrande\b|\bporte\s*(?:m|g)\b|\b10\s*kg\s*(?:ou\s*mais|acima)\b|\bacima\s*de\s*10\s*kg\b|\bmais\s*de\s*10\s*kg\b|\b10\s*(?:kg)?\s*(?:a|ate|-)\s*\d+\s*kg\b/
+  if (smallPattern.test(text)) return normalizedDurations.small
+  if (mediumPlusPattern.test(text)) return normalizedDurations.medium
+  return null
+}
+
 export function resolvePetshopServiceDuration({ service = {}, weightKg = null, durations = DEFAULT_PETSHOP_SERVICE_DURATIONS, fallbackMin = 60 } = {}) {
   const kind = serviceOperationKind(service)
-  const range = durationRangeForWeight(durations, weightKg)
+  const range = durationRangeForService(durations, service, weightKg)
   if (!kind || !range) return Math.max(15, Number(fallbackMin || 60))
   const field = kind === 'bath'
     ? 'bath_min'
@@ -107,14 +149,11 @@ export function resolvePetshopServiceDuration({ service = {}, weightKg = null, d
 }
 
 function inferredSizeLabel(service = {}, weightKg = null) {
-  const text = clean(typeof service === 'string' ? service : [service.code, service.name, service.service_type].filter(Boolean).join(' '))
-    .normalize('NFD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-  const weight = Number(weightKg)
-  if (/pequeno|0\s*kg|ate\s*10|0\s*a\s*10/.test(text) || (Number.isFinite(weight) && weight < 10)) return 'Porte Pequeno'
-  if (/medio|10\s*kg|10\s*a\s*22|10\s*a\s*21/.test(text) || (Number.isFinite(weight) && weight >= 10 && weight < 22)) return 'Porte Médio'
-  if (/grande|acima\s*de\s*22|mais\s*de\s*22/.test(text) || (Number.isFinite(weight) && weight >= 22)) return 'Porte Grande'
+  const text = normalizedServiceText(service)
+  const weight = normalizedWeight(weightKg)
+  if (/pequeno|0\s*kg|ate\s*10|0\s*a\s*10/.test(text) || (weight !== null && weight < 10)) return 'Porte Pequeno'
+  if (/medio|10\s*kg|10\s*a\s*22|10\s*a\s*21/.test(text) || (weight !== null && weight >= 10 && weight < 22)) return 'Porte Médio'
+  if (/grande|acima\s*de\s*22|mais\s*de\s*22/.test(text) || (weight !== null && weight >= 22)) return 'Porte Grande'
   return ''
 }
 
