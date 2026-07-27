@@ -1,0 +1,97 @@
+
+> yuisync@1.0.0 test:transactions
+> node --test test/transactionalStatic.test.mjs test/agendaOperationalInfrastructure.test.mjs
+
+✔ agenda manual expoe exatamente duas vagas operacionais (1.267882ms)
+✔ transporte da ficha diferencia cliente e MotoDog (0.369368ms)
+✔ comissao operacional usa 10 por cento para tosa e 5 para outros esteticos (0.371502ms)
+✖ infraestrutura conecta capacidade, transporte e responsible_staff_key (18.048714ms)
+✔ PDV ativo usa exclusivamente o checkout transacional (24.5737ms)
+✔ agenda cria reserva e consome beneficio na mesma RPC (3.656963ms)
+✔ taxa MotoDog publica nao e enviada pelo navegador (1.43328ms)
+✔ migracao protege estoque, idempotencia e conflito de agenda (2.273025ms)
+✔ reset de estoque preserva itens e vendas historicas (1.4386ms)
+✔ PetBot aplica a RPC transacional de estoque e agenda na cadeia de migracoes (1.360384ms)
+✔ smoke test do PetBot valida operacoes reais e sempre descarta os dados (1.212279ms)
+✔ retirada do PetBot fica pendente com pagamento a combinar (3.536628ms)
+✔ estoque e itens vendidos preservam quantidades fracionadas no banco (1.337752ms)
+✔ PetBot possui um unico escritor de movimento por item vendido (1.661104ms)
+✔ smoke veterinario usa a mesma especie efetiva da RPC (0.904725ms)
+✔ deploy permanece dentro do limite de funcoes do Vercel Hobby (2.325993ms)
+✔ historico de vendas desambigua o relacionamento com vendedor (0.782908ms)
+✔ seletor da agenda fecha ao escolher cliente e usa busca hibrida limitada (1.775047ms)
+✔ modo caixa do PDV usa scanner e preserva o checkout transacional (1.634976ms)
+✔ cards de clientes preservam nomes legiveis e acoes separadas (1.789865ms)
+✔ ordem impressa usa a largura nativa da Print iD sem forcar altura (0.598615ms)
+✔ ordem PetBot persiste e exibe o ponto de referência da entrega (0.593255ms)
+✔ todos os comprovantes usam a largura 80mm da Print iD (1.835339ms)
+✔ importacao legado preserva historico e oculta registros arquivados (0.878296ms)
+✔ detalhes do cliente mostram endereco completo e complemento (1.251932ms)
+✔ estoque permite unidades e fracao para produtos por peso (1.005823ms)
+✔ modo noturno e persistido e tem alternancia no menu (1.325178ms)
+✔ catalogo comercial de servicos sincroniza com a agenda transacional (0.599567ms)
+✔ falha generica do agente permanece recuperavel sem retornar ao fluxo hardcoded (2.869446ms)
+✔ PetBot v3 confirma pedidos de forma idempotente e usa configuracao real da loja (0.683393ms)
+✔ RPC do PetBot inicializa transporte quando o cliente leva o pet (2.035121ms)
+✔ RPC concilia a ordem criada pelo trigger legado sem duplicar sale_id (1.54047ms)
+✔ contexto persistente do agente usa JSONB e converte dados legados com seguranca (1.576697ms)
+✔ classificacao PetBot preenche racas comuns por pelagem sem sobrescrever ajustes manuais (1.742947ms)
+✔ classificacao exclusiva armazena uma unica grafia canonica por raca (0.867567ms)
+✔ PetBot v3 movimenta estoque e consome beneficio de plano na mesma transacao (0.60646ms)
+✔ catalogo de servicos normaliza especie e protege novos cadastros (1.040499ms)
+✔ agendamento PetBot permanece a receber e aceita origem WhatsApp (0.651553ms)
+✔ integridade do banho unifica catalogo, peso e retorno transacional (3.609575ms)
+✔ correcao do endereco mantem colunas e VALUES da ordem alinhados (1.082206ms)
+ℹ tests 40
+ℹ suites 0
+ℹ pass 39
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 154.947749
+
+✖ failing tests:
+
+test at test/agendaOperationalInfrastructure.test.mjs:33:1
+✖ infraestrutura conecta capacidade, transporte e responsible_staff_key (18.048714ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /sync_product_service_to_petshop_services/. Input:
+  
+  'begin;\n' +
+    '\n' +
+    'alter table public.petshop_services\n' +
+    '  add column if not exists source_product_id uuid references public.products(id) on delete set null;\n' +
+    '\n' +
+    '-- Reexecuta o sincronizador para todo produto que a tela Estoque > Servicos\n' +
+    '-- considera um servico. O grupo declarado no bot_metadata continua sendo a\n' +
+    '-- autoridade para separar banho_tosa, veterinaria e itens fora da agenda.\n' +
+    'update public.products product\n' +
+    "set bot_metadata = coalesce(product.bot_metadata, '{}'::jsonb)\n" +
+    "where product.module_id = 'petshop'\n" +
+    '  and product.active = true\n' +
+    '  and coalesce(product.price, 0) > 0\n' +
+    "  and trim(coalesce(product.name, '')) <> ''\n" +
+    '  and (\n' +
+    "    public.normalize_petshop_catalog_text(trim(coalesce(product.bot_metadata->>'product_type', ''))) = 'servico'\n" +
+    "    or public.normalize_petshop_catalog_text(trim(coalesce(product.category, ''))) = 'servico'\n" +
+    "    or public.normalize_petshop_catalog_text(concat_ws(' ', product.name, product.category, product.description, product.bot_metadata->>'product_type'))\n" +
+    "      ~ '(banho|tosa|desembolo|escovac|hidrat|higieniz|consulta|vacina|exame|cirurg|ultrassom|castr|curativo|microchip)'\n" +
+    '  )\n' +
+    "  and public.normalize_petshop_catalog_text(product.name) !~ '(banheira|banho a seco|brinquedo|casinha|roupa|shampoo|varinha)'\n" +
+    "  and public.normalize_petshop_catalog_text(product.name) !~ '(pacote.*banho|banho.*pacote)';\n" +
+    '\n' +
+    'comment on column public.petshop_services.source_product_id is\n' +
+    "  'Produto de Estoque > Servicos que originou este registro transacional.';\n" +
+    '\n' +
+    'commit;\n'
+  
+      at TestContext.<anonymous> (file:///home/runner/work/yuisync/yuisync/test/agendaOperationalInfrastructure.test.mjs:62:10)
+      at async Test.run (node:internal/test_runner/test:1332:7)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:911:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: "begin;\n\nalter table public.petshop_services\n  add column if not exists source_product_id uuid references public.products(id) on delete set null;\n\n-- Reexecuta o sincronizador para todo produto que a tela Estoque > Servicos\n-- considera um servico. O grupo declarado no bot_metadata continua sendo a\n-- autoridade para separar banho_tosa, veterinaria e itens fora da agenda.\nupdate public.products product\nset bot_metadata = coalesce(product.bot_metadata, '{}'::jsonb)\nwhere product.module_id = 'petshop'\n  and product.active = true\n  and coalesce(product.price, 0) > 0\n  and trim(coalesce(product.name, '')) <> ''\n  and (\n    public.normalize_petshop_catalog_text(trim(coalesce(product.bot_metadata->>'product_type', ''))) = 'servico'\n    or public.normalize_petshop_catalog_text(trim(coalesce(product.category, ''))) = 'servico'\n    or public.normalize_petshop_catalog_text(concat_ws(' ', product.name, product.category, product.description, product.bot_metadata->>'product_type'))\n      ~ '(banho|tosa|desembolo|escovac|hidrat|higieniz|consulta|vacina|exame|cirurg|ultrassom|castr|curativo|microchip)'\n  )\n  and public.normalize_petshop_catalog_text(product.name) !~ '(banheira|banho a seco|brinquedo|casinha|roupa|shampoo|varinha)'\n  and public.normalize_petshop_catalog_text(product.name) !~ '(pacote.*banho|banho.*pacote)';\n\ncomment on column public.petshop_services.source_product_id is\n  'Produto de Estoque > Servicos que originou este registro transacional.';\n\ncommit;\n",
+    expected: /sync_product_service_to_petshop_services/,
+    operator: 'match',
+    diff: 'simple'
+  }
