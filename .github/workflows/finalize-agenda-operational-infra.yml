@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
 
 jobs:
   finalize:
@@ -22,7 +23,30 @@ jobs:
           fetch-depth: 0
 
       - name: Apply final infrastructure patch
-        run: node scripts/finalize-agenda-operational-infra.mjs
+        id: applicator
+        continue-on-error: true
+        shell: bash
+        run: node scripts/finalize-agenda-operational-infra.mjs > /tmp/final-agenda.log 2>&1
+
+      - name: Report applicator failure
+        if: steps.applicator.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          {
+            echo '### Falha no ajuste final da agenda'
+            echo
+            echo '```text'
+            tail -n 40 /tmp/final-agenda.log
+            echo '```'
+          } > /tmp/final-agenda-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/final-agenda-comment.md
+
+      - name: Stop after applicator failure
+        if: steps.applicator.outcome == 'failure'
+        run: exit 1
 
       - name: Setup Node
         uses: actions/setup-node@v4
