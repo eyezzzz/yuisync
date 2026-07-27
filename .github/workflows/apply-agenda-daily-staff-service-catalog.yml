@@ -31,12 +31,33 @@ jobs:
         run: npm ci
 
       - name: Validate
+        id: validate
+        shell: bash
         run: |
-          npm run test:transactions
-          npm run typecheck
-          npm run build
+          set +e
+          {
+            npm run test:transactions
+            npm run typecheck
+            npm run build
+          } 2>&1 | tee /tmp/agenda-fix-validation.log
+          status=${PIPESTATUS[0]}
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit "$status"
+
+      - name: Record validation failure
+        if: failure() && steps.validate.outputs.status != '0'
+        run: |
+          cp /tmp/agenda-fix-validation.log /tmp/validation.log
+          git reset --hard HEAD
+          cp /tmp/validation.log .github/agenda-fix-validation.log
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/agenda-fix-validation.log
+          git commit -m "chore: record agenda fix validation failure"
+          git push origin HEAD:${{ github.head_ref }}
 
       - name: Publish functional commit
+        if: success()
         run: |
           rm .github/apply-agenda-daily-staff-service-catalog.py
           rm .github/workflows/apply-agenda-daily-staff-service-catalog.yml
