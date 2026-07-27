@@ -20,6 +20,23 @@ jobs:
           ref: fix/agenda-staff-settings-capacity
           fetch-depth: 0
 
+      - name: Check patch and record failure
+        id: patch-check
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git apply --check .github/agenda-staff-hotfix.patch > /tmp/hotfix-check.log 2>&1; then
+            echo "ok=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          cp /tmp/hotfix-check.log .github/agenda-staff-hotfix-error.log
+          git add .github/agenda-staff-hotfix-error.log
+          git commit -m "chore: record agenda staff hotfix failure" || true
+          git push origin HEAD:fix/agenda-staff-settings-capacity
+          cat /tmp/hotfix-check.log
+          exit 1
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -27,9 +44,7 @@ jobs:
           cache: npm
 
       - name: Apply patch
-        run: |
-          git apply --check .github/agenda-staff-hotfix.patch
-          git apply .github/agenda-staff-hotfix.patch
+        run: git apply .github/agenda-staff-hotfix.patch
 
       - name: Install dependencies
         run: npm ci
@@ -45,8 +60,7 @@ jobs:
           rm .github/workflows/apply-agenda-staff-hotfix.yml
           rm .github/agenda-staff-hotfix.patch
           rm .github/agenda-staff-trigger
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          rm -f .github/agenda-staff-hotfix-error.log
           git add -A
           git commit -m "fix: persist staff names and split agenda capacity"
           git push origin HEAD:fix/agenda-staff-settings-capacity
