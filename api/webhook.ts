@@ -61,16 +61,14 @@ async function readRawBody(req: IncomingMessage): Promise<string> {
 }
 
 function replayRequest(req: IncomingMessage, rawBody: string): IncomingMessage {
-  const replay = new PassThrough() as PassThrough & IncomingMessage
-  replay.headers = req.headers
-  replay.method = req.method
-  replay.url = req.url
-  replay.httpVersion = req.httpVersion
-  replay.httpVersionMajor = req.httpVersionMajor
-  replay.httpVersionMinor = req.httpVersionMinor
-  replay.complete = true
+  const replay = new PassThrough()
+  Object.assign(replay, {
+    headers: req.headers,
+    method: req.method,
+    url: req.url,
+  })
   replay.end(rawBody)
-  return replay
+  return replay as IncomingMessage
 }
 
 export default async function webhook(req: IncomingMessage, res: ServerResponse) {
