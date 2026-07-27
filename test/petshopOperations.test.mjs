@@ -33,6 +33,40 @@ test('service durations follow the operational weight matrix', () => {
   }
 })
 
+test('duration presets recognize real catalog options that expose label and internal value', () => {
+  const cases = [
+    [{ value: '9db5b4d7-uuid', label: 'Banho Pet Porte Pequeno 0 kg a 10 kg' }, null, 40],
+    [{ value: 'svc-002', label: 'Tosa Máquina/Total Porte Pequeno' }, null, 60],
+    [{ value: 'svc-003', label: 'Tosa Tesoura Porte Pequeno' }, null, 90],
+    [{ value: 'svc-004', label: 'Banho Porte Médio ou Grande' }, null, 60],
+    [{ value: 'svc-005', label: 'Tosa Máquina/Total 10 kg ou mais' }, null, 90],
+    [{ value: 'svc-006', label: 'Tosa Tesoura Porte Grande' }, null, 120],
+  ]
+
+  for (const [service, weightKg, expected] of cases) {
+    assert.equal(resolvePetshopServiceDuration({ service, weightKg, fallbackMin: 777 }), expected)
+  }
+})
+
+test('client weight takes precedence over size text when both are available', () => {
+  assert.equal(
+    resolvePetshopServiceDuration({
+      service: { value: 'svc-banho', label: 'Banho geral' },
+      weightKg: 8,
+      fallbackMin: 777,
+    }),
+    40,
+  )
+  assert.equal(
+    resolvePetshopServiceDuration({
+      service: { value: 'svc-tosa', label: 'Tosa Tesoura' },
+      weightKg: 18,
+      fallbackMin: 777,
+    }),
+    120,
+  )
+})
+
 test('customer-facing labels hide catalog classification details', () => {
   assert.equal(
     friendlyPetshopServiceLabel('BANHO PET PORTE PEQUENO 0 KG A 10 KG (TODAS AS PELAGENS)', { weightKg: 8 }),
