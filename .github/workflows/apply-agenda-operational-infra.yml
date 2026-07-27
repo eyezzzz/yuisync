@@ -22,18 +22,31 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
-      - name: Normalize applicator anchor
+      - name: Normalize applicator anchors
         shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
-          path = Path('src/modules/petshop/pages/AgendaPage.jsx')
-          source = path.read_text(encoding='utf-8')
-          before = "time: `${String(hour).padStart(2, '0')}:00`,"
-          after = 'time: `${String(hour).padStart(2, "0")}:00`,'
-          if before not in source:
+
+          agenda_path = Path('src/modules/petshop/pages/AgendaPage.jsx')
+          agenda = agenda_path.read_text(encoding='utf-8')
+          before_time = "time: `${String(hour).padStart(2, '0')}:00`,"
+          after_time = 'time: `${String(hour).padStart(2, "0")}:00`,'
+          if before_time not in agenda:
               raise SystemExit('Ancora do horario manual nao encontrada.')
-          path.write_text(source.replace(before, after, 1), encoding='utf-8')
+          agenda_path.write_text(agenda.replace(before_time, after_time, 1), encoding='utf-8')
+
+          script_path = Path('scripts/apply-agenda-operational-infra.mjs')
+          script = script_path.read_text(encoding='utf-8')
+          replacements = {
+              r"assert.match(migration, /revenue \* 0\\.10/)": r"assert.match(migration, /revenue \\* 0\\.10/)",
+              r"assert.match(migration, /revenue \* 0\\.05/)": r"assert.match(migration, /revenue \\* 0\\.05/)",
+          }
+          for before, after in replacements.items():
+              if before not in script:
+                  raise SystemExit(f'Ancora de teste nao encontrada: {before}')
+              script = script.replace(before, after, 1)
+          script_path.write_text(script, encoding='utf-8')
           PY
 
       - name: Apply infrastructure patch
