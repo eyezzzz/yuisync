@@ -1,0 +1,62 @@
+name: Finalize Agenda Operational Infrastructure
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    if: github.event.pull_request.head.ref == 'feat/agenda-capacity-operational-commissions'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Apply final infrastructure patch
+        run: node scripts/finalize-agenda-operational-infra.mjs
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused tests
+        run: node --test test/agendaOperationalInfrastructure.test.mjs
+
+      - name: Transactional static tests
+        run: npm run test:transactions
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Publish final patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            src/modules/petshop/lib/appointmentOperational.js \
+            src/modules/petshop/pages/AgendaPage.jsx \
+            src/shared/hooks/useAppointments.js \
+            supabase/migrations/20260727001000_agenda_capacity_operational_commissions.sql \
+            database/agenda_capacity_operational_commissions.sql \
+            test/agendaOperationalInfrastructure.test.mjs
+          git diff --cached --quiet && { echo "Nenhuma alteracao final produzida."; exit 1; }
+          git commit -m "fix: make agenda capacity and assignments atomic"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
