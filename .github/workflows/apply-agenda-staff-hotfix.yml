@@ -1,0 +1,52 @@
+name: Apply agenda staff hotfix
+
+on:
+  push:
+    branches:
+      - fix/agenda-staff-settings-capacity
+    paths:
+      - .github/agenda-staff-trigger
+
+permissions:
+  contents: write
+
+jobs:
+  apply-hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/agenda-staff-settings-capacity
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply patch
+        run: |
+          git apply --check .github/agenda-staff-hotfix.patch
+          git apply .github/agenda-staff-hotfix.patch
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate hotfix
+        run: |
+          npm run test:transactions
+          npm run typecheck
+          npm run build
+
+      - name: Commit hotfix
+        run: |
+          rm .github/workflows/apply-agenda-staff-hotfix.yml
+          rm .github/agenda-staff-hotfix.patch
+          rm .github/agenda-staff-trigger
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: persist staff names and split agenda capacity"
+          git push origin HEAD:fix/agenda-staff-settings-capacity
