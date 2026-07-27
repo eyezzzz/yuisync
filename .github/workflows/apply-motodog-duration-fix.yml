@@ -19,7 +19,9 @@ jobs:
           fetch-depth: 0
 
       - name: Apply source changes
-        run: python .github/apply-motodog-duration-fix.py
+        run: |
+          sed -i 's/dailyTimelineSlots/DAILY_SLOT_MINUTES = 10/' .github/apply-motodog-duration-fix.py
+          python .github/apply-motodog-duration-fix.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -33,7 +35,7 @@ jobs:
       - name: Validate
         run: |
           npm run test:transactions
-          npm run test -- --runInBand
+          npm run test
           npm run typecheck
           npm run build
 
