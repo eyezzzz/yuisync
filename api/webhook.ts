@@ -68,7 +68,7 @@ function replayRequest(req: IncomingMessage, rawBody: string): IncomingMessage {
     url: req.url,
   })
   replay.end(rawBody)
-  return replay as IncomingMessage
+  return replay as unknown as IncomingMessage
 }
 
 export default async function webhook(req: IncomingMessage, res: ServerResponse) {
