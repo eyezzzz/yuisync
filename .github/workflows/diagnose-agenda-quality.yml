@@ -1,0 +1,47 @@
+name: Diagnose Agenda Quality
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  diagnose:
+    if: github.event.pull_request.head.ref == 'feat/agenda-capacity-operational-commissions'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Run PetBot static suite
+        id: suite
+        continue-on-error: true
+        run: npm run test:petbot > /tmp/petbot-suite.log 2>&1
+      - name: Report exact failure
+        if: steps.suite.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          {
+            echo '### Falha exata do Quality na PR da agenda'
+            echo
+            echo '```text'
+            grep -n -B 10 -A 45 '^not ok' /tmp/petbot-suite.log || tail -n 140 /tmp/petbot-suite.log
+            echo '```'
+          } > /tmp/comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/comment.md
+      - name: Stop on failure
+        if: steps.suite.outcome == 'failure'
+        run: exit 1
