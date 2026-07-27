@@ -163,25 +163,6 @@ function normalizeAppointmentPayload(payload = {}, moduleId) {
   return apiPayload
 }
 
-const APPOINTMENT_OPERATIONAL_FIELDS = [
-  'responsible_staff_key',
-  'responsible_staff_name',
-  'transport_mode',
-  'transport_label',
-  'transport_address',
-  'transport_neighborhood',
-  'transport_city',
-  'transport_reference',
-]
-
-function hasAppointmentOperationalFields(payload = {}) {
-  return APPOINTMENT_OPERATIONAL_FIELDS.some((field) => Object.prototype.hasOwnProperty.call(payload, field))
-}
-
-function appointmentOperationalPatch(payload = {}) {
-  return Object.fromEntries(APPOINTMENT_OPERATIONAL_FIELDS.map((field) => [field, payload[field] || null]))
-}
-
 async function ensurePetRecordForClient(activeModuleId, activeTenantId, clientId) {
   if (activeModuleId !== 'petshop' || !clientId) return clientId
 
@@ -465,19 +446,6 @@ export function useAppointments() {
 
     if (response.error) throw response.error
 
-    if (hasAppointmentOperationalFields(payload)) {
-      const assignment = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-        let query = supabase
-          .from('appointments')
-          .update(appointmentOperationalPatch(payload))
-          .eq('id', response.data?.appointment_id)
-          .eq('module_id', activeModuleId)
-        query = applyTenantFilter(query, activeTenantId, includeTenant)
-        return query
-      })
-      if (assignment.error) throw assignment.error
-    }
-
     const created = await fetchAppointmentById(response.data?.appointment_id)
     setAppointments((prev) => [...prev, created].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
     return created
@@ -486,9 +454,6 @@ export function useAppointments() {
   const update = useCallback(async (id, payload) => {
     if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar o agendamento.')
     const apiPayload = normalizeAppointmentPayload(payload)
-    const operationalAssignment = appointmentOperationalPatch(apiPayload)
-    const hasOperationalAssignment = hasAppointmentOperationalFields(apiPayload)
-    APPOINTMENT_OPERATIONAL_FIELDS.forEach((field) => delete apiPayload[field])
     if (apiPayload.client_id) {
       apiPayload.pet_id = await ensurePetRecordForClient(activeModuleId, activeTenantId, apiPayload.client_id)
     }
@@ -531,19 +496,6 @@ export function useAppointments() {
         return query
       })
       if (response.error) throw response.error
-    }
-
-    if (hasOperationalAssignment) {
-      const assignment = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-        let query = supabase
-          .from('appointments')
-          .update(operationalAssignment)
-          .eq('id', id)
-          .eq('module_id', activeModuleId)
-        query = applyTenantFilter(query, activeTenantId, includeTenant)
-        return query
-      })
-      if (assignment.error) throw assignment.error
     }
 
     const updated = await fetchAppointmentById(id)

@@ -109,6 +109,189 @@ before insert or update of scheduled_at, duration_min, employee_id, groomer_id,
 on public.appointments
 for each row execute function public.prevent_appointment_overlap();
 
+-- Persist responsible staff and transport in the same transaction that creates
+-- or edits the appointment. This prevents a valid reservation from being left
+-- behind if the operational assignment is rejected.
+create or replace function public.book_petshop_appointment_transaction(p_payload jsonb)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $
+declare
+  v_tenant_id uuid := nullif(p_payload->>'tenant_id', '')::uuid;
+  v_module_id text := coalesce(nullif(trim(p_payload->>'module_id'), ''), 'petshop');
+  v_client_id uuid := coalesce(nullif(p_payload->>'client_id', '')::uuid, nullif(p_payload->>'pet_id', '')::uuid);
+  v_idempotency_key text := nullif(trim(p_payload->>'idempotency_key'), '');
+  v_resolved jsonb;
+  v_appointment_id uuid;
+  v_source text := coalesce(nullif(trim(p_payload->>'source'), ''), 'manual');
+begin
+  if v_tenant_id is null or not public.has_tenant_access(v_tenant_id) then raise exception 'Tenant invalido ou sem permissao.'; end if;
+  if v_client_id is null then raise exception 'Cliente obrigatorio.'; end if;
+  if v_idempotency_key is null then raise exception 'Chave de idempotencia obrigatoria.'; end if;
+  if nullif(p_payload->>'scheduled_at', '') is null then raise exception 'Data e horario obrigatorios.'; end if;
+
+  select id into v_appointment_id
+  from public.appointments
+  where tenant_id = v_tenant_id and idempotency_key = v_idempotency_key
+  limit 1;
+  if found then return jsonb_build_object('appointment_id', v_appointment_id, 'duplicated', true); end if;
+
+  if not exists (
+    select 1 from public.clients
+    where id = v_client_id and tenant_id = v_tenant_id and module_id = v_module_id and active = true
+  ) then raise exception 'Cliente nao pertence ao tenant ativo.'; end if;
+
+  v_resolved := public.resolve_petshop_appointment_services(
+    v_tenant_id,
+    v_module_id,
+    v_client_id,
+    coalesce(p_payload->'services', '[]'::jsonb),
+    p_payload->>'service_type'
+  );
+
+  insert into public.appointments (
+    tenant_id, module_id, client_id, pet_id, service_type, service_group, service_items,
+    scheduled_at, duration_min, price, status, notes, source, employee_id, groomer_id,
+    responsible_staff_key, responsible_staff_name,
+    transport_mode, transport_label, transport_address, transport_neighborhood,
+    transport_city, transport_reference,
+    subscription_id, subscription_benefit_used, idempotency_key
+  ) values (
+    v_tenant_id, v_module_id, v_client_id, coalesce(nullif(p_payload->>'pet_id', '')::uuid, v_client_id),
+    v_resolved->>'service_type', v_resolved->>'service_group', v_resolved->'items',
+    (p_payload->>'scheduled_at')::timestamptz,
+    (v_resolved->>'duration_min')::integer,
+    (v_resolved->>'price')::numeric,
+    coalesce(nullif(trim(p_payload->>'status'), ''), 'agendado'),
+    concat_ws(' | ', nullif(trim(p_payload->>'notes'), ''), case when (v_resolved->>'benefit_used')::boolean then 'Beneficio de plano aplicado' end),
+    v_source,
+    nullif(p_payload->>'employee_id', '')::uuid,
+    nullif(p_payload->>'groomer_id', '')::uuid,
+    nullif(trim(p_payload->>'responsible_staff_key'), ''),
+    nullif(trim(p_payload->>'responsible_staff_name'), ''),
+    nullif(trim(p_payload->>'transport_mode'), ''),
+    nullif(trim(p_payload->>'transport_label'), ''),
+    nullif(trim(p_payload->>'transport_address'), ''),
+    nullif(trim(p_payload->>'transport_neighborhood'), ''),
+    nullif(trim(p_payload->>'transport_city'), ''),
+    nullif(trim(p_payload->>'transport_reference'), ''),
+    nullif(v_resolved->>'subscription_id', '')::uuid,
+    coalesce((v_resolved->>'benefit_used')::boolean, false),
+    v_idempotency_key
+  ) returning id into v_appointment_id;
+
+  return jsonb_build_object(
+    'appointment_id', v_appointment_id,
+    'price', (v_resolved->>'price')::numeric,
+    'duration_min', (v_resolved->>'duration_min')::integer,
+    'service_items', v_resolved->'items',
+    'duplicated', false
+  );
+end;
+$;
+
+create or replace function public.update_petshop_appointment_transaction(
+  p_appointment_id uuid,
+  p_payload jsonb
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $
+declare
+  v_current public.appointments%rowtype;
+  v_tenant_id uuid := nullif(p_payload->>'tenant_id', '')::uuid;
+  v_module_id text := coalesce(nullif(trim(p_payload->>'module_id'), ''), 'petshop');
+  v_client_id uuid;
+  v_resolved jsonb;
+  v_recalculate boolean;
+begin
+  select * into v_current
+  from public.appointments
+  where id = p_appointment_id
+  for update;
+
+  if not found then raise exception 'Agendamento nao encontrado.'; end if;
+  if v_tenant_id is null then v_tenant_id := v_current.tenant_id; end if;
+  if v_current.tenant_id <> v_tenant_id or v_current.module_id <> v_module_id or not public.has_tenant_access(v_tenant_id) then
+    raise exception 'Agendamento nao pertence ao tenant ativo.';
+  end if;
+
+  v_client_id := coalesce(nullif(p_payload->>'client_id', '')::uuid, nullif(p_payload->>'pet_id', '')::uuid, v_current.client_id);
+  if not exists (
+    select 1 from public.clients
+    where id = v_client_id and tenant_id = v_tenant_id and module_id = v_module_id and active = true
+  ) then raise exception 'Cliente nao pertence ao tenant ativo.'; end if;
+
+  v_recalculate := p_payload ? 'services'
+    or nullif(p_payload->>'service_type', '') is not null
+    or v_client_id is distinct from v_current.client_id;
+
+  if v_recalculate then
+    perform public.restore_petshop_appointment_benefits(p_appointment_id);
+    v_resolved := public.resolve_petshop_appointment_services(
+      v_tenant_id,
+      v_module_id,
+      v_client_id,
+      case when p_payload ? 'services' then coalesce(p_payload->'services', '[]'::jsonb) else coalesce(v_current.service_items, '[]'::jsonb) end,
+      coalesce(nullif(p_payload->>'service_type', ''), v_current.service_type)
+    );
+  else
+    v_resolved := jsonb_build_object(
+      'service_type', v_current.service_type,
+      'service_group', v_current.service_group,
+      'items', coalesce(v_current.service_items, '[]'::jsonb),
+      'price', v_current.price,
+      'duration_min', v_current.duration_min,
+      'subscription_id', v_current.subscription_id,
+      'benefit_used', v_current.subscription_benefit_used
+    );
+  end if;
+
+  update public.appointments
+  set client_id = v_client_id,
+      pet_id = coalesce(nullif(p_payload->>'pet_id', '')::uuid, v_current.pet_id, v_client_id),
+      service_type = v_resolved->>'service_type',
+      service_group = v_resolved->>'service_group',
+      service_items = v_resolved->'items',
+      scheduled_at = coalesce(nullif(p_payload->>'scheduled_at', '')::timestamptz, v_current.scheduled_at),
+      duration_min = (v_resolved->>'duration_min')::integer,
+      price = (v_resolved->>'price')::numeric,
+      status = coalesce(nullif(trim(p_payload->>'status'), ''), v_current.status),
+      notes = case when p_payload ? 'notes' then nullif(trim(p_payload->>'notes'), '') else v_current.notes end,
+      source = coalesce(nullif(trim(p_payload->>'source'), ''), v_current.source, 'manual'),
+      employee_id = case when p_payload ? 'employee_id' then nullif(p_payload->>'employee_id', '')::uuid else v_current.employee_id end,
+      groomer_id = case when p_payload ? 'groomer_id' then nullif(p_payload->>'groomer_id', '')::uuid else v_current.groomer_id end,
+      responsible_staff_key = case when p_payload ? 'responsible_staff_key' then nullif(trim(p_payload->>'responsible_staff_key'), '') else v_current.responsible_staff_key end,
+      responsible_staff_name = case when p_payload ? 'responsible_staff_name' then nullif(trim(p_payload->>'responsible_staff_name'), '') else v_current.responsible_staff_name end,
+      transport_mode = case when p_payload ? 'transport_mode' then nullif(trim(p_payload->>'transport_mode'), '') else v_current.transport_mode end,
+      transport_label = case when p_payload ? 'transport_label' then nullif(trim(p_payload->>'transport_label'), '') else v_current.transport_label end,
+      transport_address = case when p_payload ? 'transport_address' then nullif(trim(p_payload->>'transport_address'), '') else v_current.transport_address end,
+      transport_neighborhood = case when p_payload ? 'transport_neighborhood' then nullif(trim(p_payload->>'transport_neighborhood'), '') else v_current.transport_neighborhood end,
+      transport_city = case when p_payload ? 'transport_city' then nullif(trim(p_payload->>'transport_city'), '') else v_current.transport_city end,
+      transport_reference = case when p_payload ? 'transport_reference' then nullif(trim(p_payload->>'transport_reference'), '') else v_current.transport_reference end,
+      subscription_id = nullif(v_resolved->>'subscription_id', '')::uuid,
+      subscription_benefit_used = coalesce((v_resolved->>'benefit_used')::boolean, false),
+      updated_at = now()
+  where id = p_appointment_id and tenant_id = v_tenant_id;
+
+  return jsonb_build_object(
+    'appointment_id', p_appointment_id,
+    'price', (v_resolved->>'price')::numeric,
+    'duration_min', (v_resolved->>'duration_min')::integer,
+    'service_items', v_resolved->'items'
+  );
+end;
+$;
+
+revoke all on function public.book_petshop_appointment_transaction(jsonb) from public;
+revoke all on function public.update_petshop_appointment_transaction(uuid, jsonb) from public;
+grant execute on function public.book_petshop_appointment_transaction(jsonb) to authenticated, service_role;
+grant execute on function public.update_petshop_appointment_transaction(uuid, jsonb) to authenticated, service_role;
+
 -- Operational staff are stored in settings.petshop_operational_staff and do not
 -- need a YuiSync login. Commission is calculated per service item: grooming/tosa
 -- receives 10%; every other aesthetic service receives 5%.

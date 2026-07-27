@@ -13,7 +13,7 @@ import {
 test('agenda manual expoe exatamente duas vagas operacionais', () => {
   assert.equal(MANUAL_SLOT_CAPACITY, 2)
   assert.equal(appointmentOccupiesManualSlot({ status: 'agendado' }), true)
-  assert.equal(appointmentOccupiesManualSlot({ status: 'concluido' }), true)
+  assert.equal(appointmentOccupiesManualSlot({ status: 'concluido' }), false)
   assert.equal(appointmentOccupiesManualSlot({ status: 'cancelado' }), false)
 })
 
@@ -41,7 +41,10 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
 
   assert.match(migration, /petbot_booking_capacity = 2/)
   assert.match(migration, /responsible_staff_key/)
-  assert.match(migration, /calculate_petshop_operational_commissions/)
+  assert.ok(migration.includes('calculate_petshop_operational_commissions'))
+  assert.ok(migration.includes('book_petshop_appointment_transaction'))
+  assert.ok(migration.includes('responsible_staff_key, responsible_staff_name'))
+  assert.ok(migration.includes('transport_mode, transport_label, transport_address'))
   assert.ok(migration.includes('revenue * 0.10'))
   assert.ok(migration.includes('revenue * 0.05'))
   assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))

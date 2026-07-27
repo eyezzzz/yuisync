@@ -204,7 +204,7 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
           <meta charset="utf-8"/>
           <title>Ficha de atendimento</title>
           <style>
-            @page { size: 80mm auto; margin: 0; }
+            @page { margin: 0; }
             * { box-sizing: border-box; }
             html, body { width: 80mm; margin: 0; padding: 0; color: #000; background: #fff; }
             body { font-family: Arial, Helvetica, sans-serif; padding: 4mm 3mm; }
@@ -1040,11 +1040,34 @@ function AgendaTimelineView({
                     )}
                     {nonBlocking.length > 0 && (
                       <div className="mt-2 space-y-1">
-                        {nonBlocking.map((appt) => (
-                          <button key={appt.id} type="button" onClick={() => onEdit(appt)} className="w-full rounded-md border border-red-500/15 bg-red-500/5 px-2 py-1 text-left text-[10px] text-muted line-through">
-                            {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
-                          </button>
-                        ))}
+                        {nonBlocking.map((appt) => {
+                          const completed = ['concluido', 'completed', 'finalizado'].includes(normalizeServiceType(appt.status))
+                          return (
+                            <div
+                              key={appt.id}
+                              className={`flex items-center gap-1 rounded-md border px-2 py-1 text-[10px] ${completed ? "border-emerald-500/20 bg-emerald-500/8 text-emerald-200" : "border-red-500/15 bg-red-500/5 text-muted"}`}
+                            >
+                              <button
+                                type="button"
+                                onClick={() => onEdit(appt)}
+                                className={`min-w-0 flex-1 text-left ${completed ? "" : "line-through"}`}
+                              >
+                                {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
+                              </button>
+                              {completed && (
+                                <button
+                                  type="button"
+                                  aria-label="Imprimir ficha concluida"
+                                  title="Imprimir ficha 80 mm"
+                                  onClick={() => onReceipt(appt)}
+                                  className="shrink-0 rounded p-1 text-emerald-300 hover:bg-emerald-500/15"
+                                >
+                                  <Receipt size={11}/>
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })}
                       </div>
                     )}
                   </div>

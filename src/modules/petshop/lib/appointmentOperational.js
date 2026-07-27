@@ -7,7 +7,7 @@ const normalize = (value = '') => clean(value)
 
 export const MANUAL_SLOT_CAPACITY = 2
 
-const NON_BLOCKING_STATUSES = new Set(['cancelado', 'cancelled', 'no_show'])
+const NON_BLOCKING_STATUSES = new Set(['cancelado', 'cancelled', 'no_show', 'concluido', 'completed', 'finalizado'])
 
 export function appointmentOccupiesManualSlot(appointment = {}) {
   return !NON_BLOCKING_STATUSES.has(normalize(appointment?.status))
