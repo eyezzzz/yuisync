@@ -128,19 +128,43 @@ jobs:
         run: npm run build
 
       - name: Publish applied changes and remove applicator
+        id: publish
         if: steps.applicator.outcome == 'success' && steps.focused.outcome == 'success'
+        continue-on-error: true
         shell: bash
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git rm .github/workflows/apply-agenda-operational-infra.yml scripts/apply-agenda-operational-infra.mjs
-          git add \
-            package.json \
-            src/modules/petshop/pages/AgendaPage.jsx \
-            src/modules/petshop/hooks/usePetshopAdvanced.js \
-            src/shared/hooks/useAppointments.js \
-            test/agendaOperationalInfrastructure.test.mjs \
-            database/agenda_capacity_operational_commissions.sql
-          git diff --cached --quiet && { echo "Nenhuma alteracao produzida."; exit 1; }
-          git commit -m "feat: add two-slot agenda and operational commissions"
-          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git rm .github/workflows/apply-agenda-operational-infra.yml scripts/apply-agenda-operational-infra.mjs
+            git add \
+              package.json \
+              src/modules/petshop/pages/AgendaPage.jsx \
+              src/modules/petshop/hooks/usePetshopAdvanced.js \
+              src/shared/hooks/useAppointments.js \
+              test/agendaOperationalInfrastructure.test.mjs \
+              database/agenda_capacity_operational_commissions.sql
+            git diff --cached --quiet && { echo "Nenhuma alteracao produzida."; exit 1; }
+            git commit -m "feat: add two-slot agenda and operational commissions"
+            git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          } > /tmp/agenda-publish.log 2>&1
+
+      - name: Report publish failure
+        if: steps.publish.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          {
+            echo '### Falha ao publicar a infraestrutura da agenda'
+            echo
+            echo '```text'
+            tail -n 60 /tmp/agenda-publish.log
+            echo '```'
+          } > /tmp/agenda-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none --body-file /tmp/agenda-comment.md
+
+      - name: Stop after publish failure
+        if: steps.publish.outcome == 'failure'
+        run: exit 1
