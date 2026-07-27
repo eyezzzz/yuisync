@@ -39,8 +39,10 @@ jobs:
           script_path = Path('scripts/apply-agenda-operational-infra.mjs')
           script = script_path.read_text(encoding='utf-8')
           replacements = {
-              r"assert.match(migration, /revenue \* 0\\.10/)": r"assert.match(migration, /revenue \\* 0\\.10/)",
-              r"assert.match(migration, /revenue \* 0\\.05/)": r"assert.match(migration, /revenue \\* 0\\.05/)",
+              r"assert.match(migration, /revenue \* 0\\.10/)": "assert.ok(migration.includes('revenue * 0.10'))",
+              r"assert.match(migration, /revenue \* 0\\.05/)": "assert.ok(migration.includes('revenue * 0.05'))",
+              r"assert.match(agenda, /Vaga \{laneIndex \+ 1\} disponivel/)": "assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))",
+              r"assert.match(advanced, /is\('responsible_staff_key', null\)/)": "assert.ok(advanced.includes(\".is('responsible_staff_key', null)\"))",
           }
           for before, after in replacements.items():
               if before not in script:
