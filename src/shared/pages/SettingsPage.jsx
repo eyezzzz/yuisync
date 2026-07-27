@@ -1223,10 +1223,10 @@ export default function SettingsPage() {
                 </div>
                 {Object.entries(normalizeServiceDurations(form.petshop_service_durations)).map(([rangeKey, row]) => (
                   <div key={rangeKey} className="rounded-2xl border border-white/5 bg-white/[0.02] p-4 space-y-3">
-                    <p className="text-sm font-bold text-text">{rangeKey === 'small' ? 'Pet até 9,99 kg' : 'Pet de 10 a 21,99 kg'}</p>
+                    <p className="text-sm font-bold text-text">{rangeKey === 'small' ? 'Porte pequeno (até 10 kg)' : 'Porte médio ou grande (10 kg ou mais)'}</p>
                     <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                       {[['bath_min', 'Banho'], ['machine_grooming_min', 'Tosa máquina/total'], ['scissor_grooming_min', 'Tosa tesoura']].map(([field, label]) => (
-                        <div key={field}><label className="inp-label">{label} (min)</label><input className="inp" type="number" min="15" step="5" disabled={!canEdit} value={row[field]} onChange={(event) => setForm((prev) => { const next = normalizeServiceDurations(prev.petshop_service_durations); next[rangeKey] = { ...next[rangeKey], [field]: Math.max(15, Number(event.target.value || 15)) }; return { ...prev, petshop_service_durations: next } })} /></div>
+                        <div key={field}><label className="inp-label">{label} (min)</label><input className="inp" type="number" min="10" step="10" disabled={!canEdit} value={row[field]} onChange={(event) => setForm((prev) => { const next = normalizeServiceDurations(prev.petshop_service_durations); next[rangeKey] = { ...next[rangeKey], [field]: Math.max(10, Number(event.target.value || 10)) }; return { ...prev, petshop_service_durations: next } })} /></div>
                       ))}
                     </div>
                   </div>
