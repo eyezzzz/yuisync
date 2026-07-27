@@ -22,6 +22,20 @@ jobs:
           ref: ${{ github.event.pull_request.head.ref }}
           fetch-depth: 0
 
+      - name: Normalize final applicator anchor
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/finalize-agenda-operational-infra.mjs')
+          source = path.read_text(encoding='utf-8')
+          before = "  `  assert.ok(migration.includes('calculate_petshop_operational_commissions'))`,"
+          after = "  `  assert.match(migration, /calculate_petshop_operational_commissions/)`,"
+          if before not in source:
+              raise SystemExit('Ancora do contrato transacional nao encontrada.')
+          path.write_text(source.replace(before, after, 1), encoding='utf-8')
+          PY
+
       - name: Apply final infrastructure patch
         id: applicator
         continue-on-error: true
