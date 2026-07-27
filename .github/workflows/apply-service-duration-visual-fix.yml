@@ -1,0 +1,47 @@
+name: Apply selected service duration visual fix
+
+on:
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout fix branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+
+      - name: Apply visual fix
+        run: python .github/apply-service-duration-visual-fix.py
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate
+        run: |
+          npm run test:petbot
+          npm run typecheck
+          npm run build
+
+      - name: Publish functional commit
+        run: |
+          rm .github/apply-service-duration-visual-fix.py
+          rm .github/workflows/apply-service-duration-visual-fix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: display resolved duration for selected services"
+          git push origin HEAD:${{ github.head_ref }}
