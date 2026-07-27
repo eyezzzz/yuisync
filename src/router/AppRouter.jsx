@@ -18,6 +18,7 @@ const PublicSalesPage = lazy(() => import('../public/pages/PublicSalesPage'))
 const PublicCheckoutPage = lazy(() => import('../public/pages/PublicCheckoutPage'))
 const PublicBookingPage = lazy(() => import('../public/pages/PublicBookingPage'))
 const PublicClientPortalPage = lazy(() => import('../public/pages/PublicClientPortalPage'))
+const PublicLegalPage = lazy(() => import('../public/pages/PublicLegalPage'))
 
 function getModuleNavItems(activeModule) {
   if (!activeModule) return []
@@ -82,29 +83,23 @@ function AppLayout() {
   }, [darkMode])
 
   useEffect(() => {
-    // Determine active module based on URL instead of manually tracking strings
     const pathParts = location.pathname.split('/').filter(Boolean)
     if (pathParts.length > 0) {
       if (activeModuleId !== pathParts[0]) {
         setActiveModuleId(pathParts[0])
       }
-    } else {
-      if (activeModuleId !== null) {
-         setActiveModuleId(null)
-      }
+    } else if (activeModuleId !== null) {
+      setActiveModuleId(null)
     }
   }, [location.pathname])
 
   if (!activeModule) return <LauncherPage />
 
-  // Direct URL loads restore the authenticated session before the tenant scope.
-  // Do not mount operational pages until a validated tenant is available.
   if (tenantLoading || !activeTenantId) return <LoadingScreen />
 
-  // Security Lock
   const isAdmin = profile?.role === 'admin'
   let allowed = profile?.allowed_modules || []
-  if (allowed.length === 0) allowed = ['petshop'] // legacy fallback
+  if (allowed.length === 0) allowed = ['petshop']
   const tenantModules = tenantEnabledModules.length > 0 ? tenantEnabledModules : ['petshop']
   const isTenantModuleEnabled = activeModuleId === 'system' || tenantModules.includes(activeModuleId)
 
@@ -129,7 +124,6 @@ function AppLayout() {
   }
 
   const PageComponent = activeModule.pages[currentPath] || activeModule.pages[fallbackPage]
-  
   const setPage = (pageName) => navigate(`/${activeModuleId}/${pageName}`)
 
   return (
@@ -174,6 +168,21 @@ function AppLayout() {
   )
 }
 
+function PublicRoutes({ authenticated = false }) {
+  return (
+    <>
+      <Route path="/privacidade" element={<PublicLegalPage documentKey="privacidade" />} />
+      <Route path="/termos" element={<PublicLegalPage documentKey="termos" />} />
+      <Route path="/exclusao-de-dados" element={<PublicLegalPage documentKey="exclusao" />} />
+      <Route path="/site" element={<PublicHomePage isAuthenticated={authenticated || undefined} />} />
+      <Route path="/vendas" element={<PublicSalesPage isAuthenticated={authenticated || undefined} />} />
+      <Route path="/vendas/contratar" element={<PublicCheckoutPage isAuthenticated={authenticated || undefined} />} />
+      <Route path="/agendar/:slug" element={<PublicBookingPage />} />
+      <Route path="/portal/:token" element={<PublicClientPortalPage />} />
+    </>
+  )
+}
+
 export function AppRouter() {
   const { session, loading } = useAuthCtx()
 
@@ -182,36 +191,28 @@ export function AppRouter() {
   if (!session) {
     return (
       <Suspense fallback={<LoadingScreen />}>
-      <Routes>
-        <Route path="/loading" element={<LoadingScreen />} />
-        <Route path="/" element={<PublicHomePage />} />
-        <Route path="/site" element={<PublicHomePage />} />
-        <Route path="/vendas" element={<PublicSalesPage />} />
-        <Route path="/vendas/contratar" element={<PublicCheckoutPage />} />
-        <Route path="/agendar/:slug" element={<PublicBookingPage />} />
-        <Route path="/portal/:token" element={<PublicClientPortalPage />} />
-        <Route path="/entrar" element={<LoginPage />} />
-        <Route path="/:moduleId/*" element={<Navigate to="/entrar" replace />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+        <Routes>
+          <Route path="/loading" element={<LoadingScreen />} />
+          <Route path="/" element={<PublicHomePage />} />
+          {PublicRoutes({ authenticated: false })}
+          <Route path="/entrar" element={<LoginPage />} />
+          <Route path="/:moduleId/*" element={<Navigate to="/entrar" replace />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
       </Suspense>
     )
   }
 
   return (
     <Suspense fallback={<LoadingScreen />}>
-    <Routes>
-      <Route path="/loading" element={<LoadingScreen />} />
-      <Route path="/" element={<LauncherPage />} />
-      <Route path="/site" element={<PublicHomePage isAuthenticated />} />
-      <Route path="/vendas" element={<PublicSalesPage isAuthenticated />} />
-      <Route path="/vendas/contratar" element={<PublicCheckoutPage isAuthenticated />} />
-      <Route path="/agendar/:slug" element={<PublicBookingPage />} />
-      <Route path="/portal/:token" element={<PublicClientPortalPage />} />
-      <Route path="/entrar" element={<Navigate to="/" replace />} />
-      <Route path="/:moduleId/*" element={<AppLayout />} />
-      <Route path="*" element={<Navigate to="/" replace />} />
-    </Routes>
+      <Routes>
+        <Route path="/loading" element={<LoadingScreen />} />
+        <Route path="/" element={<LauncherPage />} />
+        {PublicRoutes({ authenticated: true })}
+        <Route path="/entrar" element={<Navigate to="/" replace />} />
+        <Route path="/:moduleId/*" element={<AppLayout />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
     </Suspense>
   )
 }
