@@ -425,12 +425,13 @@ export default function SettingsPage() {
 
   async function handleSave() {
     if (!canEdit || !effectiveModId) return
+    const savingFiscalSettings = effectiveModId === 'petshop' && petSettingsTab === 'fiscal'
     const hoursError = validateStoreAndBookingHours(form.store_business_hours, form.petbot_business_hours)
     if (hoursError) {
       setMsg({ type: 'error', text: hoursError })
       return
     }
-    if (effectiveModId === 'petshop' && form.fiscal_provider === 'mock_local' && !isTestTenant) {
+    if (savingFiscalSettings && form.fiscal_provider === 'mock_local' && !isTestTenant) {
       setMsg({ type: 'error', text: 'Mock Local e permitido somente no tenant de testes configurado.' })
       return
     }
@@ -495,7 +496,7 @@ export default function SettingsPage() {
         throw upsertResponse.error
       }
 
-      if (effectiveModId === 'petshop') {
+      if (savingFiscalSettings) {
         const safeNextInvoice = Math.max(1, Number(form.next_invoice_number || 1))
         const fiscalPayloadBase = {
           module_id: effectiveModId,
@@ -570,6 +571,36 @@ export default function SettingsPage() {
         [key]: value,
       },
     }))
+  }
+
+  function updateOperationalStaff(index, patch) {
+    setForm((prev) => {
+      const rows = Array.isArray(prev.petshop_operational_staff)
+        ? prev.petshop_operational_staff
+        : normalizeOperationalStaff(prev.petshop_operational_staff)
+      return {
+        ...prev,
+        petshop_operational_staff: rows.map((item, itemIndex) => (
+          itemIndex === index ? { ...item, ...patch } : item
+        )),
+      }
+    })
+  }
+
+  function addOperationalStaff() {
+    setForm((prev) => {
+      const rows = Array.isArray(prev.petshop_operational_staff)
+        ? prev.petshop_operational_staff
+        : normalizeOperationalStaff(prev.petshop_operational_staff)
+      const nextIndex = rows.length + 1
+      return {
+        ...prev,
+        petshop_operational_staff: [
+          ...rows,
+          { key: `esteticista-${nextIndex}`, name: `Esteticista ${nextIndex}`, active: true },
+        ],
+      }
+    })
   }
 
   async function handleCreateTenant() {
@@ -1056,14 +1087,38 @@ export default function SettingsPage() {
                   </div>
                 </div>
                 <div className="space-y-3">
-                  {normalizeOperationalStaff(form.petshop_operational_staff).map((person, index) => (
-                    <div key={person.key} className="grid grid-cols-1 md:grid-cols-[1fr_110px] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
-                      <div><label className="inp-label">Esteticista {index + 1}</label><input className="inp" disabled={!canEdit} value={person.name} onChange={(event) => setForm((prev) => ({ ...prev, petshop_operational_staff: normalizeOperationalStaff(prev.petshop_operational_staff).map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) }))} /></div>
-                      <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" disabled={!canEdit} checked={person.active} onChange={(event) => setForm((prev) => ({ ...prev, petshop_operational_staff: normalizeOperationalStaff(prev.petshop_operational_staff).map((item, itemIndex) => itemIndex === index ? { ...item, active: event.target.checked } : item) }))} />Ativa</label>
+                  {(Array.isArray(form.petshop_operational_staff)
+                    ? form.petshop_operational_staff
+                    : normalizeOperationalStaff(form.petshop_operational_staff)
+                  ).map((person, index) => (
+                    <div key={person.key} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_110px] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                      <div className="min-w-0">
+                        <label className="inp-label">Esteticista {index + 1}</label>
+                        <input
+                          className="inp"
+                          disabled={!canEdit}
+                          value={person.name}
+                          onChange={(event) => updateOperationalStaff(index, { name: event.target.value })}
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-xs text-muted">
+                        <input
+                          type="checkbox"
+                          disabled={!canEdit}
+                          checked={person.active !== false}
+                          onChange={(event) => updateOperationalStaff(index, { active: event.target.checked })}
+                        />
+                        Ativa
+                      </label>
                     </div>
                   ))}
-                  {normalizeOperationalStaff(form.petshop_operational_staff).length < 4 && (
-                    <button type="button" disabled={!canEdit} className="btn btn-secondary" onClick={() => setForm((prev) => ({ ...prev, petshop_operational_staff: [...normalizeOperationalStaff(prev.petshop_operational_staff), { key: `esteticista-${normalizeOperationalStaff(prev.petshop_operational_staff).length + 1}`, name: `Esteticista ${normalizeOperationalStaff(prev.petshop_operational_staff).length + 1}`, active: true }] }))}><Plus size={14}/> Adicionar profissional</button>
+                  {(Array.isArray(form.petshop_operational_staff)
+                    ? form.petshop_operational_staff
+                    : normalizeOperationalStaff(form.petshop_operational_staff)
+                  ).length < 4 && (
+                    <button type="button" disabled={!canEdit} className="btn btn-secondary" onClick={addOperationalStaff}>
+                      <Plus size={14}/> Adicionar profissional
+                    </button>
                   )}
                 </div>
               </div>

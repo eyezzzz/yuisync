@@ -49,6 +49,16 @@ export default function EquipePage() {
     () => normalizeOperationalStaff(storeSettings?.petshop_operational_staff),
     [storeSettings?.petshop_operational_staff],
   )
+  const configuredStaffByKey = useMemo(
+    () => new Map(configuredStaff.map((person) => [person.key, person])),
+    [configuredStaff],
+  )
+  const displayRows = useMemo(() => rows.map((row) => ({
+    ...row,
+    collaborator_name: configuredStaffByKey.get(row.staff_key)?.name
+      || row.collaborator_name
+      || row.staff_key,
+  })), [configuredStaffByKey, rows])
 
   const staffCards = useMemo(() => {
     const map = new Map(configuredStaff.map((person) => [person.key, person]))
@@ -85,7 +95,7 @@ export default function EquipePage() {
     reload()
   }, [])
 
-  const totals = useMemo(() => rows.reduce((acc, row) => ({
+  const totals = useMemo(() => displayRows.reduce((acc, row) => ({
     serviceCount: acc.serviceCount + Number(row.service_count || 0),
     serviceRevenue: acc.serviceRevenue + Number(row.service_revenue || 0),
     groomingCommission: acc.groomingCommission + Number(row.grooming_commission || 0),
@@ -97,7 +107,7 @@ export default function EquipePage() {
     groomingCommission: 0,
     otherCommission: 0,
     commission: 0,
-  }), [rows])
+  }), [displayRows])
 
   return (
     <div className="page animate-fade-up space-y-6">
@@ -114,7 +124,7 @@ export default function EquipePage() {
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Atualizar
           </button>
           {activeTab === 'fechamento' && (
-            <button onClick={() => exportCommissionCsv(rows)} className="btn btn-secondary">
+            <button onClick={() => exportCommissionCsv(displayRows)} className="btn btn-secondary">
               <Download size={15} /> Exportar CSV
             </button>
           )}
@@ -235,7 +245,7 @@ export default function EquipePage() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {displayRows.map((row) => (
                   <tr key={row.staff_key || row.profile_id}>
                     <td className="font-semibold text-text">{row.collaborator_name || row.staff_key}</td>
                     <td>

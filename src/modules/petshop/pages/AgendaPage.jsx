@@ -956,13 +956,13 @@ function AgendaTimelineView({
     return (
       <div key={appt.id} className={`relative w-full rounded-lg border p-2 text-left shadow-sm ${agendaCardTone(appt.status)}`}>
         <button type="button" onClick={() => onEdit(appt)} className="w-full text-left">
-          <div className="flex items-start justify-between gap-2 pr-5">
-            <div className="min-w-0">
-              <p className="text-[11px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
-              <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
-              <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
+          <div className="min-w-0">
+            <div className="flex min-w-0 flex-wrap items-center gap-1">
+              <p className="shrink-0 whitespace-nowrap text-[10px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
+              <span className={`badge ${sb.cls} max-w-full truncate text-[9px]`}>{sb.label}</span>
             </div>
-            <span className={`badge ${sb.cls} shrink-0 text-[9px]`}>{sb.label}</span>
+            <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
+            <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
           </div>
           <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted">
             <span className="truncate">{serviceLabel(appt)}</span>
@@ -1001,7 +1001,7 @@ function AgendaTimelineView({
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
           <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
-          {slotCapacity} vagas por horario
+          {slotCapacity} {slotCapacity === 1 ? 'vaga' : 'vagas'} por horario
         </div>
       </div>
 
@@ -1036,7 +1036,7 @@ function AgendaTimelineView({
                 const lanes = Array.from({ length: slotCapacity }, (_, index) => occupying[index] || null)
                 return (
                   <div key={`${dayKey}-${hour}`} className="min-h-[118px] border-l border-[var(--border)] p-2 hover:bg-white/[0.03] transition-colors">
-                    <div className="grid grid-cols-2 gap-2">
+                    <div className={`grid gap-2 ${slotCapacity === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
                       {lanes.map((appt, laneIndex) => appt ? appointmentCard(appt) : (
                         <button
                           key={`available-${laneIndex}`}
@@ -1322,7 +1322,7 @@ export default function AgendaPage() {
           staffById={staffById}
           onEdit={(appt) => setModal(appt)}
           onReceipt={setReceipt}
-          slotCapacity={MANUAL_SLOT_CAPACITY}
+          slotCapacity={activeAgendaTab === 'banho_tosa' ? MANUAL_SLOT_CAPACITY : 1}
           onCreateAt={openSlotModal}
           onSelectDate={setSelectedDate}
         />
