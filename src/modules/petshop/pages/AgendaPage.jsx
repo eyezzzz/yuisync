@@ -27,6 +27,13 @@ import {
   classifyAppointmentServiceGroup,
   serviceOptionsForAppointmentGroup,
 } from '../lib/appointmentServices'
+import {
+  MANUAL_SLOT_CAPACITY,
+  appointmentOccupiesManualSlot,
+  appointmentTransportAddress,
+  appointmentTransportLabel,
+  isMotodogTransportMode,
+} from '../lib/appointmentOperational'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const asAgendaServices = (services = []) =>
@@ -71,28 +78,25 @@ const fmtAppointmentInterval = (appt) => {
   return `${f(start)} - ${f(end)}`
 }
 
-const motodogAddressText = (appt) => [
-  appt?.motodog?.address,
-  appt?.motodog?.neighborhood,
-  appt?.motodog?.city,
-].filter(Boolean).join(' - ')
+const motodogAddressText = (appt) => appointmentTransportAddress(appt)
 
 function MotodogAgendaInfo({ appt, compact = false }) {
   if (!appt?.motodog?.mode) return null
   const address = motodogAddressText(appt)
+  const motodog = isMotodogTransportMode(appt.motodog.mode)
   return (
-    <div className={`${compact ? 'mt-1 text-[10px]' : 'rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-2 text-[11px]'} text-emerald-300`}>
+    <div className={`${compact ? "mt-1 text-[10px]" : "rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-2 text-[11px]"} ${motodog ? "text-emerald-300" : "text-sky-300"}`}>
       <p className="flex items-center gap-1 font-bold">
-        <Bike size={compact ? 10 : 12}/> MotoDog: {appt.motodog.label || appt.motodog.mode}
+        <Bike size={compact ? 10 : 12}/> {appointmentTransportLabel(appt.motodog.mode)}
       </p>
-      {address && (
+      {motodog && address && (
         <p className="mt-1 flex items-start gap-1 text-muted">
           <MapPin size={compact ? 9 : 11} className="mt-0.5 shrink-0"/>
           <span>{address}</span>
         </p>
       )}
-      {appt.motodog.reference && (
-        <p className="mt-1 text-muted">Referência: {appt.motodog.reference}</p>
+      {motodog && appt.motodog.reference && (
+        <p className="mt-1 text-muted">Referencia: {appt.motodog.reference}</p>
       )}
     </div>
   )
@@ -157,82 +161,94 @@ const PT_MONTHS   = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                      'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 
 // ── Modal de Recibo de Serviço ────────────────────────────────────────────────
-function ReceiptModal({ appt, onClose, serviceLabel }) {
+const escapeReceiptHtml = (value = '') => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;')
+
+function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
   const { storeSettings } = useAuthCtx()
-  const p = appt.pets || {}
+  const pet = appt.pets || {}
+  const assigned = staffById.get(appt.responsible_staff_key)
+  const responsible = assigned?.name || appt.responsible_staff_name || 'Nao informado'
+  const scheduled = appt.scheduled_at ? new Date(appt.scheduled_at) : null
+  const date = scheduled && !Number.isNaN(scheduled.getTime())
+    ? scheduled.toLocaleDateString('pt-BR')
+    : 'Nao informada'
+  const interval = fmtAppointmentInterval(appt)
+  const transport = appointmentTransportLabel(appt.motodog?.mode)
+  const transportAddress = motodogAddressText(appt)
+  const isMotodog = isMotodogTransportMode(appt.motodog?.mode)
 
   const handlePrint = () => {
     const printWindow = window.open('', '_blank')
-    const date = new Date().toLocaleString('pt-BR')
-    const addr = [
+    if (!printWindow) return
+    const storeAddress = [
       storeSettings?.store_address,
       storeSettings?.store_neighborhood,
-      storeSettings?.store_city
+      storeSettings?.store_city,
     ].filter(Boolean).join(' - ')
+
+    const row = (label, value) => `
+      <div class="row">
+        <div class="label">${escapeReceiptHtml(label)}</div>
+        <div class="value">${escapeReceiptHtml(value || "Nao informado")}</div>
+      </div>
+    `
 
     const receiptHtml = `
       <html>
         <head>
+          <meta charset="utf-8"/>
+          <title>Ficha de atendimento</title>
           <style>
-            @page { margin: 0; }
+            @page { size: 80mm auto; margin: 0; }
             * { box-sizing: border-box; }
-            html, body { width: 80mm; height: auto !important; min-height: 0 !important; margin: 0; padding: 0; overflow: visible; }
-            body { font-family: 'Courier New', Courier, monospace; padding: 6px; color: #000; }
-            .receipt { width: 100%; height: auto; min-height: 0; break-after: avoid-page; page-break-after: avoid; }
-            @media print { html, body { height: auto !important; min-height: 0 !important; } body, .receipt { position: absolute !important; top: 0 !important; left: 0 !important; } }
+            html, body { width: 80mm; margin: 0; padding: 0; color: #000; background: #fff; }
+            body { font-family: Arial, Helvetica, sans-serif; padding: 4mm 3mm; }
+            .receipt { width: 100%; }
             .center { text-align: center; }
-            .hr { border-bottom: 1px dashed #000; margin: 10px 0; }
-            .header { font-weight: bold; font-size: 1.1em; margin-bottom: 5px; text-transform: uppercase; }
-            .info { font-size: 0.85em; margin-bottom: 3px; }
-            .label { font-size: 0.75em; font-weight: bold; margin-top: 5px; color: #555; }
-            .val { font-size: 0.9em; margin-bottom: 2px; }
-            .total-row { display: flex; justify-content: space-between; font-weight: bold; margin-top: 10px; border-top: 1px solid #000; padding-top: 5px; }
-            .footer { font-size: 0.8em; margin-top: 15px; color: #333; }
+            .store { font-size: 15px; font-weight: 900; text-transform: uppercase; }
+            .store-line { margin-top: 2px; font-size: 9px; line-height: 1.25; }
+            .title { margin: 4mm 0 2mm; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 2mm 0; font-size: 12px; font-weight: 900; letter-spacing: .4px; }
+            .row { padding: 1.6mm 0; border-bottom: 1px dotted #777; }
+            .label { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .4px; }
+            .value { margin-top: .6mm; font-size: 11px; font-weight: 700; line-height: 1.25; white-space: pre-wrap; overflow-wrap: anywhere; }
+            .transport { margin-top: 2mm; border: 1px solid #000; padding: 2mm; }
+            .total { display: flex; justify-content: space-between; gap: 3mm; margin-top: 3mm; padding-top: 2mm; border-top: 2px solid #000; font-size: 13px; font-weight: 900; }
+            .footer { margin-top: 4mm; font-size: 8px; line-height: 1.35; }
+            @media print { body { position: absolute; inset: 0 auto auto 0; } }
           </style>
         </head>
-        <body><main class="receipt">
-          <div class="center">
-            <div class="header">${storeSettings?.store_name?.toUpperCase() || 'PETSHOP CRM'}</div>
-            <div class="info">${addr || 'Endereço não configurado'}</div>
-            <div class="info">WhatsApp: ${storeSettings?.store_phone || '(00) 00000-0000'}</div>
-          </div>
-          <div class="hr"></div>
-          <div class="center" style="font-weight: bold; font-size: 0.9em; margin-bottom: 10px;">RECIBO DE SERVIÇO</div>
-          
-          <div class="label">PET / ESPÉCIE</div>
-          <div class="val">${p.pet_name?.toUpperCase()} (${p.breed || p.species})</div>
-          
-          <div class="label">TUTOR / CONTATO</div>
-          <div class="val">${p.owner_name?.toUpperCase()}</div>
-          <div class="val">${p.phone}</div>
-          
-          <div class="label">SERVIÇO</div>
-          <div class="val">${serviceLabel(appt).toUpperCase()}</div>
-
-          ${p.owner_address ? `
-            <div class="label">ENDEREÇO (MOTODOG)</div>
-            <div class="val">${p.owner_address.toUpperCase()}</div>
-            <div class="val">${p.owner_neighborhood?.toUpperCase() || ''}</div>
-          ` : ''}
-
-          ${appt.motodog?.mode ? `
-            <div class="label">MOTODOG</div>
-            <div class="val">${String(appt.motodog.label || appt.motodog.mode).toUpperCase()}</div>
-            <div class="val">${motodogAddressText(appt).toUpperCase()}</div>
-            <div class="val">${appt.motodog.reference ? `REFERÊNCIA: ${String(appt.motodog.reference).toUpperCase()}` : ''}</div>
-          ` : ''}
-
-          <div class="label">NOTAS</div>
-          <div class="val">${appt.notes || 'Nenhuma observação'}</div>
-
-          <div class="total-row" style="font-size: 1.1em;">
-            <span>TOTAL:</span>
-            <span>${fmtCurrency(appt.price)}</span>
-          </div>
-          <div class="hr"></div>
-          <div class="info center">Data: ${date}</div>
-          <div class="footer center">Obrigado pela confiança! 🐾</div>
-        </main></body>
+        <body>
+          <main class="receipt">
+            <div class="center">
+              <div class="store">${escapeReceiptHtml(storeSettings?.store_name || "PETSHOP")}</div>
+              <div class="store-line">${escapeReceiptHtml(storeAddress || "Endereco nao configurado")}</div>
+              <div class="store-line">${escapeReceiptHtml(storeSettings?.store_phone || "")}</div>
+              <div class="title">FICHA DE ATENDIMENTO</div>
+            </div>
+            ${row("Tutor", pet.owner_name)}
+            ${row("Contato", pet.phone)}
+            ${row("Pet", pet.pet_name)}
+            ${row("Raca / especie", pet.breed || pet.species)}
+            ${row("Data", date)}
+            ${row("Horario", interval)}
+            ${row("Servico", serviceLabel(appt))}
+            ${row("Responsavel", responsible)}
+            <div class="transport">
+              <div class="label">Transporte</div>
+              <div class="value">${escapeReceiptHtml(transport)}</div>
+              ${isMotodog && transportAddress ? `<div class="label" style="margin-top:2mm">Endereco completo</div><div class="value">${escapeReceiptHtml(transportAddress)}</div>` : ""}
+              ${isMotodog && appt.motodog?.reference ? `<div class="label" style="margin-top:2mm">Referencia</div><div class="value">${escapeReceiptHtml(appt.motodog.reference)}</div>` : ""}
+            </div>
+            ${row("Observacoes", appt.notes || "Nenhuma observacao")}
+            <div class="total"><span>VALOR</span><span>${escapeReceiptHtml(fmtCurrency(appt.price))}</span></div>
+            <div class="footer center">Impresso em ${escapeReceiptHtml(new Date().toLocaleString("pt-BR"))}</div>
+          </main>
+        </body>
       </html>
     `
     printWindow.document.write(receiptHtml)
@@ -241,55 +257,35 @@ function ReceiptModal({ appt, onClose, serviceLabel }) {
   }
 
   return createPortal(
-    <div className="modal-overlay theme-petshop-modal" onClick={e => e.target === e.currentTarget && onClose()}>
-      <div className="modal-box max-w-sm">
+    <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal-box max-w-md">
         <div className="modal-header">
-           <h2 className="font-display font-bold text-xl text-text">Recibo de Serviço</h2>
-           <button type="button" aria-label="Fechar recibo" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
+          <h2 className="font-display font-bold text-xl text-text">Ficha 80 mm</h2>
+          <button type="button" aria-label="Fechar impressao" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
-
-        <div className="modal-body text-center">
-          <div className="w-16 h-16 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center mx-auto mb-4 shadow-inner">
-            <Receipt size={32} className="text-emerald-500"/>
+        <div className="modal-body space-y-5">
+          <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3 text-sm">
+            <p><span className="text-muted">Tutor:</span> <strong>{pet.owner_name || 'Nao informado'}</strong></p>
+            <p><span className="text-muted">Pet:</span> <strong>{pet.pet_name || 'Nao informado'}</strong></p>
+            <p><span className="text-muted">Horario:</span> <strong>{date} · {interval}</strong></p>
+            <p><span className="text-muted">Servico:</span> <strong>{serviceLabel(appt)}</strong></p>
+            <p><span className="text-muted">Responsavel:</span> <strong>{responsible}</strong></p>
+            <p><span className="text-muted">Transporte:</span> <strong>{transport}</strong></p>
+            {isMotodog && transportAddress && <p className="text-xs text-muted">{transportAddress}</p>}
+            <p><span className="text-muted">Observacoes:</span> <strong>{appt.notes || 'Nenhuma observacao'}</strong></p>
           </div>
-          <p className="text-muted text-[11px] uppercase tracking-widest font-bold mb-6">Tutor, Pet e Transporte</p>
-
-          <div className="bg-card border border-[var(--border)] rounded-2xl p-5 text-left space-y-4 mb-6">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="col-span-2">
-                <p className="text-[9px] text-muted uppercase font-black tracking-widest opacity-60">Pet & Serviço</p>
-                <p className="text-sm font-bold text-text underline decoration-primary/30 underline-offset-4">{p.pet_name} — {serviceLabel(appt)}</p>
-              </div>
-              <div>
-                <p className="text-[9px] text-muted uppercase font-black tracking-widest opacity-60">Tutor</p>
-                <p className="text-xs font-bold text-text/90">{p.owner_name}</p>
-              </div>
-              <div>
-                <p className="text-[9px] text-muted uppercase font-black tracking-widest opacity-60">Contato</p>
-                <p className="text-xs font-bold text-primary">{p.phone}</p>
-              </div>
-            </div>
-            <div className="pt-4 border-t border-[var(--border2)] flex justify-between items-center">
-              <span className="text-[10px] font-black text-muted uppercase tracking-widest">Valor do Serviço</span>
-              <span className="text-xl font-display font-black text-emerald-400">{fmtCurrency(appt.price)}</span>
-            </div>
-          </div>
-
-          <div className="flex flex-col gap-2">
-            <button onClick={handlePrint} className="btn btn-primary w-full justify-center gap-2 py-3 shadow-lg">
-              <Receipt size={16}/> Gerar Impressão
-            </button>
-            <button onClick={onClose} className="btn btn-secondary w-full justify-center">Fechar Janela</button>
-          </div>
+          <button onClick={handlePrint} className="btn btn-primary w-full justify-center gap-2 py-3">
+            <Receipt size={16}/> Imprimir ficha
+          </button>
         </div>
       </div>
     </div>,
-    document.body
+    document.body,
   )
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICES, staff = [], serviceDurations, onSearchClients }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, services = SERVICES, staff = [], serviceDurations, onSearchClients }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -326,6 +322,11 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
     status: isEdit ? appt.status || 'agendado' : 'agendado',
     notes: isEdit ? appt.notes || '' : '',
     responsible_staff_key: isEdit ? appt.responsible_staff_key || '' : '',
+    transport_mode: isEdit ? appt.motodog?.mode || 'cliente_leva' : 'cliente_leva',
+    transport_address: isEdit ? appt.motodog?.address || '' : '',
+    transport_neighborhood: isEdit ? appt.motodog?.neighborhood || '' : '',
+    transport_city: isEdit ? appt.motodog?.city || '' : '',
+    transport_reference: isEdit ? appt.motodog?.reference || '' : '',
   })
   const [saving, setSaving] = useState(false)
   const [err, setErr] = useState('')
@@ -440,7 +441,16 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
   }
 
   const selectClient = (pet) => {
-    setForm((current) => ({ ...current, pet_id: pet.id, pet_search: '' }))
+    setForm((current) => ({
+      ...current,
+      pet_id: pet.id,
+      pet_search: '',
+      ...(isMotodogTransportMode(current.transport_mode) ? {
+        transport_address: current.transport_address || pet.owner_address || '',
+        transport_neighborhood: current.transport_neighborhood || pet.owner_neighborhood || '',
+        transport_city: current.transport_city || pet.owner_city || '',
+      } : {}),
+    }))
     setSelectedClient(pet)
     setErr('')
     setClientPickerOpen(false)
@@ -495,6 +505,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
         notes: form.notes,
         responsible_staff_key: form.responsible_staff_key || null,
         responsible_staff_name: staffOptions.find((person) => person.key === form.responsible_staff_key)?.name || null,
+        transport_mode: form.transport_mode || 'cliente_leva',
+        transport_label: appointmentTransportLabel(form.transport_mode),
+        transport_address: isMotodogTransportMode(form.transport_mode) ? form.transport_address || null : null,
+        transport_neighborhood: isMotodogTransportMode(form.transport_mode) ? form.transport_neighborhood || null : null,
+        transport_city: isMotodogTransportMode(form.transport_mode) ? form.transport_city || null : null,
+        transport_reference: isMotodogTransportMode(form.transport_mode) ? form.transport_reference || null : null,
         source: 'manual',
       }
       if (isEdit) await onUpdate(appt.id, payload)
@@ -733,6 +749,44 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               </div>
             </div>
 
+            <div className="rounded-2xl border border-[var(--border)] bg-surface/70 p-5 space-y-4">
+              <div>
+                <label className="inp-label">Transporte do pet</label>
+                <select
+                  aria-label="Transporte do pet"
+                  className="inp"
+                  value={form.transport_mode}
+                  onChange={(event) => set('transport_mode', event.target.value)}
+                >
+                  <option value="cliente_leva">Cliente traz e busca</option>
+                  <option value="buscar_e_levar">MotoDog - buscar e levar</option>
+                  <option value="somente_buscar">MotoDog - somente buscar</option>
+                  <option value="somente_levar">MotoDog - somente levar</option>
+                </select>
+              </div>
+
+              {isMotodogTransportMode(form.transport_mode) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div className="md:col-span-2">
+                    <label className="inp-label">Rua e numero</label>
+                    <input className="inp" value={form.transport_address} onChange={(event) => set('transport_address', event.target.value)} placeholder="Rua, numero e complemento"/>
+                  </div>
+                  <div>
+                    <label className="inp-label">Bairro</label>
+                    <input className="inp" value={form.transport_neighborhood} onChange={(event) => set('transport_neighborhood', event.target.value)}/>
+                  </div>
+                  <div>
+                    <label className="inp-label">Cidade</label>
+                    <input className="inp" value={form.transport_city} onChange={(event) => set('transport_city', event.target.value)}/>
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="inp-label">Ponto de referencia</label>
+                    <input className="inp" value={form.transport_reference} onChange={(event) => set('transport_reference', event.target.value)}/>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div>
               <label className="inp-label">Instrucoes para o profissional</label>
               <textarea
@@ -750,7 +804,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, pets, services = SERVICE
               </p>
             )}
 
-            <div className="flex gap-3 pt-2">
+            <div className="flex flex-wrap gap-3 pt-2">
+              {isEdit && appt.status === 'concluido' && (
+                <button type="button" onClick={() => onReceipt(appt)} className="btn btn-secondary justify-center">
+                  <Receipt size={15}/> Imprimir ficha
+                </button>
+              )}
               <button onClick={onClose} className="btn btn-secondary flex-1 justify-center">Descartar</button>
               <button onClick={handleSubmit} disabled={saving || serviceOptions.length === 0} className="btn btn-primary flex-1 justify-center shadow-lg">
                 {saving ? 'Confirmando...' : isEdit ? 'Salvar alteracoes' : 'Confirmar reserva'}
@@ -848,8 +907,10 @@ function AgendaTimelineView({
   statusBadge,
   staffById,
   onEdit,
+  onReceipt,
   onCreateAt,
   onSelectDate,
+  slotCapacity = MANUAL_SLOT_CAPACITY,
 }) {
   const selectedKey = isoDate(selectedDate)
   const hours = useMemo(() => {
@@ -873,6 +934,44 @@ function AgendaTimelineView({
     return map
   }, [appointments])
 
+  const appointmentCard = (appt) => {
+    const sb = statusBadge(appt.status)
+    const assigned = staffById.get(appt.responsible_staff_key)
+    return (
+      <div key={appt.id} className={`relative w-full rounded-lg border p-2 text-left shadow-sm ${agendaCardTone(appt.status)}`}>
+        <button type="button" onClick={() => onEdit(appt)} className="w-full text-left">
+          <div className="flex items-start justify-between gap-2 pr-5">
+            <div className="min-w-0">
+              <p className="text-[11px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
+              <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
+              <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
+            </div>
+            <span className={`badge ${sb.cls} shrink-0 text-[9px]`}>{sb.label}</span>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted">
+            <span className="truncate">{serviceLabel(appt)}</span>
+            <span className="font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
+          </div>
+          <MotodogAgendaInfo appt={appt} compact/>
+          <p className={`mt-1 truncate text-[10px] ${assigned ? "text-muted" : "text-amber-300"}`}>
+            {assigned ? `Resp.: ${assigned.name}` : appt.responsible_staff_name ? `Resp.: ${appt.responsible_staff_name}` : 'Sem responsavel'}
+          </p>
+        </button>
+        {appt.status === 'concluido' && (
+          <button
+            type="button"
+            aria-label="Imprimir ficha do agendamento"
+            title="Imprimir ficha 80 mm"
+            onClick={() => onReceipt(appt)}
+            className="absolute right-1.5 top-1.5 rounded-md bg-black/20 p-1 text-emerald-300 hover:bg-black/35"
+          >
+            <Receipt size={11}/>
+          </button>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)]">
@@ -885,39 +984,25 @@ function AgendaTimelineView({
           </p>
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
-          <span className="inline-flex h-2.5 w-2.5 rounded-full bg-amber-400" />
-          Horarios do periodo carregado
+          <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
+          {slotCapacity} vagas por horario
         </div>
       </div>
 
       <div className="overflow-x-auto">
-        <div className="min-w-[1080px]">
-          <div
-            className="grid border-b border-[var(--border)] bg-surface/50"
-            style={{ gridTemplateColumns: '76px repeat(7, minmax(220px, 1fr))' }}
-          >
+        <div className="min-w-[1160px]">
+          <div className="grid border-b border-[var(--border)] bg-surface/50" style={{ gridTemplateColumns: '76px repeat(7, minmax(250px, 1fr))' }}>
             <div className="px-3 py-3 text-[10px] font-black uppercase tracking-widest text-muted">Hora</div>
             {days.map((day) => {
               const key = isoDate(day)
               const isSelected = key === selectedKey
               const dayCount = (appointments || []).filter((appt) => localDateKey(appt.scheduled_at) === key).length
               return (
-                <button
-                  key={key}
-                  type="button"
-                  onClick={() => onSelectDate(day)}
-                  className={`text-left px-3 py-3 border-l border-[var(--border)] transition-colors ${
-                    isSelected ? 'bg-amber-500/14' : 'hover:bg-white/5'
-                  }`}
-                >
-                  <p className={`text-xs font-black uppercase tracking-widest ${isSelected ? 'text-amber-300' : 'text-muted'}`}>
-                    {PT_WEEKDAYS[day.getDay()]}
-                  </p>
+                <button key={key} type="button" onClick={() => onSelectDate(day)} className={`text-left px-3 py-3 border-l border-[var(--border)] transition-colors ${isSelected ? "bg-amber-500/14" : "hover:bg-white/5"}`}>
+                  <p className={`text-xs font-black uppercase tracking-widest ${isSelected ? "text-amber-300" : "text-muted"}`}>{PT_WEEKDAYS[day.getDay()]}</p>
                   <div className="mt-1 flex items-center justify-between gap-2">
                     <span className="text-lg font-display font-black text-text">{String(day.getDate()).padStart(2, '0')}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? 'bg-amber-500 text-gray-950' : 'bg-white/8 text-muted'}`}>
-                      {dayCount}
-                    </span>
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${isSelected ? "bg-amber-500 text-gray-950" : "bg-white/8 text-muted"}`}>{dayCount}</span>
                   </div>
                 </button>
               )
@@ -925,67 +1010,41 @@ function AgendaTimelineView({
           </div>
 
           {hours.map((hour) => (
-            <div
-              key={hour}
-              className="grid border-b border-[var(--border)] last:border-b-0"
-              style={{ gridTemplateColumns: '76px repeat(7, minmax(220px, 1fr))' }}
-            >
-              <div className="px-3 py-3 text-xs font-bold text-muted bg-surface/35">
-                {String(hour).padStart(2, '0')}:00
-              </div>
-
+            <div key={hour} className="grid border-b border-[var(--border)] last:border-b-0" style={{ gridTemplateColumns: '76px repeat(7, minmax(250px, 1fr))' }}>
+              <div className="px-3 py-3 text-xs font-bold text-muted bg-surface/35">{String(hour).padStart(2, '0')}:00</div>
               {days.map((day) => {
                 const dayKey = isoDate(day)
                 const slotItems = bySlot.get(`${dayKey}-${hour}`) || []
+                const occupying = slotItems.filter(appointmentOccupiesManualSlot)
+                const nonBlocking = slotItems.filter((item) => !appointmentOccupiesManualSlot(item))
+                const lanes = Array.from({ length: slotCapacity }, (_, index) => occupying[index] || null)
                 return (
-                  <div
-                    key={`${dayKey}-${hour}`}
-                    className="min-h-[96px] border-l border-[var(--border)] p-2 hover:bg-white/[0.03] transition-colors"
-                    onDoubleClick={() => onCreateAt(day, hour)}
-                  >
-                    {slotItems.length === 0 ? (
-                      <button
-                        type="button"
-                        onClick={() => onCreateAt(day, hour)}
-                        className="h-full min-h-[76px] w-full rounded-lg border border-dashed border-transparent text-[11px] text-transparent hover:border-amber-400/25 hover:text-amber-300 transition-colors"
-                      >
-                        + agendar
-                      </button>
-                    ) : (
-                      <div>
-                        {slotItems.length > 1 && <p className="mb-1 text-[10px] font-black uppercase tracking-wider text-amber-300">{slotItems.length} simultâneos</p>}
-                        <div className={slotItems.length > 1 ? 'grid grid-cols-2 gap-2' : 'space-y-2'}>
-                        {slotItems.map((appt) => {
-                          const sb = statusBadge(appt.status)
-                          const assigned = staffById.get(appt.responsible_staff_key)
-                          return (
-                            <button
-                              key={appt.id}
-                              type="button"
-                              onClick={() => onEdit(appt)}
-                              className={`w-full rounded-lg border p-2 text-left shadow-sm transition-transform hover:-translate-y-0.5 ${agendaCardTone(appt.status)}`}
-                            >
-                              <div className="flex items-start justify-between gap-2">
-                                <div className="min-w-0">
-                                  <p className="text-[11px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
-                                  <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
-                                  <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
-                                  <p className="mt-0.5 truncate text-[10px] text-muted">{[appt.pets?.owner_address, appt.pets?.owner_neighborhood].filter(Boolean).join(' - ') || appt.motodog?.address || 'Endereço não informado'}</p>
-                                </div>
-                                <span className={`badge ${sb.cls} shrink-0 text-[9px]`}>{sb.label}</span>
-                              </div>
-                              <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted">
-                                <span className="truncate">{serviceLabel(appt)}</span>
-                                <span className="font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
-                              </div>
-                              <MotodogAgendaInfo appt={appt} compact/>
-                              <p className={`mt-1 truncate text-[10px] ${assigned ? 'text-muted' : 'text-amber-300'}`}>
-                                {assigned ? `Resp.: ${assigned.name}` : appt.responsible_staff_name ? `Resp.: ${appt.responsible_staff_name}` : 'Sem responsavel'}
-                              </p>
-                            </button>
-                          )
-                        })}
-                        </div>
+                  <div key={`${dayKey}-${hour}`} className="min-h-[118px] border-l border-[var(--border)] p-2 hover:bg-white/[0.03] transition-colors">
+                    <div className="grid grid-cols-2 gap-2">
+                      {lanes.map((appt, laneIndex) => appt ? appointmentCard(appt) : (
+                        <button
+                          key={`available-${laneIndex}`}
+                          type="button"
+                          onClick={() => onCreateAt(day, hour)}
+                          className="min-h-[92px] rounded-lg border border-dashed border-emerald-500/25 bg-emerald-500/[0.04] px-2 py-3 text-center text-[10px] font-bold text-emerald-300 hover:border-emerald-400/50 hover:bg-emerald-500/10"
+                        >
+                          <Plus size={14} className="mx-auto mb-1"/>
+                          Vaga {laneIndex + 1} disponivel
+                        </button>
+                      ))}
+                    </div>
+                    {occupying.length > slotCapacity && (
+                      <p className="mt-2 rounded-md bg-red-500/10 px-2 py-1 text-[10px] text-red-300">
+                        {occupying.length - slotCapacity} agendamento(s) acima da capacidade configurada.
+                      </p>
+                    )}
+                    {nonBlocking.length > 0 && (
+                      <div className="mt-2 space-y-1">
+                        {nonBlocking.map((appt) => (
+                          <button key={appt.id} type="button" onClick={() => onEdit(appt)} className="w-full rounded-md border border-red-500/15 bg-red-500/5 px-2 py-1 text-left text-[10px] text-muted line-through">
+                            {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
+                          </button>
+                        ))}
                       </div>
                     )}
                   </div>
@@ -1075,8 +1134,13 @@ export default function AgendaPage() {
     setModal({
       serviceGroup: activeAgendaTab,
       date: isoDate(day),
-      time: `${String(hour).padStart(2, '0')}:00`,
+      time: `${String(hour).padStart(2, "0")}:00`,
     })
+  }
+  const handleStatusChange = async (appointmentId, status) => {
+    const updated = await updateStatus(appointmentId, status)
+    if (status === 'concluido' && updated) setReceipt(updated)
+    return updated
   }
 
   return (
@@ -1218,6 +1282,8 @@ export default function AgendaPage() {
           statusBadge={statusBadge}
           staffById={staffById}
           onEdit={(appt) => setModal(appt)}
+          onReceipt={setReceipt}
+          slotCapacity={MANUAL_SLOT_CAPACITY}
           onCreateAt={openSlotModal}
           onSelectDate={setSelectedDate}
         />
@@ -1269,7 +1335,7 @@ export default function AgendaPage() {
                             </button>
                           )}
                           {['agendado','confirmado'].includes(a.status) && (
-                            <button type="button" aria-label="Concluir agendamento" onClick={() => updateStatus(a.id, 'concluido')}
+                            <button type="button" aria-label="Concluir agendamento" onClick={() => handleStatusChange(a.id, 'concluido')}
                               className="btn btn-success btn-sm btn-icon" title="Concluir">
                               <Check size={13}/>
                             </button>
@@ -1309,7 +1375,7 @@ export default function AgendaPage() {
                 <div className="space-y-2.5 min-h-[100px]">
                   {colItems.map(a => (
                     <KanbanCard key={a.id} appt={a} serviceLabel={serviceLabel} statusBadge={statusBadge}
-                      onEdit={(a) => setModal(a)} onStatus={updateStatus} onReceipt={setReceipt}
+                      onEdit={(a) => setModal(a)} onStatus={handleStatusChange} onReceipt={setReceipt}
                       services={agendaServices} staffById={staffById}/>
                   ))}
                   {colItems.length === 0 && (
@@ -1336,6 +1402,7 @@ export default function AgendaPage() {
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}
+          onReceipt={setReceipt}
         />
       )}
 
@@ -1344,6 +1411,7 @@ export default function AgendaPage() {
           appt={receipt} 
           onClose={() => setReceipt(null)}
           serviceLabel={serviceLabel}
+          staffById={staffById}
         />
       )}
     </div>
