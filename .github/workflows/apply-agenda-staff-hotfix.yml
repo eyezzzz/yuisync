@@ -20,21 +20,19 @@ jobs:
           ref: fix/agenda-staff-settings-capacity
           fetch-depth: 0
 
-      - name: Check patch and record failure
-        id: patch-check
+      - name: Apply deterministic changes
         shell: bash
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if git apply --check .github/agenda-staff-hotfix.patch > /tmp/hotfix-check.log 2>&1; then
-            echo "ok=true" >> "$GITHUB_OUTPUT"
+          if python .github/apply-agenda-staff-hotfix.py > /tmp/hotfix.log 2>&1; then
             exit 0
           fi
-          cp /tmp/hotfix-check.log .github/agenda-staff-hotfix-error.log
+          cp /tmp/hotfix.log .github/agenda-staff-hotfix-error.log
           git add .github/agenda-staff-hotfix-error.log
           git commit -m "chore: record agenda staff hotfix failure" || true
           git push origin HEAD:fix/agenda-staff-settings-capacity
-          cat /tmp/hotfix-check.log
+          cat /tmp/hotfix.log
           exit 1
 
       - name: Set up Node.js
@@ -42,9 +40,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-
-      - name: Apply patch
-        run: git apply .github/agenda-staff-hotfix.patch
 
       - name: Install dependencies
         run: npm ci
@@ -60,6 +55,7 @@ jobs:
           rm .github/workflows/apply-agenda-staff-hotfix.yml
           rm .github/agenda-staff-hotfix.patch
           rm .github/agenda-staff-trigger
+          rm .github/apply-agenda-staff-hotfix.py
           rm -f .github/agenda-staff-hotfix-error.log
           git add -A
           git commit -m "fix: persist staff names and split agenda capacity"
