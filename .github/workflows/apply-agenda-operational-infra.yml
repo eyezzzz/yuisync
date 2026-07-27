@@ -66,10 +66,10 @@ jobs:
             echo '### Falha do aplicador da infraestrutura da agenda'
             echo
             echo '```text'
-            cat /tmp/agenda-applicator.log
+            tail -n 60 /tmp/agenda-applicator.log
             echo '```'
           } > /tmp/agenda-comment.md
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agenda-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none --body-file /tmp/agenda-comment.md
 
       - name: Stop after applicator failure
         if: steps.applicator.outcome == 'failure'
@@ -108,10 +108,10 @@ jobs:
             echo '### Falha dos testes focados da agenda'
             echo
             echo '```text'
-            cat /tmp/agenda-focused-tests.log
+            tail -n 60 /tmp/agenda-focused-tests.log
             echo '```'
           } > /tmp/agenda-comment.md
-          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agenda-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --edit-last --create-if-none --body-file /tmp/agenda-comment.md
 
       - name: Stop after focused test failure
         if: steps.focused.outcome == 'failure'
