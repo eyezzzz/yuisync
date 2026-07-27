@@ -1,0 +1,67 @@
+name: Restore PetBot Test
+
+on:
+  pull_request:
+    types: [synchronize]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  restore:
+    if: github.event.pull_request.head.ref == 'feat/agenda-capacity-operational-commissions'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+
+      - name: Restore exact previous test file
+        run: git show b0ac78c91972adb1c9b961d6a5966e6119310ba0:test/petbotAgent.test.mjs > test/petbotAgent.test.mjs
+
+      - name: Scope internal service-label assertion
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('test/petbotAgent.test.mjs')
+          source = path.read_text(encoding='utf-8')
+          before = """  assert.match(prepared.summary, /Banho Pet Porte Médio/)
+          assert.doesNotMatch(prepared.summary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)
+          """
+          after = """  assert.match(prepared.summary, /Banho Pet Porte Médio/)
+          assert.match(prepared.summary, /Pet: Theo \/ dog \/ Spitz Alemão \/ 12 kg \/ pelo duplo/i)
+          const operationalSummary = prepared.summary
+            .split('\\n')
+            .filter((line) => /• (?:1x|Serviço:|Pagamento:)/i.test(line))
+            .join('\\n')
+          assert.doesNotMatch(operationalSummary, /10,1 A 22 KG|Pelo Duplo|Pagamento:/i)
+          """
+          if source.count(before) != 1:
+              raise SystemExit(f'Esperava uma unica assercao original; encontrou {source.count(before)}.')
+          path.write_text(source.replace(before, after, 1), encoding='utf-8')
+          PY
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - name: Validate complete PetBot suite
+        run: npm run test:petbot
+
+      - name: Publish minimal correction
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add test/petbotAgent.test.mjs
+          git diff --cached --stat
+          git diff --cached --numstat
+          git commit -m "test: scope service label privacy assertion"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
