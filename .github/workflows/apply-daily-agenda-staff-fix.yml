@@ -1,4 +1,4 @@
-name: Apply daily agenda and staff persistence fix
+name: Apply agenda daily staff and catalog fix
 
 on:
   push:
@@ -17,11 +17,11 @@ jobs:
       - name: Checkout fix branch
         uses: actions/checkout@v4
         with:
-          ref: fix/daily-agenda-staff-persistence
+          ref: fix/agenda-daily-staff-service-catalog
           fetch-depth: 0
 
       - name: Apply source changes
-        run: python .github/apply-daily-agenda-staff-fix.py
+        run: python .github/apply-agenda-daily-staff-service-catalog.py
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -40,17 +40,18 @@ jobs:
 
       - name: Publish fix branch
         run: |
-          rm .github/apply-daily-agenda-staff-fix.py
+          rm .github/apply-agenda-daily-staff-service-catalog.py
+          rm .github/workflows/apply-daily-agenda-staff-fix.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
-          git commit -m "fix: add daily agenda and persist staff names"
-          git push origin HEAD:fix/daily-agenda-staff-persistence
+          git commit -m "fix: agenda diaria equipe e catalogo de servicos"
+          git push origin HEAD:fix/agenda-daily-staff-service-catalog
 
       - name: Remove temporary workflow
         run: |
           git fetch origin main
           git checkout -B main origin/main
           git rm .github/workflows/apply-daily-agenda-staff-fix.yml
-          git commit -m "chore: remove daily agenda fix executor"
+          git commit -m "chore: remove agenda catalog fix executor"
           git push origin main
