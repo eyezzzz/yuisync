@@ -148,13 +148,28 @@ const AGENDA_HOURS = Array.from({ length: 10 }, (_, i) => i + 8)
 const localDateKey = (value) => value ? isoDate(new Date(value)) : ''
 const localHour = (value) => value ? new Date(value).getHours() : -1
 
-const fmtInterval = (iso) => {
-  if (!iso) return '—'
-  const start = new Date(iso)
-  const end = new Date(start.getTime() + 60 * 60 * 1000)
-  const f = (d) => d.toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })
-  return `${f(start)} - ${f(end)}`
+const appointmentHourSlotKeys = (appt = {}) => {
+  if (!appt?.scheduled_at) return []
+  const start = new Date(appt.scheduled_at)
+  if (Number.isNaN(start.getTime())) return []
+
+  const cursor = new Date(start)
+  cursor.setMinutes(0, 0, 0)
+
+  const duration = Math.max(15, Number(appt.duration_min || 60))
+  const end = new Date(start.getTime() + duration * 60 * 1000)
+  const expandOverlappingHours = appointmentOccupiesManualSlot(appt)
+  const keys = []
+
+  do {
+    keys.push(`${localDateKey(cursor)}-${cursor.getHours()}`)
+    cursor.setHours(cursor.getHours() + 1)
+  } while (expandOverlappingHours && cursor < end)
+
+  return keys
 }
+
+const fmtInterval = (appt) => fmtAppointmentInterval(appt)
 
 const PT_WEEKDAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
 const PT_MONTHS   = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
@@ -848,7 +863,7 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
       <div className="flex items-start gap-2 text-xs text-muted">
         <Clock size={11} className="mt-0.5 flex-shrink-0"/>
         <div>
-          <p className="text-amber-400 font-bold leading-none">{fmtInterval(appt.scheduled_at)}</p>
+          <p className="text-amber-400 font-bold leading-none">{fmtInterval(appt)}</p>
           <p className="mt-1 opacity-70 flex items-center gap-1">
              {(() => {
                const firstCode = appointmentServiceCodes(appt)[0]
@@ -925,10 +940,11 @@ function AgendaTimelineView({
   const bySlot = useMemo(() => {
     const map = new Map()
     ;(appointments || []).forEach((appt) => {
-      const key = `${localDateKey(appt.scheduled_at)}-${localHour(appt.scheduled_at)}`
-      const list = map.get(key) || []
-      list.push(appt)
-      map.set(key, list)
+      appointmentHourSlotKeys(appt).forEach((key) => {
+        const list = map.get(key) || []
+        list.push(appt)
+        map.set(key, list)
+      })
     })
     map.forEach((list) => list.sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
     return map
@@ -1324,7 +1340,7 @@ export default function AgendaPage() {
                   const sb = statusBadge(a.status)
                   return (
                     <tr key={a.id}>
-                      <td><span className="font-bold text-amber-400 font-display whitespace-nowrap">{fmtInterval(a.scheduled_at)}</span></td>
+                      <td><span className="font-bold text-amber-400 font-display whitespace-nowrap">{fmtInterval(a)}</span></td>
                       <td>
                         <p className="text-base font-black text-text">{a.pets?.pet_name || '—'}</p>
                         <p className="text-xs text-muted">{a.pets?.breed || a.pets?.species}</p>

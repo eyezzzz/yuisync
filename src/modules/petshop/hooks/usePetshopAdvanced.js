@@ -47,7 +47,10 @@ export const CAMPAIGN_TEMPLATES = {
 
 const addDays = (d, n) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
 const toISODate = (d) => new Date(d).toISOString().slice(0, 10)
-const getDateBounds = (d = todayISO()) => ({ start: `${d}T00:00:00.000Z`, end: `${d}T23:59:59.999Z` })
+const getDateBounds = (d = todayISO()) => ({
+  start: new Date(`${d}T00:00:00`).toISOString(),
+  end: new Date(`${d}T23:59:59.999`).toISOString(),
+})
 const getMonthRange = (ref = new Date()) => {
   const start = new Date(ref.getFullYear(), ref.getMonth(), 1)
   const end = new Date(ref.getFullYear(), ref.getMonth() + 1, 0, 23, 59, 59, 999)
@@ -584,8 +587,8 @@ export function usePetshopAdvanced() {
 
   const loadTeamSnapshot = useCallback(async ({ startDate, endDate } = {}) => {
     const range = getMonthRange(new Date())
-    const start = startDate ? `${startDate}T00:00:00.000Z` : range.start
-    const end = endDate ? `${endDate}T23:59:59.999Z` : range.end
+    const start = startDate ? getDateBounds(startDate).start : range.start
+    const end = endDate ? getDateBounds(endDate).end : range.end
 
     let profiles = []
     let rows = []
