@@ -75,7 +75,30 @@ jobs:
         run: node --test test/agendaOperationalInfrastructure.test.mjs
 
       - name: Transactional static tests
-        run: npm run test:transactions
+        id: transactional
+        continue-on-error: true
+        shell: bash
+        run: npm run test:transactions > /tmp/agenda-transactional.log 2>&1
+
+      - name: Report transactional regression
+        if: steps.transactional.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        shell: bash
+        run: |
+          {
+            echo '### Regressao transacional encontrada na agenda'
+            echo
+            echo '```text'
+            tail -n 80 /tmp/agenda-transactional.log
+            echo '```'
+          } > /tmp/agenda-transactional-comment.md
+          gh pr comment "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --body-file /tmp/agenda-transactional-comment.md
+
+      - name: Stop after transactional regression
+        if: steps.transactional.outcome == 'failure'
+        run: exit 1
 
       - name: Typecheck
         run: npm run typecheck
