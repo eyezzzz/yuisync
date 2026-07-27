@@ -1,3 +1,4 @@
+import { PassThrough } from 'node:stream'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
 export const config = {
@@ -6,6 +7,8 @@ export const config = {
   },
   maxDuration: 30,
 }
+
+const MAX_WEBHOOK_BODY_BYTES = 2 * 1024 * 1024
 
 function sendText(res: ServerResponse, status: number, text: string) {
   res.statusCode = status
@@ -45,12 +48,63 @@ function handleVerification(req: IncomingMessage, res: ServerResponse) {
   sendJson(res, 403, { error: 'WhatsApp webhook verify token rejected.' })
 }
 
+async function readRawBody(req: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = []
+  let size = 0
+  for await (const chunk of req) {
+    const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)
+    size += buffer.length
+    if (size > MAX_WEBHOOK_BODY_BYTES) throw new Error('Payload too large.')
+    chunks.push(buffer)
+  }
+  return Buffer.concat(chunks).toString('utf8')
+}
+
+function replayRequest(req: IncomingMessage, rawBody: string): IncomingMessage {
+  const replay = new PassThrough() as PassThrough & IncomingMessage
+  replay.headers = req.headers
+  replay.method = req.method
+  replay.url = req.url
+  replay.httpVersion = req.httpVersion
+  replay.httpVersionMajor = req.httpVersionMajor
+  replay.httpVersionMinor = req.httpVersionMinor
+  replay.complete = true
+  replay.end(rawBody)
+  return replay
+}
+
 export default async function webhook(req: IncomingMessage, res: ServerResponse) {
   if (req.method === 'GET') {
     handleVerification(req, res)
     return
   }
 
-  const { handleWhatsappWebhook } = await import('../serverless/whatsappWebhook.js')
-  await handleWhatsappWebhook(req, res)
+  if (req.method !== 'POST') {
+    res.setHeader('Allow', 'GET, POST')
+    sendJson(res, 405, { error: 'Method not allowed.' })
+    return
+  }
+
+  try {
+    const rawBody = await readRawBody(req)
+    const body = rawBody ? JSON.parse(rawBody) : {}
+    const coexistence = await import('../serverless/whatsappCoexistenceWebhook.js')
+
+    if (coexistence.isWhatsappCoexistencePayload(body)) {
+      await coexistence.handleWhatsappCoexistenceWebhook({
+        body,
+        rawBody,
+        headers: req.headers,
+        res,
+      })
+      return
+    }
+
+    const { handleWhatsappWebhook } = await import('../serverless/whatsappWebhook.js')
+    await handleWhatsappWebhook(replayRequest(req, rawBody), res)
+  } catch (error) {
+    sendJson(res, 400, {
+      error: error instanceof Error ? error.message : 'Invalid WhatsApp webhook payload.',
+    })
+  }
 }
