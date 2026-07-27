@@ -28,6 +28,18 @@ jobs:
         id: suite
         continue-on-error: true
         run: npm run test:petbot > /tmp/petbot-suite.log 2>&1
+      - name: Prepare diagnostic artifact
+        if: steps.suite.outcome == 'failure'
+        run: |
+          mkdir -p artifacts
+          cp /tmp/petbot-suite.log artifacts/agenda-quality-petbot.log
+      - name: Upload diagnostic artifact
+        if: steps.suite.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: agenda-quality-petbot-failure
+          path: artifacts/agenda-quality-petbot.log
+          retention-days: 3
       - name: Report exact failure
         if: steps.suite.outcome == 'failure'
         env:
