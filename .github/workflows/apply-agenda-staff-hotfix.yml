@@ -1,0 +1,406 @@
+name: Apply agenda staff hotfix
+
+on:
+  push:
+    branches:
+      - fix/agenda-staff-settings-capacity
+    paths:
+      - .github/workflows/apply-agenda-staff-hotfix.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-hotfix:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/agenda-staff-settings-capacity
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply fixes
+        shell: bash
+        run: |
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path, old, new, label):
+              file = Path(path)
+              text = file.read_text(encoding='utf-8')
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f'{label}: expected exactly one match, found {count}')
+              file.write_text(text.replace(old, new, 1), encoding='utf-8')
+
+          settings = 'src/shared/pages/SettingsPage.jsx'
+          agenda = 'src/modules/petshop/pages/AgendaPage.jsx'
+          team = 'src/modules/petshop/pages/EquipePage.jsx'
+
+          replace_once(
+              settings,
+              """  async function handleSave() {
+              if (!canEdit || !effectiveModId) return
+              const hoursError = validateStoreAndBookingHours(form.store_business_hours, form.petbot_business_hours)
+          """,
+              """  async function handleSave() {
+              if (!canEdit || !effectiveModId) return
+              const savingFiscalSettings = effectiveModId === 'petshop' && petSettingsTab === 'fiscal'
+              const hoursError = validateStoreAndBookingHours(form.store_business_hours, form.petbot_business_hours)
+          """,
+              'settings fiscal scope declaration',
+          )
+
+          replace_once(
+              settings,
+              "if (effectiveModId === 'petshop' && form.fiscal_provider === 'mock_local' && !isTestTenant)",
+              "if (savingFiscalSettings && form.fiscal_provider === 'mock_local' && !isTestTenant)",
+              'settings fiscal validation scope',
+          )
+
+          replace_once(
+              settings,
+              """      if (effectiveModId === 'petshop') {
+                const safeNextInvoice = Math.max(1, Number(form.next_invoice_number || 1))
+          """,
+              """      if (savingFiscalSettings) {
+                const safeNextInvoice = Math.max(1, Number(form.next_invoice_number || 1))
+          """,
+              'settings fiscal persistence scope',
+          )
+
+          replace_once(
+              settings,
+              """  function updateTemplate(key, value) {
+              setForm((prev) => ({
+                ...prev,
+                message_templates: {
+                  ...normalizeTemplates(prev.message_templates),
+                  [key]: value,
+                },
+              }))
+            }
+          """,
+              """  function updateTemplate(key, value) {
+              setForm((prev) => ({
+                ...prev,
+                message_templates: {
+                  ...normalizeTemplates(prev.message_templates),
+                  [key]: value,
+                },
+              }))
+            }
+
+            function updateOperationalStaff(index, patch) {
+              setForm((prev) => {
+                const rows = Array.isArray(prev.petshop_operational_staff)
+                  ? prev.petshop_operational_staff
+                  : normalizeOperationalStaff(prev.petshop_operational_staff)
+                return {
+                  ...prev,
+                  petshop_operational_staff: rows.map((item, itemIndex) => (
+                    itemIndex === index ? { ...item, ...patch } : item
+                  )),
+                }
+              })
+            }
+
+            function addOperationalStaff() {
+              setForm((prev) => {
+                const rows = Array.isArray(prev.petshop_operational_staff)
+                  ? prev.petshop_operational_staff
+                  : normalizeOperationalStaff(prev.petshop_operational_staff)
+                const nextIndex = rows.length + 1
+                return {
+                  ...prev,
+                  petshop_operational_staff: [
+                    ...rows,
+                    { key: `esteticista-${nextIndex}`, name: `Esteticista ${nextIndex}`, active: true },
+                  ],
+                }
+              })
+            }
+          """,
+              'operational staff form helpers',
+          )
+
+          replace_once(
+              settings,
+              """                <div className="space-y-3">
+                            {normalizeOperationalStaff(form.petshop_operational_staff).map((person, index) => (
+                              <div key={person.key} className="grid grid-cols-1 md:grid-cols-[1fr_110px] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                                <div><label className="inp-label">Esteticista {index + 1}</label><input className="inp" disabled={!canEdit} value={person.name} onChange={(event) => setForm((prev) => ({ ...prev, petshop_operational_staff: normalizeOperationalStaff(prev.petshop_operational_staff).map((item, itemIndex) => itemIndex === index ? { ...item, name: event.target.value } : item) }))} /></div>
+                                <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" disabled={!canEdit} checked={person.active} onChange={(event) => setForm((prev) => ({ ...prev, petshop_operational_staff: normalizeOperationalStaff(prev.petshop_operational_staff).map((item, itemIndex) => itemIndex === index ? { ...item, active: event.target.checked } : item) }))} />Ativa</label>
+                              </div>
+                            ))}
+                            {normalizeOperationalStaff(form.petshop_operational_staff).length < 4 && (
+                              <button type="button" disabled={!canEdit} className="btn btn-secondary" onClick={() => setForm((prev) => ({ ...prev, petshop_operational_staff: [...normalizeOperationalStaff(prev.petshop_operational_staff), { key: `esteticista-${normalizeOperationalStaff(prev.petshop_operational_staff).length + 1}`, name: `Esteticista ${normalizeOperationalStaff(prev.petshop_operational_staff).length + 1}`, active: true }] }))}><Plus size={14}/> Adicionar profissional</button>
+                            )}
+                          </div>
+          """,
+              """                <div className="space-y-3">
+                            {(Array.isArray(form.petshop_operational_staff)
+                              ? form.petshop_operational_staff
+                              : normalizeOperationalStaff(form.petshop_operational_staff)
+                            ).map((person, index) => (
+                              <div key={person.key} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_110px] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                                <div className="min-w-0">
+                                  <label className="inp-label">Esteticista {index + 1}</label>
+                                  <input
+                                    className="inp"
+                                    disabled={!canEdit}
+                                    value={person.name}
+                                    onChange={(event) => updateOperationalStaff(index, { name: event.target.value })}
+                                  />
+                                </div>
+                                <label className="flex items-center gap-2 text-xs text-muted">
+                                  <input
+                                    type="checkbox"
+                                    disabled={!canEdit}
+                                    checked={person.active !== false}
+                                    onChange={(event) => updateOperationalStaff(index, { active: event.target.checked })}
+                                  />
+                                  Ativa
+                                </label>
+                              </div>
+                            ))}
+                            {(Array.isArray(form.petshop_operational_staff)
+                              ? form.petshop_operational_staff
+                              : normalizeOperationalStaff(form.petshop_operational_staff)
+                            ).length < 4 && (
+                              <button type="button" disabled={!canEdit} className="btn btn-secondary" onClick={addOperationalStaff}>
+                                <Plus size={14}/> Adicionar profissional
+                              </button>
+                            )}
+                          </div>
+          """,
+              'operational staff settings UI',
+          )
+
+          replace_once(
+              agenda,
+              """          <div className="flex items-start justify-between gap-2 pr-5">
+                    <div className="min-w-0">
+                      <p className="text-[11px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
+                      <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
+                      <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
+                    </div>
+                    <span className={`badge ${sb.cls} shrink-0 text-[9px]`}>{sb.label}</span>
+                  </div>
+          """,
+              """          <div className="min-w-0">
+                    <div className="flex min-w-0 flex-wrap items-center gap-1">
+                      <p className="shrink-0 whitespace-nowrap text-[10px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
+                      <span className={`badge ${sb.cls} max-w-full truncate text-[9px]`}>{sb.label}</span>
+                    </div>
+                    <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
+                    <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
+                  </div>
+          """,
+              'agenda compact card header',
+          )
+
+          replace_once(
+              agenda,
+              "{slotCapacity} vagas por horario",
+              "{slotCapacity} {slotCapacity === 1 ? 'vaga' : 'vagas'} por horario",
+              'agenda capacity label',
+          )
+
+          replace_once(
+              agenda,
+              '<div className="grid grid-cols-2 gap-2">',
+              '<div className={`grid gap-2 ${slotCapacity === 1 ? "grid-cols-1" : "grid-cols-2"}`}>',
+              'agenda dynamic lane grid',
+          )
+
+          replace_once(
+              agenda,
+              '          slotCapacity={MANUAL_SLOT_CAPACITY}',
+              "          slotCapacity={activeAgendaTab === 'banho_tosa' ? MANUAL_SLOT_CAPACITY : 1}",
+              'agenda capacity by service group',
+          )
+
+          replace_once(
+              team,
+              """  const configuredStaff = useMemo(
+              () => normalizeOperationalStaff(storeSettings?.petshop_operational_staff),
+              [storeSettings?.petshop_operational_staff],
+            )
+
+            const staffCards = useMemo(() => {
+          """,
+              """  const configuredStaff = useMemo(
+              () => normalizeOperationalStaff(storeSettings?.petshop_operational_staff),
+              [storeSettings?.petshop_operational_staff],
+            )
+            const configuredStaffByKey = useMemo(
+              () => new Map(configuredStaff.map((person) => [person.key, person])),
+              [configuredStaff],
+            )
+            const displayRows = useMemo(() => rows.map((row) => ({
+              ...row,
+              collaborator_name: configuredStaffByKey.get(row.staff_key)?.name
+                || row.collaborator_name
+                || row.staff_key,
+            })), [configuredStaffByKey, rows])
+
+            const staffCards = useMemo(() => {
+          """,
+              'commission configured staff mapping',
+          )
+
+          replace_once(
+              team,
+              "const totals = useMemo(() => rows.reduce((acc, row) => ({",
+              "const totals = useMemo(() => displayRows.reduce((acc, row) => ({",
+              'commission totals display rows',
+          )
+          replace_once(team, "  }), [rows])", "  }), [displayRows])", 'commission totals dependency')
+          replace_once(team, "exportCommissionCsv(rows)", "exportCommissionCsv(displayRows)", 'commission csv current names')
+          replace_once(team, "{rows.map((row) => (", "{displayRows.map((row) => (", 'commission table current names')
+
+          migration = Path('supabase/migrations/20260727002000_veterinary_single_capacity.sql')
+          migration.write_text("""begin;
+
+-- Banho e tosa mantem duas vagas simultaneas. A agenda veterinaria possui
+-- capacidade unica, inclusive para insercoes do PetBot e chamadas diretas.
+create or replace function public.prevent_appointment_overlap()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  active_statuses constant text[] := array[
+    'agendado', 'confirmado', 'em_andamento', 'booked', 'ocupado',
+    'blocked', 'bloqueado', 'scheduled', 'pendente'
+  ];
+  v_capacity integer := 2;
+  v_overlap_count integer := 0;
+begin
+  if lower(coalesce(new.status, '')) <> all(active_statuses) then
+    return new;
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(
+    new.tenant_id::text || ':' || new.module_id || ':' || coalesce(new.service_group, 'geral') || ':' || new.scheduled_at::date::text,
+    0
+  ));
+
+  if coalesce(new.service_group, 'geral') = 'veterinaria' then
+    v_capacity := 1;
+  else
+    select greatest(2, coalesce(settings.petbot_booking_capacity, 2))
+    into v_capacity
+    from public.settings settings
+    where settings.tenant_id = new.tenant_id
+      and settings.module_id = new.module_id
+    limit 1;
+
+    v_capacity := coalesce(v_capacity, 2);
+  end if;
+
+  if nullif(trim(coalesce(new.responsible_staff_key, '')), '') is not null and exists (
+    select 1
+    from public.appointments current
+    where current.tenant_id = new.tenant_id
+      and current.module_id = new.module_id
+      and current.id is distinct from new.id
+      and lower(coalesce(current.status, '')) = any(active_statuses)
+      and nullif(trim(coalesce(current.responsible_staff_key, '')), '') = nullif(trim(new.responsible_staff_key), '')
+      and current.scheduled_at < new.scheduled_at + make_interval(mins => greatest(15, coalesce(new.duration_min, 60)))
+      and current.scheduled_at + make_interval(mins => greatest(15, coalesce(current.duration_min, 60))) > new.scheduled_at
+  ) then
+    raise exception 'O responsavel selecionado ja possui atendimento nesse horario.';
+  end if;
+
+  select count(*)::integer
+  into v_overlap_count
+  from public.appointments current
+  where current.tenant_id = new.tenant_id
+    and current.module_id = new.module_id
+    and current.id is distinct from new.id
+    and lower(coalesce(current.status, '')) = any(active_statuses)
+    and coalesce(current.service_group, 'geral') = coalesce(new.service_group, 'geral')
+    and current.scheduled_at < new.scheduled_at + make_interval(mins => greatest(15, coalesce(new.duration_min, 60)))
+    and current.scheduled_at + make_interval(mins => greatest(15, coalesce(current.duration_min, 60))) > new.scheduled_at;
+
+  if v_overlap_count >= v_capacity then
+    raise exception 'O horario atingiu o limite de % vagas simultaneas.', v_capacity;
+  end if;
+
+  return new;
+end;
+$$;
+
+comment on function public.prevent_appointment_overlap() is
+  'Capacidade por grupo: duas vagas para banho/tosa e uma vaga para veterinaria.';
+
+commit;
+""", encoding='utf-8')
+
+          test_file = Path('test/agendaStaffSettingsRegression.test.mjs')
+          test_file.write_text("""import test from 'node:test'
+import assert from 'node:assert/strict'
+import { readFile } from 'node:fs/promises'
+
+test('agenda, configuracoes e comissoes compartilham equipe e capacidade correta', async () => {
+  const [agenda, settings, team, migration] = await Promise.all([
+    readFile(new URL('../src/modules/petshop/pages/AgendaPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/shared/pages/SettingsPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/modules/petshop/pages/EquipePage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260727002000_veterinary_single_capacity.sql', import.meta.url), 'utf8'),
+  ])
+
+  assert.match(agenda, /activeAgendaTab === 'banho_tosa' \? MANUAL_SLOT_CAPACITY : 1/)
+  assert.match(agenda, /slotCapacity === 1 \? "grid-cols-1" : "grid-cols-2"/)
+  assert.match(agenda, /whitespace-nowrap text-\[10px\] font-black/)
+
+  assert.match(settings, /const savingFiscalSettings = effectiveModId === 'petshop' && petSettingsTab === 'fiscal'/)
+  assert.match(settings, /if \(savingFiscalSettings && form\.fiscal_provider === 'mock_local'/)
+  assert.match(settings, /if \(savingFiscalSettings\) \{\s*const safeNextInvoice/)
+  assert.match(settings, /function updateOperationalStaff/)
+  assert.match(settings, /onChange=\{\(event\) => updateOperationalStaff\(index, \{ name: event\.target\.value \}\)\}/)
+
+  assert.match(team, /const configuredStaffByKey = useMemo/)
+  assert.match(team, /const displayRows = useMemo/)
+  assert.match(team, /exportCommissionCsv\(displayRows\)/)
+  assert.match(team, /\{displayRows\.map\(\(row\) => \(/)
+
+  assert.match(migration, /service_group, 'geral'\) = 'veterinaria'/)
+  assert.match(migration, /v_capacity := 1/)
+  assert.match(migration, /duas vagas para banho\/tosa e uma vaga para veterinaria/)
+})
+""", encoding='utf-8')
+          PY
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Validate hotfix
+        run: |
+          npm run test:transactions
+          npm run typecheck
+          npm run build
+
+      - name: Commit hotfix
+        shell: bash
+        run: |
+          rm .github/workflows/apply-agenda-staff-hotfix.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/shared/pages/SettingsPage.jsx \
+                  src/modules/petshop/pages/AgendaPage.jsx \
+                  src/modules/petshop/pages/EquipePage.jsx \
+                  supabase/migrations/20260727002000_veterinary_single_capacity.sql \
+                  test/agendaStaffSettingsRegression.test.mjs \
+                  .github/workflows/apply-agenda-staff-hotfix.yml
+          git commit -m "fix: persist staff names and split agenda capacity"
+          git push origin HEAD:fix/agenda-staff-settings-capacity
