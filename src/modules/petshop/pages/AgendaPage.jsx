@@ -79,10 +79,43 @@ const fmtAppointmentInterval = (appt) => {
 
 const motodogAddressText = (appt) => appointmentTransportAddress(appt)
 
+const motodogDefaultsFromClient = (client = {}) => {
+  const appendUnique = (base, value, separator = ', ') => {
+    const cleanValue = String(value || '').trim()
+    if (!cleanValue) return base
+    if (safeLower(base).includes(safeLower(cleanValue))) return base
+    return base ? `${base}${separator}${cleanValue}` : cleanValue
+  }
+
+  let address = String(client.owner_address || '').trim()
+  address = appendUnique(address, client.address_number)
+  address = appendUnique(address, client.address_complement, ' - ')
+  if (client.zip_code && !safeLower(address).includes(safeLower(client.zip_code))) {
+    address = appendUnique(address, `CEP ${client.zip_code}`, ' - ')
+  }
+
+  return {
+    transport_address: address,
+    transport_neighborhood: String(client.owner_neighborhood || '').trim(),
+    transport_city: String(client.owner_city || '').trim(),
+    transport_reference: String(client.address_reference || '').trim(),
+  }
+}
+
+const fillMotodogFromClient = (current, client, { overwrite = false } = {}) => {
+  const defaults = motodogDefaultsFromClient(client)
+  return Object.fromEntries(Object.entries(defaults).map(([key, value]) => [
+    key,
+    overwrite ? value : (current[key] || value),
+  ]))
+}
+
 function MotodogAgendaInfo({ appt, compact = false }) {
   if (!appt?.motodog?.mode) return null
   const address = motodogAddressText(appt)
   const motodog = isMotodogTransportMode(appt.motodog.mode)
+  const contactPhone = appt?.pets?.phone || ''
+  const contactEmail = appt?.pets?.email || ''
   return (
     <div className={`${compact ? "mt-1 text-[10px]" : "rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-2 text-[11px]"} ${motodog ? "text-emerald-300" : "text-sky-300"}`}>
       <p className="flex items-center gap-1 font-bold">
@@ -97,6 +130,8 @@ function MotodogAgendaInfo({ appt, compact = false }) {
       {motodog && appt.motodog.reference && (
         <p className="mt-1 text-muted">Referencia: {appt.motodog.reference}</p>
       )}
+      {motodog && contactPhone && <p className="mt-1 text-muted">Contato: {contactPhone}</p>}
+      {motodog && contactEmail && <p className="mt-1 text-muted">E-mail: {contactEmail}</p>}
     </div>
   )
 }
@@ -399,6 +434,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
   const [searchingClients, setSearchingClients] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
   const [servicePickerOpen, setServicePickerOpen] = useState(false)
+  const [durationOverride, setDurationOverride] = useState(() => isEdit && appt?.duration_min ? String(appt.duration_min) : '')
   const clientPickerRef = useRef(null)
   const clientSearchRef = useRef(null)
   const servicePickerRef = useRef(null)
@@ -423,6 +459,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
       }), 0),
     }
   }, [form.service_codes, serviceOptions, serviceGroup, serviceDurations, selectedClient?.weight_kg, appt?.pets?.weight_kg])
+  const effectiveDuration = Math.max(10, Number(durationOverride || serviceTotals.duration || 0))
   const availableServiceOptions = useMemo(() => {
     const query = safeLower(serviceSearch)
     const selectedCodes = new Set(form.service_codes.map(String))
@@ -508,11 +545,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
       ...current,
       pet_id: pet.id,
       pet_search: '',
-      ...(isMotodogTransportMode(current.transport_mode) ? {
-        transport_address: current.transport_address || pet.owner_address || '',
-        transport_neighborhood: current.transport_neighborhood || pet.owner_neighborhood || '',
-        transport_city: current.transport_city || pet.owner_city || '',
-      } : {}),
+      ...(isMotodogTransportMode(current.transport_mode)
+        ? fillMotodogFromClient(current, pet, { overwrite: true })
+        : {}),
     }))
     setSelectedClient(pet)
     setErr('')
@@ -554,7 +589,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
 
     const candidateStart = new Date(`${form.date}T${form.time}:00`)
     if (Number.isNaN(candidateStart.getTime())) return setErr('Horario invalido')
-    const candidateEnd = new Date(candidateStart.getTime() + Math.max(15, Number(serviceTotals.duration || 60)) * 60 * 1000)
+    const candidateEnd = new Date(candidateStart.getTime() + effectiveDuration * 60 * 1000)
     const candidateBlocks = appointmentOccupiesManualSlot({ status: form.status })
     const relevantAppointments = (appointments || []).filter((item) => (
       String(item.id || '') !== String(appt?.id || '')
@@ -594,7 +629,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
         services: form.service_codes.map((code) => ({ code })),
         service_group: serviceGroup,
         scheduled_at,
-        duration_min: serviceTotals.duration,
+        duration_min: effectiveDuration,
         price: serviceTotals.price,
         status: form.status,
         notes: form.notes,
@@ -835,8 +870,17 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
               </div>
 
               <div className="rounded-xl border border-[var(--border)] bg-white/5 px-4 py-3">
-                <span className="block text-[11px] font-bold uppercase tracking-wider text-muted">Tempo total</span>
-                <strong className="mt-1 block text-lg text-text">{serviceTotals.duration || 0} min</strong>
+                <label className="block text-[11px] font-bold uppercase tracking-wider text-muted">Duracao total (min)</label>
+                <input
+                  aria-label="Duracao total do agendamento"
+                  className="inp mt-2"
+                  type="number"
+                  min="10"
+                  step="10"
+                  value={durationOverride || serviceTotals.duration || ''}
+                  onChange={(event) => setDurationOverride(event.target.value)}
+                />
+                <p className="mt-1 text-[10px] text-muted">Pre-setada pelo porte e tipo de servico. Pode ser alterada para este agendamento.</p>
               </div>
               <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3">
                 <span className="block text-[11px] font-bold uppercase tracking-wider text-muted">Valor total</span>
@@ -851,7 +895,16 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
                   aria-label="Transporte do pet"
                   className="inp"
                   value={form.transport_mode}
-                  onChange={(event) => set('transport_mode', event.target.value)}
+                  onChange={(event) => {
+                    const mode = event.target.value
+                    setForm((current) => ({
+                      ...current,
+                      transport_mode: mode,
+                      ...(isMotodogTransportMode(mode) && selectedPet
+                        ? fillMotodogFromClient(current, selectedPet)
+                        : {}),
+                    }))
+                  }}
                 >
                   <option value="cliente_leva">Cliente traz e busca</option>
                   <option value="buscar_e_levar">MotoDog - buscar e levar</option>

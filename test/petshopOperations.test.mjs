@@ -19,11 +19,14 @@ test('veterinary schedule is weekdays 13:00-18:00 and closed on weekends', () =>
 test('service durations follow the operational weight matrix', () => {
   const cases = [
     ['banho', 8, 40],
-    ['tosa maquina total', 8, 90],
-    ['tosa tesoura', 8, 120],
+    ['tosa maquina total', 8, 60],
+    ['tosa tesoura', 8, 90],
     ['banho', 10, 60],
-    ['tosa maquina total', 10, 120],
-    ['tosa tesoura', 10, 150],
+    ['tosa maquina total', 10, 90],
+    ['tosa tesoura', 10, 120],
+    ['banho', 35, 60],
+    ['tosa maquina total', 35, 90],
+    ['tosa tesoura', 35, 120],
   ]
   for (const [name, weightKg, expected] of cases) {
     assert.equal(resolvePetshopServiceDuration({ service: name, weightKg, fallbackMin: 999 }), expected)

@@ -22,15 +22,15 @@ export const DEFAULT_PETSHOP_SERVICE_DURATIONS = {
     min_weight_kg: 0,
     max_weight_kg: 9.99,
     bath_min: 40,
-    machine_grooming_min: 90,
-    scissor_grooming_min: 120,
+    machine_grooming_min: 60,
+    scissor_grooming_min: 90,
   },
   medium: {
     min_weight_kg: 10,
-    max_weight_kg: 21.99,
+    max_weight_kg: 999.99,
     bath_min: 60,
-    machine_grooming_min: 120,
-    scissor_grooming_min: 150,
+    machine_grooming_min: 90,
+    scissor_grooming_min: 120,
   },
 }
 
