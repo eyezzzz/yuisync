@@ -31,7 +31,7 @@ test('comissao operacional usa 10 por cento para tosa e 5 para outros esteticos'
 })
 
 test('infraestrutura conecta capacidade, transporte e responsible_staff_key', async () => {
-  const [migration, staffMigration, catalogMigration, agenda, appointments, advanced, commissions, settings] = await Promise.all([
+  const [migration, staffMigration, catalogMigration, agenda, appointments, advanced, commissions, settings, authContext] = await Promise.all([
     readFile(new URL('../supabase/migrations/20260727001000_agenda_capacity_operational_commissions.sql', import.meta.url), 'utf8'),
     readFile(new URL('../supabase/migrations/20260727003000_petshop_operational_staff_persistence.sql', import.meta.url), 'utf8'),
     readFile(new URL('../supabase/migrations/20260727004000_reconcile_agenda_service_catalog.sql', import.meta.url), 'utf8'),
@@ -40,6 +40,7 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
     readFile(new URL('../src/modules/petshop/hooks/usePetshopAdvanced.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/EquipePage.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/shared/pages/SettingsPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/context/AuthContext.jsx', import.meta.url), 'utf8'),
   ])
 
   assert.match(migration, /petbot_booking_capacity = 2/)
@@ -56,6 +57,11 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
   assert.ok(migration.includes('revenue * 0.05'))
   assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))
   assert.match(agenda, /agendaPeriod/)
+  assert.match(agenda, /DAILY_SLOT_MINUTES = 10/)
+  assert.match(agenda, /wouldExceedSlotCapacity/)
+  assert.match(agenda, /Agenda diaria em intervalos de 10 minutos/)
+  assert.match(agenda, /label: String\(service.name/)
+  assert.doesNotMatch(agenda, /friendlyPetshopServiceLabel/)
   assert.match(agenda, /days=\{agendaDays\}/)
   assert.match(agenda, /activeAgendaTab === 'banho_tosa' \? MANUAL_SLOT_CAPACITY : 1/)
   assert.match(staffMigration, /add column if not exists petshop_operational_staff/)
@@ -67,7 +73,10 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
   assert.match(advanced, /return 'veterinaria'/)
   assert.match(advanced, /return 'banho_tosa'/)
   assert.match(advanced, /source_product_id/)
-  assert.match(settings, /select\('petshop_operational_staff'\)\.single\(\)/)
+  assert.match(settings, /OPERATIONAL_STAFF_TEMPLATE_KEY/)
+  assert.match(settings, /Salvar equipe/)
+  assert.match(settings, /persistOperationalStaff/)
+  assert.match(authContext, /message_templates\?\.\[OPERATIONAL_STAFF_TEMPLATE_KEY\]/)
   assert.match(agenda, /appointmentHourSlotKeys/)
   assert.match(agenda, /appointmentHourSlotKeys\(appt\)\.forEach/)
   assert.match(agenda, /fmtInterval\(appt\)/)

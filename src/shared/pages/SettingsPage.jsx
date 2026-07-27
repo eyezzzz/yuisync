@@ -68,6 +68,8 @@ const DEFAULT_MESSAGE_TEMPLATES = {
   dental_brushing: '🦷 **Escovação Dental**\n\n🪥 Utilizando material do cliente (escova e creme dental):\n💰 **R$ 8,00**\n\n🪥 Utilizando material da empresa (escova e creme dental):\n💰 **R$ 10,00**',
 }
 
+const OPERATIONAL_STAFF_TEMPLATE_KEY = '__petshop_operational_staff'
+
 const INITIAL_FORM = {
   store_name: '',
   store_address: '',
@@ -167,6 +169,13 @@ function isFeeSchemaError(error) {
   )
 }
 
+function isOperationalStaffSchemaError(error) {
+  const msg = String(error?.message || '').toLowerCase()
+  return msg.includes('petshop_operational_staff') && (
+    msg.includes('schema cache') || msg.includes('column') || msg.includes('does not exist')
+  )
+}
+
 function toBool(value, fallback = false) {
   if (typeof value === 'boolean') return value
   if (value === 'true' || value === '1') return true
@@ -262,6 +271,8 @@ export default function SettingsPage() {
   const [form, setForm] = useState(INITIAL_FORM)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
+  const [savingStaff, setSavingStaff] = useState(false)
+  const [staffMsg, setStaffMsg] = useState({ type: '', text: '' })
   const [msg, setMsg] = useState({ type: '', text: '' })
   const [selectedModId, setSelectedModId] = useState(null)
   const [systemView, setSystemView] = useState('home') // home | modules | tenants
@@ -341,7 +352,7 @@ export default function SettingsPage() {
           petbot_booking_capacity: data.petbot_booking_capacity != null ? String(data.petbot_booking_capacity) : '2',
           veterinary_name: data.veterinary_name || DEFAULT_VETERINARY_NAME,
           veterinary_business_hours: normalizeBusinessHours(data.veterinary_business_hours, DEFAULT_VETERINARY_BUSINESS_HOURS),
-          petshop_operational_staff: normalizeOperationalStaff(data.petshop_operational_staff),
+          petshop_operational_staff: normalizeOperationalStaff(data.petshop_operational_staff ?? data.message_templates?.[OPERATIONAL_STAFF_TEMPLATE_KEY]),
           petshop_service_durations: normalizeServiceDurations(data.petshop_service_durations),
           appointment_reminder_enabled: toBool(data.appointment_reminder_enabled, false),
           appointment_reminder_lead_min: data.appointment_reminder_lead_min != null ? String(data.appointment_reminder_lead_min) : '60',
@@ -423,6 +434,68 @@ export default function SettingsPage() {
     }
   }
 
+  async function persistOperationalStaff({ announce = false } = {}) {
+    if (!canEdit || effectiveModId !== 'petshop') return null
+    const expectedStaff = normalizeOperationalStaff(form.petshop_operational_staff)
+    const templates = {
+      ...normalizeTemplates(form.message_templates),
+      [OPERATIONAL_STAFF_TEMPLATE_KEY]: expectedStaff,
+    }
+
+    if (announce) {
+      setSavingStaff(true)
+      setStaffMsg({ type: '', text: '' })
+    }
+
+    try {
+      const save = async (includeColumn) => runWithTenantFallback(activeTenantId, async (includeTenant) => {
+        const row = buildTenantPayload({
+          module_id: effectiveModId,
+          message_templates: templates,
+          ...(includeColumn ? { petshop_operational_staff: expectedStaff } : {}),
+          updated_at: new Date().toISOString(),
+        }, activeTenantId, includeTenant)
+        const conflict = includeTenant ? 'tenant_id,module_id' : 'module_id'
+        return supabase
+          .from('settings')
+          .upsert(row, { onConflict: conflict })
+          .select(includeColumn ? 'petshop_operational_staff,message_templates' : 'message_templates')
+          .single()
+      })
+
+      let response = await save(true)
+      if (response.error && isOperationalStaffSchemaError(response.error)) {
+        response = await save(false)
+      }
+      if (response.error) throw response.error
+
+      const savedRaw = response.data?.petshop_operational_staff
+        ?? response.data?.message_templates?.[OPERATIONAL_STAFF_TEMPLATE_KEY]
+      const savedStaff = normalizeOperationalStaff(savedRaw)
+      const signature = (rows) => JSON.stringify(rows.map(({ key, name, active }) => ({ key, name, active })))
+      if (signature(savedStaff) !== signature(expectedStaff)) {
+        throw new Error('O banco nao confirmou os nomes informados para a equipe operacional.')
+      }
+
+      setForm((current) => ({
+        ...current,
+        petshop_operational_staff: savedStaff,
+        message_templates: templates,
+      }))
+      await auth.refreshSettings(effectiveModId)
+      if (announce) setStaffMsg({ type: 'success', text: 'Equipe salva e atualizada na Agenda e em Comissoes.' })
+      return savedStaff
+    } catch (error) {
+      if (announce) {
+        setStaffMsg({ type: 'error', text: error instanceof Error ? error.message : 'Nao foi possivel salvar a equipe.' })
+        return null
+      }
+      throw error
+    } finally {
+      if (announce) setSavingStaff(false)
+    }
+  }
+
   async function handleSave() {
     if (!canEdit || !effectiveModId) return
     const savingFiscalSettings = effectiveModId === 'petshop' && petSettingsTab === 'fiscal'
@@ -496,31 +569,7 @@ export default function SettingsPage() {
         throw upsertResponse.error
       }
 
-      if (effectiveModId === 'petshop') {
-        const expectedStaff = normalizeOperationalStaff(form.petshop_operational_staff)
-        const staffResponse = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
-          let query = supabase
-            .from('settings')
-            .update({
-              petshop_operational_staff: expectedStaff,
-              updated_at: new Date().toISOString(),
-            })
-            .eq('module_id', effectiveModId)
-
-          if (includeTenant && activeTenantId) query = query.eq('tenant_id', activeTenantId)
-          return query.select('petshop_operational_staff').single()
-        })
-
-        if (staffResponse.error) {
-          throw new Error(`Nao foi possivel salvar os nomes da equipe. Aplique a migration 20260727003000_petshop_operational_staff_persistence.sql. ${staffResponse.error.message || ''}`.trim())
-        }
-
-        const savedStaff = normalizeOperationalStaff(staffResponse.data?.petshop_operational_staff)
-        const signature = (rows) => JSON.stringify(rows.map(({ key, name, active }) => ({ key, name, active })))
-        if (signature(savedStaff) !== signature(expectedStaff)) {
-          throw new Error('O banco nao confirmou os nomes informados para a equipe operacional.')
-        }
-      }
+      if (effectiveModId === 'petshop') await persistOperationalStaff()
 
       if (savingFiscalSettings) {
         const safeNextInvoice = Math.max(1, Number(form.next_invoice_number || 1))
@@ -600,6 +649,7 @@ export default function SettingsPage() {
   }
 
   function updateOperationalStaff(index, patch) {
+    setStaffMsg({ type: '', text: '' })
     setForm((prev) => {
       const rows = Array.isArray(prev.petshop_operational_staff)
         ? prev.petshop_operational_staff
@@ -614,6 +664,7 @@ export default function SettingsPage() {
   }
 
   function addOperationalStaff() {
+    setStaffMsg({ type: '', text: '' })
     setForm((prev) => {
       const rows = Array.isArray(prev.petshop_operational_staff)
         ? prev.petshop_operational_staff
@@ -1146,6 +1197,22 @@ export default function SettingsPage() {
                       <Plus size={14}/> Adicionar profissional
                     </button>
                   )}
+                  <div className="flex flex-wrap items-center gap-3 pt-2">
+                    <button
+                      type="button"
+                      disabled={!canEdit || savingStaff}
+                      className="btn btn-primary gap-2"
+                      onClick={() => persistOperationalStaff({ announce: true })}
+                    >
+                      {savingStaff ? <RefreshCw size={14} className="animate-spin"/> : <Save size={14}/>} 
+                      {savingStaff ? 'Salvando equipe...' : 'Salvar equipe'}
+                    </button>
+                    {staffMsg.text && (
+                      <p className={`text-xs font-semibold ${staffMsg.type === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {staffMsg.text}
+                      </p>
+                    )}
+                  </div>
                 </div>
               </div>
 
