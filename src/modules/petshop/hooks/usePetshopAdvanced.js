@@ -90,6 +90,37 @@ const isPetshopServicesSchemaError = (error) => {
     || m.includes('relation')
   )
 }
+
+const normalizeCatalogText = (value = '') => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+  .trim()
+
+const catalogServiceCode = (productId = '') => `catalog_${String(productId).replace(/-/g, '')}`
+
+const isCatalogServiceProduct = (product = {}) => {
+  const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
+  const category = normalizeCatalogText(product.category)
+  const name = normalizeCatalogText(product.name)
+  const text = normalizeCatalogText([product.name, product.category, product.description, metadata.product_type].filter(Boolean).join(' '))
+  if (/racao|petisco|medicamento|acessorio|areia|brinquedo/.test(category)) return false
+  if (/banheira|banho (?:a )?seco|brinquedo|casinha|roupa|shampoo|varinha/.test(name)) return false
+  if (/pacote.*banho|banho.*pacote/.test(name)) return false
+  return metadata.product_type === 'servico'
+    || category === 'servico'
+    || /banho|tosa|desembolo|escovac|hidrat|higieniz|consulta|vacina|exame|cirurg|ultrassom|castr|curativo|microchip/.test(text)
+}
+
+const inferCatalogServiceGroup = (product = {}) => {
+  const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
+  if (['banho_tosa', 'veterinaria', 'outro'].includes(metadata.service_group)) return metadata.service_group
+  const text = normalizeCatalogText([product.name, product.category, product.description].filter(Boolean).join(' '))
+  if (/vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao|hemograma|radiograf|raio[ -]?x|coleta|sorolog|odontolog|anestesia|medicacao|eletrocard|ecocard|emergencia|procedimento/.test(text)) return 'veterinaria'
+  if (/banho|tosa|desembolo|escovac|hidrat|higien|groom|perfume|spa|trim|unha|ouvido|orelha/.test(text)) return 'banho_tosa'
+  return 'outro'
+}
+
 const isSalePaymentSplitSchemaError = (error) => {
   const message = String(error?.message || '').toLowerCase()
   if (!message) return false
@@ -401,24 +432,61 @@ export function usePetshopAdvanced() {
   }, [activeTenantId, moduleId, runScoped])
 
   const loadPetshopServices = useCallback(async () => {
-    const res = await runScoped(async (includeTenant) => {
-      let q = supabase
-        .from('petshop_services')
-        .select('*')
-        .eq('module_id', moduleId)
-        .order('active', { ascending: false })
-        .order('sort_order', { ascending: true })
-        .order('name', { ascending: true })
+    const [productsRes, linkedServicesRes] = await Promise.all([
+      runScoped(async (includeTenant) => {
+        let q = supabase
+          .from('products')
+          .select('id,name,category,description,price,active,bot_metadata')
+          .eq('module_id', moduleId)
+          .eq('active', true)
+          .order('name', { ascending: true })
+        return applyTenantFilter(q, activeTenantId, includeTenant)
+      }),
+      runScoped(async (includeTenant) => {
+        let q = supabase
+          .from('petshop_services')
+          .select('*')
+          .eq('module_id', moduleId)
+          .not('source_product_id', 'is', null)
+        return applyTenantFilter(q, activeTenantId, includeTenant)
+      }),
+    ])
 
-      return applyTenantFilter(q, activeTenantId, includeTenant)
-    })
-
-    if (res.error) {
-      if (isPetshopServicesSchemaError(res.error)) return []
-      throw res.error
+    if (productsRes.error) throw productsRes.error
+    if (linkedServicesRes.error && !isPetshopServicesSchemaError(linkedServicesRes.error)) {
+      throw linkedServicesRes.error
     }
 
-    return normalizeServices(res.data || [])
+    const linkedByProductId = new Map((linkedServicesRes.data || []).map((service) => [service.source_product_id, service]))
+    const services = (productsRes.data || [])
+      .filter(isCatalogServiceProduct)
+      .map((product) => {
+        const linked = linkedByProductId.get(product.id) || {}
+        const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
+        const groupType = inferCatalogServiceGroup(product)
+        return {
+          ...linked,
+          id: linked.id || product.id,
+          code: linked.code || catalogServiceCode(product.id),
+          name: String(product.name || '').trim(),
+          group_type: groupType,
+          default_price: Number(product.price || 0),
+          default_duration_min: Math.max(15, Number(
+            linked.default_duration_min
+            ?? metadata.duration_min
+            ?? metadata.service_duration_min
+            ?? 60
+          )),
+          commission_type: linked.commission_type || 'percentage',
+          commission_rate: Number(linked.commission_rate || 0),
+          active: product.active !== false,
+          sort_order: Number(linked.sort_order ?? 500),
+          icon: linked.icon || (groupType === 'veterinaria' ? 'stethoscope' : groupType === 'banho_tosa' ? 'droplets' : 'paw'),
+          source_product_id: product.id,
+        }
+      })
+
+    return normalizeServices(services)
   }, [activeTenantId, moduleId, runScoped])
 
   const savePetshopService = useCallback(async (payload) => {

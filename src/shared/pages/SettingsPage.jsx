@@ -496,6 +496,32 @@ export default function SettingsPage() {
         throw upsertResponse.error
       }
 
+      if (effectiveModId === 'petshop') {
+        const expectedStaff = normalizeOperationalStaff(form.petshop_operational_staff)
+        const staffResponse = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+          let query = supabase
+            .from('settings')
+            .update({
+              petshop_operational_staff: expectedStaff,
+              updated_at: new Date().toISOString(),
+            })
+            .eq('module_id', effectiveModId)
+
+          if (includeTenant && activeTenantId) query = query.eq('tenant_id', activeTenantId)
+          return query.select('petshop_operational_staff').single()
+        })
+
+        if (staffResponse.error) {
+          throw new Error(`Nao foi possivel salvar os nomes da equipe. Aplique a migration 20260727003000_petshop_operational_staff_persistence.sql. ${staffResponse.error.message || ''}`.trim())
+        }
+
+        const savedStaff = normalizeOperationalStaff(staffResponse.data?.petshop_operational_staff)
+        const signature = (rows) => JSON.stringify(rows.map(({ key, name, active }) => ({ key, name, active })))
+        if (signature(savedStaff) !== signature(expectedStaff)) {
+          throw new Error('O banco nao confirmou os nomes informados para a equipe operacional.')
+        }
+      }
+
       if (savingFiscalSettings) {
         const safeNextInvoice = Math.max(1, Number(form.next_invoice_number || 1))
         const fiscalPayloadBase = {
