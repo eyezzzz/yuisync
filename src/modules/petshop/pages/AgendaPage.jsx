@@ -14,7 +14,6 @@ import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { serviceIcon } from '../lib/petshopTeam'
 import {
-  friendlyPetshopServiceLabel,
   normalizeOperationalStaff,
   normalizeServiceDurations,
   resolvePetshopServiceDuration,
@@ -39,7 +38,7 @@ import {
 const asAgendaServices = (services = []) =>
   (Array.isArray(services) ? services : []).map((service) => ({
     value: service.code || service.value,
-    label: friendlyPetshopServiceLabel(service, { weightKg: service.weight_kg }),
+    label: String(service.name || service.label || service.code || 'Servico').trim(),
     price: Number(service.default_price ?? service.price ?? 0),
     duration: Number(service.default_duration_min ?? service.duration ?? 60),
     icon: serviceIcon(service),
@@ -167,6 +166,55 @@ const appointmentHourSlotKeys = (appt = {}) => {
   } while (expandOverlappingHours && cursor < end)
 
   return keys
+}
+
+
+const DAILY_SLOT_MINUTES = 10
+const DAILY_ROW_HEIGHT = 24
+
+const minutesOfDay = (value) => {
+  const date = value instanceof Date ? value : new Date(value)
+  if (Number.isNaN(date.getTime())) return 0
+  return date.getHours() * 60 + date.getMinutes()
+}
+
+const timeFromMinutes = (minutes) => {
+  const safe = Math.max(0, Math.min(23 * 60 + 59, Number(minutes || 0)))
+  return `${String(Math.floor(safe / 60)).padStart(2, '0')}:${String(safe % 60).padStart(2, '0')}`
+}
+
+const appointmentIntervalBounds = (appt = {}) => {
+  const start = new Date(appt.scheduled_at)
+  if (Number.isNaN(start.getTime())) return null
+  const duration = Math.max(15, Number(appt.duration_min || 60))
+  return { start, end: new Date(start.getTime() + duration * 60 * 1000) }
+}
+
+const intervalsOverlap = (firstStart, firstEnd, secondStart, secondEnd) => (
+  firstStart < secondEnd && secondStart < firstEnd
+)
+
+const wouldExceedSlotCapacity = ({ start, end, appointments = [], capacity = 1 }) => {
+  const events = [
+    { time: start.getTime(), delta: 1 },
+    { time: end.getTime(), delta: -1 },
+  ]
+
+  appointments.forEach((appt) => {
+    const bounds = appointmentIntervalBounds(appt)
+    if (!bounds || !intervalsOverlap(start, end, bounds.start, bounds.end)) return
+    events.push({ time: Math.max(start.getTime(), bounds.start.getTime()), delta: 1 })
+    events.push({ time: Math.min(end.getTime(), bounds.end.getTime()), delta: -1 })
+  })
+
+  events.sort((a, b) => (a.time - b.time) || (a.delta - b.delta))
+  let concurrent = 0
+  let maximum = 0
+  events.forEach((event) => {
+    concurrent += event.delta
+    maximum = Math.max(maximum, concurrent)
+  })
+  return maximum > Math.max(1, Number(capacity || 1))
 }
 
 const fmtInterval = (appt) => fmtAppointmentInterval(appt)
@@ -300,7 +348,7 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, services = SERVICES, staff = [], serviceDurations, onSearchClients }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, services = SERVICES, staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -504,10 +552,42 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
     if (!form.time) return setErr('Informe o horario')
     if (!serviceTotals.services.length) return setErr('Os servicos selecionados nao estao mais disponiveis')
 
+    const candidateStart = new Date(`${form.date}T${form.time}:00`)
+    if (Number.isNaN(candidateStart.getTime())) return setErr('Horario invalido')
+    const candidateEnd = new Date(candidateStart.getTime() + Math.max(15, Number(serviceTotals.duration || 60)) * 60 * 1000)
+    const candidateBlocks = appointmentOccupiesManualSlot({ status: form.status })
+    const relevantAppointments = (appointments || []).filter((item) => (
+      String(item.id || '') !== String(appt?.id || '')
+      && appointmentOccupiesManualSlot(item)
+      && getAppointmentServiceGroup(item, services) === serviceGroup
+    ))
+
+    if (candidateBlocks && form.responsible_staff_key) {
+      const sameResponsibleConflict = relevantAppointments.some((item) => {
+        if (item.responsible_staff_key !== form.responsible_staff_key) return false
+        const bounds = appointmentIntervalBounds(item)
+        return bounds && intervalsOverlap(candidateStart, candidateEnd, bounds.start, bounds.end)
+      })
+      if (sameResponsibleConflict) {
+        return setErr('Este responsavel ja possui atendimento dentro desse intervalo.')
+      }
+    }
+
+    if (candidateBlocks && wouldExceedSlotCapacity({
+      start: candidateStart,
+      end: candidateEnd,
+      appointments: relevantAppointments,
+      capacity: serviceGroup === 'banho_tosa' ? slotCapacity : 1,
+    })) {
+      return setErr(serviceGroup === 'veterinaria'
+        ? 'Ja existe atendimento veterinario dentro desse intervalo.'
+        : 'As duas vagas de banho/tosa ja estao ocupadas em parte desse intervalo.')
+    }
+
     setSaving(true)
     setErr('')
     try {
-      const scheduled_at = new Date(`${form.date}T${form.time}:00`).toISOString()
+      const scheduled_at = candidateStart.toISOString()
       const payload = {
         pet_id: form.pet_id,
         service_type: form.service_codes[0],
@@ -988,6 +1068,120 @@ function AgendaTimelineView({
     )
   }
 
+  if (days.length === 1) {
+    const day = days[0]
+    const dayKey = isoDate(day)
+    const dayItems = (appointments || [])
+      .filter((appt) => localDateKey(appt.scheduled_at) === dayKey)
+      .sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at))
+    const blocking = dayItems.filter(appointmentOccupiesManualSlot)
+    const history = dayItems.filter((item) => !appointmentOccupiesManualSlot(item))
+    const blockingBounds = blocking.map(appointmentIntervalBounds).filter(Boolean)
+    const earliestMinute = Math.min(8 * 60, ...(blockingBounds.length ? blockingBounds.map((bounds) => minutesOfDay(bounds.start)) : [8 * 60]))
+    const latestMinute = Math.max(18 * 60, ...(blockingBounds.length ? blockingBounds.map((bounds) => minutesOfDay(bounds.end)) : [18 * 60]))
+    const rangeStart = Math.floor(earliestMinute / DAILY_SLOT_MINUTES) * DAILY_SLOT_MINUTES
+    const rangeEnd = Math.ceil(latestMinute / DAILY_SLOT_MINUTES) * DAILY_SLOT_MINUTES
+    const slotCount = Math.max(1, Math.ceil((rangeEnd - rangeStart) / DAILY_SLOT_MINUTES))
+    const slots = Array.from({ length: slotCount }, (_, index) => rangeStart + index * DAILY_SLOT_MINUTES)
+    const timelineHeight = slots.length * DAILY_ROW_HEIGHT
+    const laneEnds = Array.from({ length: slotCapacity }, () => Number.NEGATIVE_INFINITY)
+    const positioned = blocking.map((appt) => {
+      const bounds = appointmentIntervalBounds(appt)
+      const startMs = bounds?.start.getTime() ?? 0
+      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= startMs)
+      const overflow = lane < 0
+      if (lane < 0) lane = 0
+      laneEnds[lane] = Math.max(laneEnds[lane], bounds?.end.getTime() ?? startMs)
+      return { appt, bounds, lane, overflow }
+    })
+
+    return (
+      <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)]">
+          <div>
+            <p className="text-sm font-bold text-text">Agenda diaria em intervalos de 10 minutos</p>
+            <p className="text-xs text-muted">{day.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: '2-digit' })}</p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-muted">
+            <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
+            {slotCapacity} {slotCapacity === 1 ? 'vaga' : 'vagas'} simultaneas
+          </div>
+        </div>
+
+        <div className="overflow-x-auto">
+          <div className="min-w-[620px] grid" style={{ gridTemplateColumns: '76px minmax(0, 1fr)' }}>
+            <div className="relative bg-surface/35" style={{ height: timelineHeight }}>
+              {slots.map((minute, index) => (
+                <div
+                  key={`label-${minute}`}
+                  className="absolute inset-x-0 border-b border-[var(--border)] px-2 text-[10px] font-bold text-muted"
+                  style={{ top: index * DAILY_ROW_HEIGHT, height: DAILY_ROW_HEIGHT }}
+                >
+                  <span className="relative top-1">{timeFromMinutes(minute)}</span>
+                </div>
+              ))}
+            </div>
+
+            <div className="relative border-l border-[var(--border)]" style={{ height: timelineHeight }}>
+              {slots.map((minute, index) => (
+                <button
+                  key={`slot-${minute}`}
+                  type="button"
+                  aria-label={`Agendar as ${timeFromMinutes(minute)}`}
+                  title={`Novo agendamento as ${timeFromMinutes(minute)}`}
+                  onClick={() => onCreateAt(day, timeFromMinutes(minute))}
+                  className="absolute inset-x-0 border-b border-[var(--border)] text-left hover:bg-emerald-500/[0.04]"
+                  style={{ top: index * DAILY_ROW_HEIGHT, height: DAILY_ROW_HEIGHT }}
+                />
+              ))}
+
+              {positioned.map(({ appt, bounds, lane, overflow }) => {
+                if (!bounds) return null
+                const startMinute = minutesOfDay(bounds.start)
+                const endMinute = minutesOfDay(bounds.end)
+                const top = ((startMinute - rangeStart) / DAILY_SLOT_MINUTES) * DAILY_ROW_HEIGHT + 2
+                const height = Math.max(34, ((endMinute - startMinute) / DAILY_SLOT_MINUTES) * DAILY_ROW_HEIGHT - 4)
+                const laneWidth = 100 / Math.max(1, slotCapacity)
+                return (
+                  <div
+                    key={appt.id}
+                    className={`absolute z-10 overflow-hidden rounded-lg ${overflow ? 'ring-2 ring-red-500/70' : ''}`}
+                    style={{
+                      top,
+                      height,
+                      left: `calc(${lane * laneWidth}% + 4px)`,
+                      width: `calc(${laneWidth}% - 8px)`,
+                    }}
+                  >
+                    {appointmentCard(appt)}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+
+        {history.length > 0 && (
+          <div className="border-t border-[var(--border)] p-3">
+            <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-muted">Historico do dia</p>
+            <div className="grid gap-2 md:grid-cols-2">
+              {history.map((appt) => (
+                <button
+                  key={appt.id}
+                  type="button"
+                  onClick={() => onEdit(appt)}
+                  className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-xs text-muted hover:bg-white/[0.06]"
+                >
+                  {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
       <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-[var(--border)]">
@@ -1179,11 +1373,14 @@ export default function AgendaPage() {
     }
     load({ date: isoDate(selectedDate), status: filterStatus || undefined })
   }
-  const openSlotModal = (day, hour) => {
+  const openSlotModal = (day, timeOrHour) => {
+    const time = typeof timeOrHour === 'number'
+      ? `${String(timeOrHour).padStart(2, '0')}:00`
+      : String(timeOrHour || '08:00')
     setModal({
       serviceGroup: activeAgendaTab,
       date: isoDate(day),
-      time: `${String(hour).padStart(2, "0")}:00`,
+      time,
     })
   }
   const handleStatusChange = async (appointmentId, status) => {
@@ -1468,6 +1665,8 @@ export default function AgendaPage() {
           staff={staff}
           serviceDurations={storeSettings?.petshop_service_durations}
           onSearchClients={searchPets}
+          appointments={appointments}
+          slotCapacity={getAppointmentServiceGroup(modal, agendaServices) === 'veterinaria' || modal?.serviceGroup === 'veterinaria' ? 1 : MANUAL_SLOT_CAPACITY}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}

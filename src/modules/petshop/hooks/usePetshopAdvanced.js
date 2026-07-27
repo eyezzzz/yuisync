@@ -439,6 +439,7 @@ export function usePetshopAdvanced() {
           .select('id,name,category,description,price,active,bot_metadata')
           .eq('module_id', moduleId)
           .eq('active', true)
+          .gt('price', 0)
           .order('name', { ascending: true })
         return applyTenantFilter(q, activeTenantId, includeTenant)
       }),

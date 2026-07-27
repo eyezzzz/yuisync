@@ -3,12 +3,14 @@ import { useLocation } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import { useAuth } from '../shared/hooks/useAuth'
 import { buildTenantSlug, isTenantSchemaError, runWithTenantFallback } from '../lib/tenant'
+import { normalizeOperationalStaff } from '../../shared/petshopOperations'
 
 export const AuthContext = createContext(null)
 
 const ACTIVE_TENANT_KEY = '@yui_active_tenant'
 const LOCAL_TENANTS_KEY = '@yui_local_tenants'
 const SUPPORTED_BUSINESS_MODULES = ['petshop']
+const OPERATIONAL_STAFF_TEMPLATE_KEY = '__petshop_operational_staff'
 
 const DEFAULT_LOCAL_TENANTS = [
   { id: 'cliente-1', name: 'Cliente 1', slug: 'cliente-1' },
@@ -391,7 +393,13 @@ export function AuthProvider({ children }) {
 
       const data = response.data || []
       if (data.length > 0) {
-        setStoreSettings(data[0])
+        const row = data[0]
+        setStoreSettings({
+          ...row,
+          petshop_operational_staff: normalizeOperationalStaff(
+            row.petshop_operational_staff ?? row.message_templates?.[OPERATIONAL_STAFF_TEMPLATE_KEY],
+          ),
+        })
       } else {
         const moduleFallbackName = {
           petshop: 'PetShop CRM',
