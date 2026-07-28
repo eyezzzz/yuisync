@@ -6,8 +6,17 @@ import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { fmtCurrency, todayISO } from '../../../lib/supabase'
 import { printThermalReceipt } from '../../../lib/thermalPrint'
+import {
+  normalizeServiceDurations,
+  resolvePetshopServiceDuration,
+} from '../../../../shared/petshopOperations'
 
 const NON_OPERATIONAL_STATUSES = new Set(['cancelado', 'no_show'])
+const DEFAULT_TRANSPORT_OPTIONS = [
+  { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 20, active: true },
+  { id: 'somente_buscar', label: 'Somente buscar', fee: 15, active: true },
+  { id: 'somente_levar', label: 'Somente levar', fee: 15, active: true },
+]
 const MONTHS_PT = {
   janeiro: 0,
   fevereiro: 1,
@@ -69,6 +78,33 @@ function appointmentServiceText(appointment, serviceLabel) {
     .filter(Boolean)
   if (names.length > 0) return names.join(', ')
   return serviceLabel(appointment?.service_type) || 'Servico nao informado'
+}
+
+function normalizeTransportOptions(storeSettings = {}) {
+  const configured = Array.isArray(storeSettings?.pet_transport_options)
+    ? storeSettings.pet_transport_options
+    : []
+  const source = configured.length > 0 ? configured : DEFAULT_TRANSPORT_OPTIONS
+  return source.map((option, index) => ({
+    id: String(option?.id || DEFAULT_TRANSPORT_OPTIONS[index]?.id || ''),
+    label: String(option?.label || DEFAULT_TRANSPORT_OPTIONS[index]?.label || 'Transporte'),
+    fee: Math.max(0, Number(String(option?.fee ?? DEFAULT_TRANSPORT_OPTIONS[index]?.fee ?? 0).replace(',', '.')) || 0),
+    active: option?.active !== false,
+  }))
+}
+
+function transportFeeForMode(options, mode) {
+  if (!mode || mode === 'cliente_leva') return 0
+  return options.find((option) => option.id === mode && option.active)?.fee || 0
+}
+
+function parseCurrency(value = '') {
+  const normalized = String(value || '')
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\./g, '')
+    .replace(',', '.')
+  const parsed = Number(normalized)
+  return Number.isFinite(parsed) ? parsed : 0
 }
 
 function storeAddress(storeSettings) {
@@ -147,9 +183,12 @@ function AgendaNativeEnhancements() {
   const [selectedDate, setSelectedDate] = useState(todayISO())
   const [headerTarget, setHeaderTarget] = useState(null)
   const [cardTargets, setCardTargets] = useState({})
+  const [modalSummary, setModalSummary] = useState(null)
   const [busyId, setBusyId] = useState('')
   const [notice, setNotice] = useState('')
-  const dragIdRef = useRef('')
+  const pointerRef = useRef(null)
+  const lastDragAtRef = useRef(0)
+  const transportOptions = useMemo(() => normalizeTransportOptions(storeSettings), [storeSettings])
 
   const operationalAppointments = useMemo(() => (
     (appointments || [])
@@ -188,6 +227,9 @@ function AgendaNativeEnhancements() {
     const responsible = appointment.responsible_staff_name || appointment.responsible_staff_key || 'Nao informado'
     const date = new Date(appointment.scheduled_at || '')
     const dateText = Number.isNaN(date.getTime()) ? 'Nao informada' : date.toLocaleDateString('pt-BR')
+    const transportFee = transportFeeForMode(transportOptions, appointment.transport_mode || appointment.motodog?.mode)
+    const total = Math.max(0, Number(appointment.price || 0))
+    const servicePrice = Math.max(0, total - transportFee)
     const line = (label, value) => `<div class="line"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value || 'Nao informado')}</span></div>`
     const content = `
       <div class="details">
@@ -201,11 +243,15 @@ function AgendaNativeEnhancements() {
         ${line('Observacoes', appointment.notes || 'Nenhuma observacao')}
       </div>
       <div class="checklist"><strong>CONTROLE:</strong><br/>[ ] Pet recebido &nbsp; [ ] Servico iniciado<br/>[ ] Servico concluido &nbsp; [ ] Tutor avisado</div>
-      <div class="total"><span>VALOR</span><span>${escapeHtml(fmtCurrency(appointment.price))}</span></div>
+      <div class="details" style="margin-top:2.5mm">
+        ${line('Servico', fmtCurrency(servicePrice))}
+        ${line('Transporte', fmtCurrency(transportFee))}
+      </div>
+      <div class="total"><span>TOTAL</span><span>${escapeHtml(fmtCurrency(total))}</span></div>
     `
     const opened = writeAndPrint(receiptShell({ storeSettings, title, content }))
     setNotice(opened ? '' : 'O navegador bloqueou a janela de impressao. Libere pop-ups para o YuiSync.')
-  }, [serviceLabel, statusBadge, storeSettings])
+  }, [serviceLabel, statusBadge, storeSettings, transportOptions])
 
   const printDay = useCallback(() => {
     const rows = operationalAppointments.map((appointment, index) => {
@@ -251,7 +297,7 @@ function AgendaNativeEnhancements() {
 
   const moveAppointment = useCallback(async (appointmentId, timeText) => {
     const appointment = operationalAppointments.find((item) => String(item.id) === String(appointmentId))
-    if (!appointment || appointment.status === 'concluido') return
+    if (!appointment || appointment.status === 'concluido' || NON_OPERATIONAL_STATUSES.has(appointment.status)) return
     const match = String(timeText || '').match(/(\d{2}):(\d{2})/)
     if (!match) return
 
@@ -276,17 +322,93 @@ function AgendaNativeEnhancements() {
 
   useEffect(() => {
     let frame = 0
-    const root = document.querySelector('.page')
-    if (!root) return undefined
+    const pageRoot = document.querySelector('.page')
+    if (!pageRoot) return undefined
 
     const isDailyAgenda = () => {
-      const button = [...root.querySelectorAll('button')].find((item) => normalizeText(item.textContent) === 'diaria')
+      const button = [...pageRoot.querySelectorAll('button')].find((item) => normalizeText(item.textContent) === 'diaria')
       return Boolean(button?.className?.includes('bg-amber'))
+    }
+
+    const restoreLegacyPrintButtons = (card) => {
+      card.querySelectorAll('[data-yuisync-hidden-print]').forEach((button) => {
+        button.style.display = button.dataset.yuisyncOriginalDisplay || ''
+        button.removeAttribute('data-yuisync-hidden-print')
+        button.removeAttribute('data-yuisync-original-display')
+      })
+    }
+
+    const hideLegacyPrintButtons = (card) => {
+      card.querySelectorAll('button').forEach((button) => {
+        if (button.closest('[data-yuisync-card-actions]')) return
+        const label = normalizeText(`${button.getAttribute('aria-label') || ''} ${button.getAttribute('title') || ''}`)
+        if (!label.includes('imprimir')) return
+        if (!button.hasAttribute('data-yuisync-hidden-print')) {
+          button.dataset.yuisyncOriginalDisplay = button.style.display || ''
+          button.dataset.yuisyncHiddenPrint = 'true'
+        }
+        button.style.display = 'none'
+      })
+    }
+
+    const syncModal = () => {
+      const serviceInput = document.querySelector('input[aria-label="Buscar servico para adicionar"]')
+      const modal = serviceInput?.closest('.modal-box')
+      if (!modal) {
+        setModalSummary(null)
+        return
+      }
+
+      const transportSelect = modal.querySelector('select[aria-label="Transporte do pet"]')
+      const totalLabel = [...modal.querySelectorAll('span')].find((element) => normalizeText(element.textContent) === 'valor total')
+      const totalCard = totalLabel?.parentElement
+      const totalValue = totalCard?.querySelector('strong')
+      if (!totalCard || !totalValue) {
+        setModalSummary(null)
+        return
+      }
+
+      let target = totalCard.querySelector('[data-yuisync-modal-total]')
+      if (!target) {
+        target = document.createElement('div')
+        target.dataset.yuisyncModalTotal = 'true'
+        target.className = 'w-full'
+        ;[...totalCard.children].forEach((child) => {
+          if (child === target) return
+          child.dataset.yuisyncOriginalDisplay = child.style.display || ''
+          child.style.display = 'none'
+        })
+        totalCard.appendChild(target)
+      }
+
+      const serviceTotal = parseCurrency(totalValue.textContent)
+      const transportMode = transportSelect?.value || 'cliente_leva'
+      setModalSummary((current) => (
+        current?.target === target
+        && current?.serviceTotal === serviceTotal
+        && current?.transportMode === transportMode
+          ? current
+          : { target, serviceTotal, transportMode }
+      ))
+
+      const durations = normalizeServiceDurations(storeSettings?.petshop_service_durations)
+      modal.querySelectorAll('[role="listbox"][aria-label="Servicos encontrados"] button').forEach((button) => {
+        const spans = button.querySelectorAll('span')
+        const label = spans.length >= 2 ? spans[spans.length - 2]?.textContent : ''
+        const detail = spans.length ? spans[spans.length - 1] : null
+        if (!label || !detail || !/\d+\s*min/i.test(detail.textContent || '')) return
+        const duration = resolvePetshopServiceDuration({
+          service: { label },
+          durations,
+          fallbackMin: Number((detail.textContent || '').match(/(\d+)\s*min/i)?.[1] || 60),
+        })
+        detail.textContent = String(detail.textContent).replace(/\d+\s*min/i, `${duration} min`)
+      })
     }
 
     const syncTargets = () => {
       frame = 0
-      const pageHeader = root.querySelector('.page-header')
+      const pageHeader = pageRoot.querySelector('.page-header')
       let nextHeader = pageHeader?.querySelector('[data-yuisync-agenda-header-actions]') || null
       if (pageHeader && !nextHeader) {
         nextHeader = document.createElement('div')
@@ -297,7 +419,7 @@ function AgendaNativeEnhancements() {
       setHeaderTarget(nextHeader)
 
       const daily = isDailyAgenda()
-      const candidates = [...root.querySelectorAll('button.w-full.text-left')]
+      const candidates = [...pageRoot.querySelectorAll('button.w-full.text-left')]
       const nextTargets = {}
       operationalAppointments.forEach((appointment) => {
         const interval = normalizeText(appointmentInterval(appointment))
@@ -310,13 +432,14 @@ function AgendaNativeEnhancements() {
         if (!card || !card.classList.contains('relative')) return
 
         card.dataset.yuisyncAppointmentId = String(appointment.id)
-        const movable = daily && appointment.status !== 'concluido' && !NON_OPERATIONAL_STATUSES.has(appointment.status)
-        card.draggable = movable
-        card.style.cursor = movable ? 'grab' : ''
-        card.title = movable ? 'Arraste para outra faixa de 10 minutos' : card.title
-
-        const legacyPrint = card.querySelector('button[title="Imprimir ficha 80 mm"]')
-        if (legacyPrint) legacyPrint.style.display = 'none'
+        card.dataset.yuisyncMovable = String(daily && appointment.status !== 'concluido' && !NON_OPERATIONAL_STATUSES.has(appointment.status))
+        card.style.cursor = card.dataset.yuisyncMovable === 'true' ? 'grab' : ''
+        card.style.touchAction = card.dataset.yuisyncMovable === 'true' ? 'none' : ''
+        card.title = card.dataset.yuisyncMovable === 'true'
+          ? 'Arraste o card para outra faixa de 10 minutos'
+          : card.title
+        trigger.style.paddingRight = '68px'
+        hideLegacyPrintButtons(card)
 
         let target = card.querySelector('[data-yuisync-card-actions]')
         if (!target) {
@@ -333,12 +456,16 @@ function AgendaNativeEnhancements() {
         nextTargets[String(appointment.id)] = target
       })
 
-      root.querySelectorAll('[data-yuisync-card-actions]').forEach((target) => {
+      pageRoot.querySelectorAll('[data-yuisync-card-actions]').forEach((target) => {
         const card = target.parentElement
         const id = card?.dataset?.yuisyncAppointmentId
-        if (!id || !nextTargets[id]) target.remove()
+        if (!id || !nextTargets[id]) {
+          restoreLegacyPrintButtons(card)
+          target.remove()
+        }
       })
       setCardTargets(nextTargets)
+      syncModal()
     }
 
     const scheduleSync = () => {
@@ -346,85 +473,159 @@ function AgendaNativeEnhancements() {
       frame = requestAnimationFrame(syncTargets)
     }
 
-    const onDragStart = (event) => {
-      const card = event.target.closest?.('[data-yuisync-appointment-id]')
-      if (!card?.draggable) return
-      dragIdRef.current = card.dataset.yuisyncAppointmentId || ''
-      event.dataTransfer?.setData('text/yuisync-appointment', dragIdRef.current)
-      event.dataTransfer?.setData('text/plain', dragIdRef.current)
-      if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move'
-      card.style.opacity = '.58'
-    }
-
-    const onDragEnd = (event) => {
-      const card = event.target.closest?.('[data-yuisync-appointment-id]')
-      if (card) card.style.opacity = ''
-      dragIdRef.current = ''
-      root.querySelectorAll('[data-yuisync-drop-active]').forEach((slot) => {
+    const clearDropHighlight = () => {
+      document.querySelectorAll('[data-yuisync-drop-active]').forEach((slot) => {
         slot.removeAttribute('data-yuisync-drop-active')
         slot.style.background = ''
+        slot.style.outline = ''
       })
     }
 
-    const findSlot = (event) => event.target.closest?.('button[aria-label^="Agendar as "]')
-    const onDragOver = (event) => {
-      const slot = findSlot(event)
-      if (!slot || !dragIdRef.current || !isDailyAgenda()) return
-      event.preventDefault()
-      if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-      slot.dataset.yuisyncDropActive = 'true'
-      slot.style.background = 'rgba(16, 185, 129, .12)'
+    const slotAtPoint = (x, y, card) => {
+      const previous = card?.style.pointerEvents || ''
+      if (card) card.style.pointerEvents = 'none'
+      const element = document.elementFromPoint(x, y)
+      if (card) card.style.pointerEvents = previous
+      return element?.closest?.('button[aria-label^="Agendar as "]') || null
     }
 
-    const onDragLeave = (event) => {
-      const slot = findSlot(event)
-      if (!slot) return
-      slot.removeAttribute('data-yuisync-drop-active')
-      slot.style.background = ''
+    const resetPointer = () => {
+      const state = pointerRef.current
+      if (state?.card) {
+        state.card.style.opacity = ''
+        state.card.style.cursor = state.card.dataset.yuisyncMovable === 'true' ? 'grab' : ''
+      }
+      pointerRef.current = null
+      document.body.style.userSelect = ''
+      clearDropHighlight()
     }
 
-    const onDrop = (event) => {
-      const slot = findSlot(event)
-      if (!slot || !isDailyAgenda()) return
+    const onPointerDown = (event) => {
+      if (event.button !== 0) return
+      const card = event.target.closest?.('[data-yuisync-appointment-id]')
+      if (!card || card.dataset.yuisyncMovable !== 'true') return
+      if (event.target.closest?.('[data-yuisync-card-actions]')) return
+      pointerRef.current = {
+        id: card.dataset.yuisyncAppointmentId,
+        card,
+        startX: event.clientX,
+        startY: event.clientY,
+        active: false,
+        slot: null,
+      }
+    }
+
+    const onPointerMove = (event) => {
+      const state = pointerRef.current
+      if (!state) return
+      const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY)
+      if (!state.active && distance < 7) return
+      if (!state.active) {
+        state.active = true
+        state.card.style.opacity = '.58'
+        state.card.style.cursor = 'grabbing'
+        document.body.style.userSelect = 'none'
+      }
       event.preventDefault()
-      const appointmentId = event.dataTransfer?.getData('text/yuisync-appointment') || dragIdRef.current
-      const time = slot.getAttribute('aria-label')?.match(/(\d{2}:\d{2})/)?.[1]
-      slot.removeAttribute('data-yuisync-drop-active')
-      slot.style.background = ''
-      dragIdRef.current = ''
-      if (appointmentId && time) void moveAppointment(appointmentId, time)
+      clearDropHighlight()
+      const slot = slotAtPoint(event.clientX, event.clientY, state.card)
+      state.slot = slot
+      if (slot && isDailyAgenda()) {
+        slot.dataset.yuisyncDropActive = 'true'
+        slot.style.background = 'rgba(16, 185, 129, .14)'
+        slot.style.outline = '2px solid rgba(52, 211, 153, .55)'
+      }
+    }
+
+    const onPointerUp = (event) => {
+      const state = pointerRef.current
+      if (!state) return
+      if (state.active) {
+        event.preventDefault()
+        lastDragAtRef.current = Date.now()
+        const slot = state.slot || slotAtPoint(event.clientX, event.clientY, state.card)
+        const time = slot?.getAttribute('aria-label')?.match(/(\d{2}:\d{2})/)?.[1]
+        const id = state.id
+        resetPointer()
+        if (id && time) void moveAppointment(id, time)
+        return
+      }
+      resetPointer()
+    }
+
+    const onClickCapture = (event) => {
+      if (Date.now() - lastDragAtRef.current > 450) return
+      if (!event.target.closest?.('[data-yuisync-appointment-id]')) return
+      event.preventDefault()
+      event.stopPropagation()
+    }
+
+    const onDocumentClick = (event) => {
+      const option = event.target.closest?.('[role="listbox"][aria-label="Servicos encontrados"] button')
+      if (!option) return
+      window.setTimeout(() => {
+        const input = document.querySelector('input[aria-label="Buscar servico para adicionar"]')
+        input?.blur()
+        document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+      }, 0)
+    }
+
+    const onDocumentChange = (event) => {
+      if (event.target?.matches?.('select[aria-label="Transporte do pet"]')) scheduleSync()
     }
 
     syncTargets()
     const observer = new MutationObserver(scheduleSync)
-    observer.observe(root, { childList: true, subtree: true, characterData: true })
-    root.addEventListener('dragstart', onDragStart)
-    root.addEventListener('dragend', onDragEnd)
-    root.addEventListener('dragover', onDragOver)
-    root.addEventListener('dragleave', onDragLeave)
-    root.addEventListener('drop', onDrop)
+    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    pageRoot.addEventListener('pointerdown', onPointerDown)
+    pageRoot.addEventListener('click', onClickCapture, true)
+    document.addEventListener('pointermove', onPointerMove, { passive: false })
+    document.addEventListener('pointerup', onPointerUp, { passive: false })
+    document.addEventListener('pointercancel', resetPointer)
+    document.addEventListener('click', onDocumentClick)
+    document.addEventListener('change', onDocumentChange)
 
     return () => {
       if (frame) cancelAnimationFrame(frame)
       observer.disconnect()
-      root.removeEventListener('dragstart', onDragStart)
-      root.removeEventListener('dragend', onDragEnd)
-      root.removeEventListener('dragover', onDragOver)
-      root.removeEventListener('dragleave', onDragLeave)
-      root.removeEventListener('drop', onDrop)
-      root.querySelectorAll('[data-yuisync-card-actions]').forEach((target) => target.remove())
-      root.querySelectorAll('[data-yuisync-appointment-id]').forEach((card) => {
-        card.removeAttribute('data-yuisync-appointment-id')
-        card.removeAttribute('draggable')
-        card.style.cursor = ''
-        card.style.opacity = ''
-        const legacyPrint = card.querySelector('button[title="Imprimir ficha 80 mm"]')
-        if (legacyPrint) legacyPrint.style.display = ''
+      pageRoot.removeEventListener('pointerdown', onPointerDown)
+      pageRoot.removeEventListener('click', onClickCapture, true)
+      document.removeEventListener('pointermove', onPointerMove)
+      document.removeEventListener('pointerup', onPointerUp)
+      document.removeEventListener('pointercancel', resetPointer)
+      document.removeEventListener('click', onDocumentClick)
+      document.removeEventListener('change', onDocumentChange)
+      resetPointer()
+      pageRoot.querySelectorAll('[data-yuisync-card-actions]').forEach((target) => {
+        restoreLegacyPrintButtons(target.parentElement)
+        target.remove()
       })
-      const header = root.querySelector('[data-yuisync-agenda-header-actions]')
+      pageRoot.querySelectorAll('[data-yuisync-appointment-id]').forEach((card) => {
+        card.removeAttribute('data-yuisync-appointment-id')
+        card.removeAttribute('data-yuisync-movable')
+        card.style.cursor = ''
+        card.style.touchAction = ''
+        card.style.opacity = ''
+        const trigger = card.querySelector('button.w-full.text-left')
+        if (trigger) trigger.style.paddingRight = ''
+      })
+      const header = pageRoot.querySelector('[data-yuisync-agenda-header-actions]')
       header?.remove()
+      document.querySelectorAll('[data-yuisync-modal-total]').forEach((target) => {
+        const parent = target.parentElement
+        target.remove()
+        parent?.querySelectorAll('[data-yuisync-original-display]').forEach((child) => {
+          child.style.display = child.dataset.yuisyncOriginalDisplay || ''
+          child.removeAttribute('data-yuisync-original-display')
+        })
+      })
     }
-  }, [moveAppointment, operationalAppointments])
+  }, [moveAppointment, operationalAppointments, storeSettings?.petshop_service_durations])
+
+  const modalTransportFee = modalSummary
+    ? transportFeeForMode(transportOptions, modalSummary.transportMode)
+    : 0
+  const modalTotal = (modalSummary?.serviceTotal || 0) + modalTransportFee
 
   return (
     <>
@@ -442,6 +643,24 @@ function AgendaNativeEnhancements() {
         headerTarget,
       )}
 
+      {modalSummary?.target && createPortal(
+        <div className="space-y-1 text-sm">
+          <div className="flex items-center justify-between gap-3 text-muted">
+            <span>Servico</span>
+            <strong className="text-text">{fmtCurrency(modalSummary.serviceTotal)}</strong>
+          </div>
+          <div className="flex items-center justify-between gap-3 text-muted">
+            <span>Transporte</span>
+            <strong className="text-text">{fmtCurrency(modalTransportFee)}</strong>
+          </div>
+          <div className="mt-2 flex items-center justify-between gap-3 border-t border-emerald-500/25 pt-2">
+            <span className="font-black uppercase tracking-wider text-emerald-300">Total</span>
+            <strong className="text-xl text-emerald-400">{fmtCurrency(modalTotal)}</strong>
+          </div>
+        </div>,
+        modalSummary.target,
+      )}
+
       {Object.entries(cardTargets).map(([appointmentId, target]) => {
         const appointment = operationalAppointments.find((item) => String(item.id) === appointmentId)
         if (!appointment || !target) return null
@@ -451,6 +670,7 @@ function AgendaNativeEnhancements() {
           <>
             <button
               type="button"
+              data-yuisync-action="print"
               aria-label="Imprimir agendamento"
               title="Imprimir agendamento"
               onClick={(event) => {
@@ -464,6 +684,7 @@ function AgendaNativeEnhancements() {
             {canComplete && (
               <button
                 type="button"
+                data-yuisync-action="complete"
                 aria-label="Concluir agendamento"
                 title="Concluir agendamento"
                 disabled={busy}
