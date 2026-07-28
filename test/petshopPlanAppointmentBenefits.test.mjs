@@ -14,7 +14,13 @@ test('pacote pode abater banho e MotoDog sem recolocar tarifa no preview', () =>
   const bothCovered = appointmentPriceBreakdown({
     price: 0,
     transport_mode: 'buscar_e_levar',
-    service_items: [{ code: 'banho_pequeno', unit_price: 0, catalog_price: 55, benefit_used: true }],
+    service_items: [{
+      code: 'banho_pequeno',
+      unit_price: 0,
+      catalog_price: 55,
+      benefit_used: true,
+      transport_benefit_used: true,
+    }],
   }, transportOptions)
 
   assert.deepEqual(bothCovered, { service: 0, transport: 0, total: 0 })
@@ -31,13 +37,20 @@ test('pacote pode cobrir somente banho ou somente MotoDog', () => {
   const transportCovered = appointmentPriceBreakdown({
     price: 55,
     transport_mode: 'buscar_e_levar',
-    service_items: [{ code: 'banho_pequeno', unit_price: 55, catalog_price: 55, benefit_used: false }],
+    service_items: [{
+      code: 'banho_pequeno',
+      unit_price: 55,
+      catalog_price: 55,
+      benefit_used: false,
+      transport_benefit_used: true,
+    }],
   }, transportOptions)
   assert.deepEqual(transportCovered, { service: 55, transport: 0, total: 55 })
 })
 
 test('migration reserva, consome e devolve beneficios de banho e MotoDog', async () => {
   const migration = await read('supabase/migrations/20260728004000_petshop_plan_appointment_benefits.sql')
+  const snapshot = await read('supabase/migrations/20260728004100_petshop_plan_transport_snapshot.sql')
 
   assert.match(migration, /petshop_plan_service_key/)
   assert.match(migration, /array\[v_service\.code, v_generic_key\]/)
@@ -47,6 +60,8 @@ test('migration reserva, consome e devolve beneficios de banho e MotoDog', async
   assert.match(migration, /'consumed'/)
   assert.match(migration, /'released'/)
   assert.match(migration, /release_petshop_subscription_benefit/)
+  assert.match(snapshot, /transport_benefit_used/)
+  assert.match(snapshot, /kind' = 'transport/)
 })
 
 test('migration corrige o upsert legado de pets antes da policy RLS', async () => {
