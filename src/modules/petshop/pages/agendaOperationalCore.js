@@ -102,11 +102,16 @@ export function servicePriceFromItems(appointment) {
 
 export function appointmentPriceBreakdown(appointment, transportOptions) {
   const transportMode = appointment?.transport_mode || appointment?.motodog?.mode || 'cliente_leva'
-  const transport = transportFeeForMode(transportOptions, transportMode)
+  const catalogTransport = transportFeeForMode(transportOptions, transportMode)
   const stored = Math.max(0, moneyNumber(appointment?.price))
+  const items = Array.isArray(appointment?.service_items) ? appointment.service_items : []
   const itemService = servicePriceFromItems(appointment)
+  const transportCovered = items.some((item) => item?.transport_benefit_used === true)
 
-  if (itemService > 0) {
+  // O snapshot explicita quando o MotoDog foi abatido. Sem essa marca, preserva
+  // a reconciliacao legada: servico armazenado + tarifa configurada.
+  if (items.length > 0) {
+    const transport = transportCovered ? 0 : catalogTransport
     return {
       service: itemService,
       transport,
@@ -114,15 +119,16 @@ export function appointmentPriceBreakdown(appointment, transportOptions) {
     }
   }
 
-  if (transport > 0 && stored >= transport) {
+  // Compatibilidade com agendamentos antigos que nao possuem service_items.
+  if (catalogTransport > 0 && stored >= catalogTransport) {
     return {
-      service: Math.max(0, stored - transport),
-      transport,
+      service: Math.max(0, stored - catalogTransport),
+      transport: catalogTransport,
       total: stored,
     }
   }
 
-  return { service: stored, transport, total: stored + transport }
+  return { service: stored, transport: 0, total: stored }
 }
 
 export function slotTimeFromAria(slot) {
