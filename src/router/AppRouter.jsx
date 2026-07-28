@@ -3,6 +3,7 @@ import { Routes, Route, Navigate, useLocation, useNavigate } from 'react-router-
 import { Menu } from 'lucide-react'
 import { useAuthCtx } from '../context/AuthContext'
 import { useModuleCtx } from '../context/ModuleContext'
+import { usePerformanceCtx } from '../context/PerformanceContext'
 import StarField from '../shared/components/StarField'
 import { LoadingScreen } from '../components/LoadingScreen'
 import { Sidebar } from '../components/Sidebar'
@@ -10,6 +11,7 @@ import { SupportWidget } from '../components/SupportWidget'
 import { SystemSupportPriorityAlert } from '../components/SystemSupportPriorityAlert'
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary'
 import { LoadingState } from '../components/PageState'
+import { PerformanceModeButton } from '../components/PerformanceModeButton'
 
 const LoginPage = lazy(() => import('../shared/pages/LoginPage'))
 const LauncherPage = lazy(() => import('../shared/pages/LauncherPage'))
@@ -52,6 +54,7 @@ function getAccessiblePages(activeModule, profile) {
 
 function AppLayout() {
   const { activeModule, activeModuleId, setActiveModuleId } = useModuleCtx()
+  const { isFluidMode } = usePerformanceCtx()
   const {
     profile,
     signOut,
@@ -128,7 +131,12 @@ function AppLayout() {
 
   return (
     <div className={`flex h-screen bg-bg overflow-hidden font-body theme-${activeModuleId} ${darkMode ? 'theme-dark' : ''} relative`}>
-      {activeModuleId !== 'petshop' && <StarField count={80} className="text-emerald-500" />}
+      {!focusMode && (
+        <div className="absolute right-4 top-3 z-30 hidden lg:block">
+          <PerformanceModeButton />
+        </div>
+      )}
+      {activeModuleId !== 'petshop' && <StarField count={isFluidMode ? 32 : 80} className="text-emerald-500" />}
       {!focusMode && (
         <Sidebar
           profile={profile}
@@ -149,9 +157,12 @@ function AppLayout() {
           <span className="font-display font-bold text-sm text-text">
             {storeSettings?.store_name || activeModule.name}
           </span>
-          <button type="button" aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'} onClick={() => setDarkMode((current) => !current)} className="ml-auto btn btn-ghost btn-sm btn-icon">
-            {darkMode ? '☀' : '◐'}
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            <PerformanceModeButton compact />
+            <button type="button" aria-label={darkMode ? 'Ativar modo claro' : 'Ativar modo noturno'} onClick={() => setDarkMode((current) => !current)} className="btn btn-ghost btn-sm btn-icon">
+              {darkMode ? '☀' : '◐'}
+            </button>
+          </div>
         </header>}
 
         <main className="flex-1 overflow-y-auto">

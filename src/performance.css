@@ -1,0 +1,91 @@
+/* Modo fluido: preserva gráficos, neon e identidade visual, mas evita trabalho sem informação visível. */
+.performance-mode-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  min-height: 34px;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--primary-border);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  color: var(--primary);
+  box-shadow: 0 0 16px color-mix(in srgb, var(--primary) 12%, transparent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  transition: border-color 150ms ease, background-color 150ms ease, box-shadow 150ms ease;
+}
+
+.performance-mode-button:hover {
+  border-color: color-mix(in srgb, var(--primary) 48%, transparent);
+  background: color-mix(in srgb, var(--primary-bg-light) 75%, var(--surface));
+  box-shadow: 0 0 22px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+
+.performance-mode-button-compact {
+  width: 34px;
+  min-height: 32px;
+  padding: 0;
+}
+
+/* O navegador não monta nem pinta blocos abaixo da dobra até eles se aproximarem da tela. */
+html.yuisync-performance-fluid .page > * {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 420px;
+}
+
+/* Mantém iluminação e movimento, com menos partículas decorativas simultâneas. */
+html.yuisync-performance-fluid .star:nth-child(n + 33) {
+  display: none;
+}
+
+html.yuisync-performance-fluid .star {
+  animation-duration: 18s;
+}
+
+html.yuisync-performance-fluid .animate-particle,
+html.yuisync-performance-fluid .animate-mote-shot {
+  animation-duration: 9s;
+}
+
+/* Blur grande é caro em GPU integrada; o fundo ainda permanece suavizado. */
+html.yuisync-performance-fluid .modal-overlay {
+  -webkit-backdrop-filter: blur(3px);
+  backdrop-filter: blur(3px);
+}
+
+/* Evita repintura de conteúdo extenso fora da viewport. */
+html.yuisync-performance-fluid .tbl-wrapper,
+html.yuisync-performance-fluid .card-static,
+html.yuisync-performance-fluid .performance-deferred {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 360px;
+}
+
+/* Nada precisa continuar animando quando a aba não está visível. */
+html.yuisync-page-hidden *,
+html.yuisync-page-hidden *::before,
+html.yuisync-page-hidden *::after {
+  animation-play-state: paused !important;
+}
+
+/* Os gráficos e brilhos permanecem ativos. Reduzimos somente movimentos de cartões sem informação nova. */
+html.yuisync-performance-fluid .kpi-card,
+html.yuisync-performance-fluid .revenue-mix-card {
+  transition: border-color 140ms ease, box-shadow 160ms ease, filter 140ms ease;
+}
+
+html.yuisync-performance-fluid .kpi-card:hover,
+html.yuisync-performance-fluid .revenue-mix-card:hover {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .star,
+  .animate-particle,
+  .animate-mote-shot,
+  .revenue-mix-card-glow {
+    animation-play-state: paused !important;
+  }
+}
