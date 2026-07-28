@@ -102,27 +102,34 @@ export function servicePriceFromItems(appointment) {
 
 export function appointmentPriceBreakdown(appointment, transportOptions) {
   const transportMode = appointment?.transport_mode || appointment?.motodog?.mode || 'cliente_leva'
-  const transport = transportFeeForMode(transportOptions, transportMode)
+  const catalogTransport = transportFeeForMode(transportOptions, transportMode)
   const stored = Math.max(0, moneyNumber(appointment?.price))
+  const items = Array.isArray(appointment?.service_items) ? appointment.service_items : []
   const itemService = servicePriceFromItems(appointment)
 
-  if (itemService > 0) {
+  // Quando existe snapshot de itens, o valor persistido e a fonte de verdade do
+  // que ainda deve ser cobrado. Assim um pacote pode zerar somente o banho,
+  // somente o MotoDog ou os dois sem o preview recolocar a tarifa abatida.
+  if (items.length > 0) {
+    const total = Math.max(stored, itemService)
+    const transport = Math.min(catalogTransport, Math.max(0, total - itemService))
     return {
       service: itemService,
       transport,
-      total: Math.max(stored, itemService + transport),
+      total,
     }
   }
 
-  if (transport > 0 && stored >= transport) {
+  // Compatibilidade com agendamentos antigos que nao possuem service_items.
+  if (catalogTransport > 0 && stored >= catalogTransport) {
     return {
-      service: Math.max(0, stored - transport),
-      transport,
+      service: Math.max(0, stored - catalogTransport),
+      transport: catalogTransport,
       total: stored,
     }
   }
 
-  return { service: stored, transport, total: stored + transport }
+  return { service: stored, transport: 0, total: stored }
 }
 
 export function slotTimeFromAria(slot) {
