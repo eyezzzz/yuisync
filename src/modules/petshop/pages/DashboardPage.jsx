@@ -1,19 +1,19 @@
-﻿import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useRef } from 'react'
 import { AlertTriangle, TrendingUp, Calendar, MessageSquare, PawPrint, ArrowRight, ShoppingCart, ShieldAlert, Star, UserCheck } from 'lucide-react'
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip as RechartsTooltip } from 'recharts'
-import { useProducts }      from '../../../shared/hooks/useProducts'
-import { useAppointments }  from '../../../shared/hooks/useAppointments'
-import { useSales }         from '../../../shared/hooks/useSales'
-import { useChat }          from '../../../shared/hooks/useChat'
+import { useProducts } from '../../../shared/hooks/useProducts'
+import { useAppointments } from '../../../shared/hooks/useAppointments'
+import { useSales } from '../../../shared/hooks/useSales'
+import { useChat } from '../../../shared/hooks/useChat'
 import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
+import { usePerformanceCtx } from '../../../context/PerformanceContext'
 import { useAnalytics } from '../../../shared/hooks/useAnalytics'
 import AIHoursSavedCard from '../components/AIHoursSavedCard'
 import { buildAIHoursFromScopedSessions } from '../utils/aiHoursSaved'
 import { EmptyState, LoadingState } from '../../../components/PageState'
 
-// â”€â”€ KPI Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function KpiCard({ accent, icon: Icon, label, value, sub, onClick }) {
   return (
     <button
@@ -101,7 +101,7 @@ function RevenueMixCard({ value, sub, mix = [], onClick }) {
     </button>
   )
 }
-// â”€â”€ Stock Alert Row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
 function StockAlert({ product }) {
   const isEmpty = product.stock_quantity === 0
   return (
@@ -122,7 +122,6 @@ function StockAlert({ product }) {
   )
 }
 
-// â”€â”€ Appointment Row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 function ApptRow({ appt, serviceLabel, statusBadge, isAdmin }) {
   const sb = statusBadge(appt.status)
   return (
@@ -143,44 +142,105 @@ function ApptRow({ appt, serviceLabel, statusBadge, isAdmin }) {
   )
 }
 
-// â”€â”€ Dashboard Page â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 export default function DashboardPage({ setPage }) {
   const auth = useAuthCtx()
   const { activeModuleId } = useModuleCtx()
-  
-  const isAdmin = auth?.profile?.role === 'admin' || 
-                 (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
+  const { isFluidMode } = usePerformanceCtx()
 
-  const { getCriticalStock }                        = useProducts()
+  const isAdmin = auth?.profile?.role === 'admin'
+    || (auth?.profile?.module_permissions || {})[activeModuleId]?.startsWith('admin_')
+
+  const { getCriticalStock } = useProducts()
   const { load, appointments, todayStats, serviceLabel, statusBadge } = useAppointments()
-  const { loadMetrics, getDailyStats, dailyRevenue } = useSales()
-  const { loadSessions, sessions }                  = useChat()
+  const { loadMetrics, getDailyStats } = useSales()
+  const { loadSessions, sessions } = useChat()
   const { getChatResolutionMetrics } = useAnalytics()
-  // const { activeModuleId } = useModuleCtx()
 
-  const [critical, setCritical]     = useState([])
-  const [stats, setStats]           = useState({ revenue: 0, count: 0, upsells: 0, salesMix: [] })
+  const [critical, setCritical] = useState([])
+  const [stats, setStats] = useState({ revenue: 0, count: 0, upsells: 0, salesMix: [] })
   const [chatQuality, setChatQuality] = useState({ avgCsat: null, csatCount: 0, aiResolved: 0, humanResolved: 0, closedCount: 0, blockedReasons: {} })
-  const [loading, setLoading]       = useState(true)
+  const [loading, setLoading] = useState(true)
+  const [secondaryLoading, setSecondaryLoading] = useState(true)
+  const refreshInFlightRef = useRef(false)
+  const secondaryInFlightRef = useRef(false)
+  const idleHandleRef = useRef(null)
+
+  const loadSecondaryContent = useCallback(async () => {
+    if (secondaryInFlightRef.current || document.hidden) return
+    secondaryInFlightRef.current = true
+    setSecondaryLoading(true)
+    try {
+      await Promise.all([
+        loadMetrics(),
+        getCriticalStock().then(setCritical),
+        getChatResolutionMetrics().then(setChatQuality),
+      ])
+    } finally {
+      secondaryInFlightRef.current = false
+      setSecondaryLoading(false)
+    }
+  }, [loadMetrics, getCriticalStock, getChatResolutionMetrics])
+
+  const scheduleSecondaryContent = useCallback(() => {
+    if (document.hidden) return
+    if (idleHandleRef.current) {
+      if ('cancelIdleCallback' in window) window.cancelIdleCallback(idleHandleRef.current)
+      else window.clearTimeout(idleHandleRef.current)
+    }
+
+    const run = () => {
+      idleHandleRef.current = null
+      void loadSecondaryContent()
+    }
+
+    if (isFluidMode && 'requestIdleCallback' in window) {
+      idleHandleRef.current = window.requestIdleCallback(run, { timeout: 1200 })
+    } else if (isFluidMode) {
+      idleHandleRef.current = window.setTimeout(run, 240)
+    } else {
+      run()
+    }
+  }, [isFluidMode, loadSecondaryContent])
 
   const reloadAll = useCallback(async () => {
+    if (refreshInFlightRef.current || document.hidden) return
+    refreshInFlightRef.current = true
     setLoading(true)
-    await Promise.all([
-      load({ date: todayISO() }),
-      loadMetrics(),
-      loadSessions('bot'),
-      getCriticalStock().then(setCritical),
-      getDailyStats().then(setStats),
-      getChatResolutionMetrics().then(setChatQuality),
-    ])
-    setLoading(false)
-  }, [load, loadMetrics, loadSessions, getCriticalStock, getDailyStats, getChatResolutionMetrics])
+
+    try {
+      await Promise.all([
+        load({ date: todayISO() }),
+        loadSessions('bot'),
+        getDailyStats().then(setStats),
+      ])
+      setLoading(false)
+      scheduleSecondaryContent()
+    } finally {
+      refreshInFlightRef.current = false
+      setLoading(false)
+    }
+  }, [load, loadSessions, getDailyStats, scheduleSecondaryContent])
 
   useEffect(() => {
-    reloadAll()
-    const interval = setInterval(reloadAll, 60_000)
-    return () => clearInterval(interval)
-  }, [reloadAll, activeModuleId])
+    const intervalMs = isFluidMode ? 120_000 : 60_000
+    const refreshWhenVisible = () => {
+      if (!document.hidden) void reloadAll()
+    }
+
+    void reloadAll()
+    const interval = window.setInterval(refreshWhenVisible, intervalMs)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+      if (idleHandleRef.current) {
+        if ('cancelIdleCallback' in window) window.cancelIdleCallback(idleHandleRef.current)
+        else window.clearTimeout(idleHandleRef.current)
+        idleHandleRef.current = null
+      }
+    }
+  }, [reloadAll, activeModuleId, isFluidMode])
 
   const ts = todayStats()
   const openChats = sessions.filter(s => s.status !== 'closed').length
@@ -199,7 +259,6 @@ export default function DashboardPage({ setPage }) {
 
   return (
     <div className="page animate-content">
-      {/* Header */}
       <div>
         <h1 className="page-title !flex items-center gap-3">
           <div className="w-2.5 h-2.5 bg-primary rounded-full animate-pulse shadow-[0_0_10px_rgba(0,224,255,0.8)]" />
@@ -210,7 +269,6 @@ export default function DashboardPage({ setPage }) {
         </p>
       </div>
 
-      {/* KPI Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-12 gap-4 items-stretch">
         <AIHoursSavedCard
           className="md:col-span-2 xl:col-span-8"
@@ -292,10 +350,7 @@ export default function DashboardPage({ setPage }) {
         </div>
       </div>
 
-      {/* Body Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-
-        {/* Today's Agenda */}
         <div className="lg:col-span-2 bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
           <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border2)]">
             <h2 className="section-title">Agenda de Hoje</h2>
@@ -327,8 +382,7 @@ export default function DashboardPage({ setPage }) {
           )}
         </div>
 
-        {/* Critical Stock */}
-        <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
+        <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden performance-deferred">
           <div className="flex items-center justify-between px-5 py-4 border-b border-[var(--border2)]">
             <h2 className="section-title flex items-center gap-2">
               <AlertTriangle size={16} className="text-amber-400" />
@@ -339,7 +393,7 @@ export default function DashboardPage({ setPage }) {
             </button>
           </div>
           <div className="p-4 space-y-2.5 overflow-y-auto" style={{ maxHeight: 340 }}>
-            {loading ? (
+            {secondaryLoading ? (
               <LoadingState label="Verificando estoque..." />
             ) : critical.length === 0 ? (
               <EmptyState title="Estoque em dia" description="Nenhum produto esta abaixo do minimo." />
@@ -350,8 +404,7 @@ export default function DashboardPage({ setPage }) {
         </div>
       </div>
 
-      {/* Quick Actions */}
-      <div className="bg-card border border-[var(--border)] rounded-xl2 p-5">
+      <div className="bg-card border border-[var(--border)] rounded-xl2 p-5 performance-deferred">
         <h2 className="section-title mb-4">Ações Rápidas</h2>
         <div className="flex flex-wrap gap-3">
           <button onClick={() => setPage('agenda')} className="btn btn-secondary">
@@ -366,7 +419,6 @@ export default function DashboardPage({ setPage }) {
           <button onClick={() => setPage('chat')} className="btn btn-secondary">
             <MessageSquare size={16} /> Ver Chats
           </button>
-          
         </div>
       </div>
     </div>
