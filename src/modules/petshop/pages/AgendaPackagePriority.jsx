@@ -42,11 +42,27 @@ function ensurePortalRoot(parent, attribute, position = 'append') {
   return root
 }
 
+function ensurePortalRootAfter(reference, attribute) {
+  if (!reference?.parentElement) return null
+  const parent = reference.parentElement
+  let root = parent.querySelector(`:scope > [${attribute}]`)
+  if (!root) {
+    root = document.createElement('div')
+    root.setAttribute(attribute, 'true')
+    reference.insertAdjacentElement('afterend', root)
+  }
+  return root
+}
+
 function restoreDecorations(modal) {
   if (!modal) return
   modal.querySelectorAll('[data-yuisync-package-original-text]').forEach((element) => {
     element.textContent = element.dataset.yuisyncPackageOriginalText || element.textContent
     delete element.dataset.yuisyncPackageOriginalText
+  })
+  modal.querySelectorAll('[data-yuisync-package-original-display]').forEach((element) => {
+    element.style.display = element.dataset.yuisyncPackageOriginalDisplay || ''
+    delete element.dataset.yuisyncPackageOriginalDisplay
   })
   const transportOption = modal.querySelector('select[aria-label="Transporte do pet"] option[value="buscar_e_levar"]')
   if (transportOption?.dataset.yuisyncPackageOriginalLabel) {
@@ -70,6 +86,12 @@ function serviceRowLabel(row) {
 function serviceRowMetadata(row) {
   return [...(row?.querySelectorAll?.('span') || [])]
     .find((span) => String(span.className || '').includes('text-xs') && String(span.className || '').includes('text-muted')) || null
+}
+
+function serviceOptionLabel(button) {
+  return [...(button?.querySelectorAll?.('span') || [])]
+    .find((span) => String(span.className || '').includes('font-bold') && String(span.className || '').includes('text-sm'))
+    ?.textContent?.trim() || ''
 }
 
 function currentServiceGroup(modal) {
@@ -185,7 +207,7 @@ export default function AgendaPackagePriority() {
 
   const resolveSubscription = useCallback((text, rows = subscriptions) => {
     const matched = matchActiveSubscriptionByText(rows, text)
-    setActiveSubscription((current) => current?.id === matched?.id ? current : matched)
+    setActiveSubscription((current) => current === matched ? current : matched)
     return matched
   }, [subscriptions])
 
@@ -198,20 +220,23 @@ export default function AgendaPackagePriority() {
     setNativeInputValue(input, entry.label)
     window.setTimeout(() => {
       const target = [...listbox.querySelectorAll('button[role="option"]')]
-        .find((button) => normalizePlanText(button.textContent).includes(normalizePlanText(entry.label)))
+        .find((button) => normalizePlanText(serviceOptionLabel(button)) === normalizePlanText(entry.label))
       target?.click()
     }, 80)
   }, [])
 
   const applyVisualPricing = useCallback((modal, currentUsage) => {
-    restoreDecorations(modal)
-    if (!activeSubscription) return
+    if (!activeSubscription) {
+      restoreDecorations(modal)
+      return
+    }
 
     const availableByLabel = new Map(currentUsage
       .filter((item) => item.service_kind === 'catalog' && item.catalog_service && item.remaining > 0)
       .map((item) => [normalizePlanText(item.label), item]))
     const catalogByLabel = new Map(catalogServices.map((service) => [normalizePlanText(service.name || service.label), service]))
     let previewTotal = 0
+    let hasPackageService = false
 
     selectedServiceRows(modal).forEach((row) => {
       const label = serviceRowLabel(row)
@@ -220,26 +245,53 @@ export default function AgendaPackagePriority() {
       const benefit = availableByLabel.get(normalizedLabel)
       const catalogService = catalogByLabel.get(normalizedLabel)
       previewTotal += benefit ? 0 : Number(catalogService?.default_price || catalogService?.price || 0)
+      hasPackageService ||= Boolean(benefit)
 
-      if (benefit && metadata) {
-        metadata.dataset.yuisyncPackageOriginalText = metadata.textContent || ''
-        metadata.textContent = `R$ 0,00 · Incluso no ${planName}`
+      if (!metadata) return
+      if (benefit) {
+        if (!metadata.dataset.yuisyncPackageOriginalText) metadata.dataset.yuisyncPackageOriginalText = metadata.textContent || ''
+        const desired = `R$ 0,00 · Incluso no ${planName}`
+        if (metadata.textContent !== desired) metadata.textContent = desired
+      } else if (metadata.dataset.yuisyncPackageOriginalText) {
+        metadata.textContent = metadata.dataset.yuisyncPackageOriginalText
+        delete metadata.dataset.yuisyncPackageOriginalText
       }
     })
 
     const totalLabel = findTextElement(modal, (text) => normalizePlanText(text) === 'valor total')
-    const totalCard = totalLabel?.parentElement
-    const totalValue = totalCard?.querySelector('strong')
-    if (totalValue && selectedServiceRows(modal).length) {
-      totalValue.dataset.yuisyncPackageOriginalText = totalValue.textContent || ''
-      totalValue.textContent = money.format(previewTotal)
+    const totalValue = totalLabel?.parentElement?.querySelector('strong')
+    if (totalValue && hasPackageService) {
+      if (!totalValue.dataset.yuisyncPackageOriginalText) totalValue.dataset.yuisyncPackageOriginalText = totalValue.textContent || ''
+      const desired = money.format(previewTotal)
+      if (totalValue.textContent !== desired) totalValue.textContent = desired
+    } else if (totalValue?.dataset.yuisyncPackageOriginalText) {
+      totalValue.textContent = totalValue.dataset.yuisyncPackageOriginalText
+      delete totalValue.dataset.yuisyncPackageOriginalText
     }
+
+    const listbox = modal.querySelector('[role="listbox"][aria-label="Servicos encontrados"]')
+    ;[...(listbox?.querySelectorAll?.('button[role="option"]') || [])].forEach((button) => {
+      const included = availableByLabel.has(normalizePlanText(serviceOptionLabel(button)))
+      if (included) {
+        if (button.dataset.yuisyncPackageOriginalDisplay === undefined) button.dataset.yuisyncPackageOriginalDisplay = button.style.display || ''
+        if (button.style.display !== 'none') button.style.display = 'none'
+      } else if (button.dataset.yuisyncPackageOriginalDisplay !== undefined) {
+        button.style.display = button.dataset.yuisyncPackageOriginalDisplay
+        delete button.dataset.yuisyncPackageOriginalDisplay
+      }
+    })
 
     const transportSelect = modal.querySelector('select[aria-label="Transporte do pet"]')
     const transportOption = transportSelect?.querySelector('option[value="buscar_e_levar"]')
     if (transportOption && motoDogBalance?.remaining > 0) {
-      transportOption.dataset.yuisyncPackageOriginalLabel = transportOption.textContent || 'MotoDog - buscar e levar'
-      transportOption.textContent = `MotoDog - buscar e levar · incluso no ${planName} (${motoDogBalance.remaining} disponíveis)`
+      if (!transportOption.dataset.yuisyncPackageOriginalLabel) {
+        transportOption.dataset.yuisyncPackageOriginalLabel = transportOption.textContent || 'MotoDog - buscar e levar'
+      }
+      const desired = `MotoDog - buscar e levar · incluso no ${planName} (${motoDogBalance.remaining} disponíveis)`
+      if (transportOption.textContent !== desired) transportOption.textContent = desired
+    } else if (transportOption?.dataset.yuisyncPackageOriginalLabel) {
+      transportOption.textContent = transportOption.dataset.yuisyncPackageOriginalLabel
+      delete transportOption.dataset.yuisyncPackageOriginalLabel
     }
   }, [activeSubscription, catalogServices, motoDogBalance?.remaining, planName])
 
@@ -264,11 +316,12 @@ export default function AgendaPackagePriority() {
       if (selectedClientButton) resolveSubscription(selectedClientButton.textContent, fresh.subscriptionRows)
     }
 
-    setServiceGroup(currentServiceGroup(modal))
+    const nextGroup = currentServiceGroup(modal)
+    setServiceGroup((current) => current === nextGroup ? current : nextGroup)
     const serviceLabel = [...modal.querySelectorAll('label')]
       .find((label) => normalizePlanText(label.textContent).startsWith('servicos '))
-    const summary = serviceLabel?.parentElement
-      ? ensurePortalRoot(serviceLabel.parentElement, 'data-yuisync-package-summary-root', 'append')
+    const summary = serviceLabel
+      ? ensurePortalRootAfter(serviceLabel, 'data-yuisync-package-summary-root')
       : null
     setSummaryRoot((current) => current === summary ? current : summary)
 
@@ -277,7 +330,8 @@ export default function AgendaPackagePriority() {
     setPriorityRoot((current) => current === priority ? current : priority)
 
     const transportSelect = modal.querySelector('select[aria-label="Transporte do pet"]')
-    setTransportMode(transportSelect?.value || 'cliente_leva')
+    const nextTransportMode = transportSelect?.value || 'cliente_leva'
+    setTransportMode((current) => current === nextTransportMode ? current : nextTransportMode)
     const transport = transportSelect?.parentElement
       ? ensurePortalRoot(transportSelect.parentElement, 'data-yuisync-package-transport-root', 'append')
       : null
@@ -297,7 +351,7 @@ export default function AgendaPackagePriority() {
   useEffect(() => {
     void refreshData()
     const observer = new MutationObserver(scheduleSync)
-    observer.observe(document.body, { childList: true, subtree: true, characterData: true })
+    observer.observe(document.body, { childList: true, subtree: true })
 
     const onClick = (event) => {
       const clientOption = event.target.closest?.('[role="listbox"][aria-label="Resultados de clientes"] [role="option"]')
