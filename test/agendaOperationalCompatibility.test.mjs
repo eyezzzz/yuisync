@@ -7,24 +7,30 @@ const read = (path) => readFile(new URL(path, root), 'utf8')
 
 test('agenda operacional nao injeta scripts globais no bootstrap', async () => {
   const main = await read('src/main.jsx')
-  const modules = await read('src/config/modules.jsx')
+  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
 
   assert.doesNotMatch(main, /agendaOperationalFixes/)
-  assert.match(modules, /AgendaIntegratedPage/)
-  assert.doesNotMatch(modules, /AgendaFinalPage/)
+  assert.match(integrated, /AgendaResolvedPage/)
+  assert.doesNotMatch(integrated, /AgendaStablePage/)
 })
 
-test('integracao mantem um unico botao card verde e arraste com autoscroll', async () => {
-  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
-  const styles = await read('src/modules/petshop/pages/AgendaIntegratedPage.css')
+test('implementacao resolvida mantem um unico observer e uma unica barra de acoes', async () => {
+  const resolved = await read('src/modules/petshop/pages/AgendaResolvedPage.jsx')
+  const styles = await read('src/modules/petshop/pages/AgendaResolvedPage.css')
 
-  assert.match(integrated, /outer\.style\.pointerEvents = 'none'/)
-  assert.match(integrated, /card\.style\.pointerEvents = 'auto'/)
-  assert.match(integrated, /data-yuisync-hidden-legacy-print/)
-  assert.match(integrated, /dragstart/)
-  assert.match(integrated, /dragover/)
-  assert.match(integrated, /autoScrollTick/)
-  assert.match(integrated, /slotAtPoint/)
-  assert.match(styles, /background: linear-gradient/)
-  assert.match(styles, /#065f46/)
+  assert.match(resolved, /new MutationObserver\(scheduleSync\)/)
+  assert.match(resolved, /observer\.observe\(pageRoot, \{ childList: true, subtree: true \}\)/)
+  assert.match(resolved, /data-yuisync-resolved-actions/)
+  assert.match(resolved, /yuisync-resolved-native-print-hidden/)
+  assert.match(styles, /yuisync-resolved-actions/)
+})
+
+test('agendamento ativo recebe mover imprimir e concluir', async () => {
+  const resolved = await read('src/modules/petshop/pages/AgendaResolvedPage.jsx')
+
+  assert.match(resolved, /const movable = appointment\.status !== 'concluido'/)
+  assert.match(resolved, /const canComplete = appointment\.status !== 'concluido'/)
+  assert.match(resolved, /data-yuisync-action=\"drag\"/)
+  assert.match(resolved, /data-yuisync-action=\"print\"/)
+  assert.match(resolved, /data-yuisync-action=\"complete\"/)
 })
