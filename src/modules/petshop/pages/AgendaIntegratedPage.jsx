@@ -1,1 +1,1 @@
-export { default } from './AgendaStablePage'
+export { default } from './AgendaResolvedPage'
