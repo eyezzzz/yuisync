@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import {
   appointmentPriceBreakdown,
   chooseAgendaSlot,
+  findAgendaCardCandidate,
   moneyNumber,
   slotTimeFromAria,
 } from './agendaOperationalCore'
@@ -65,5 +66,27 @@ describe('agenda operational core', () => {
     const selected = chooseAgendaSlot([slot0900, slot0910], 350, 138)
     expect(selected).toBe(slot0910)
     expect(slotTimeFromAria(selected)).toBe('09:10')
+  })
+
+  it('distingue agendamento ativo e concluido com mesmo pet e horario', () => {
+    const active = { textContent: '09:00 - 10:00 Agendado TOBY' }
+    const finished = { textContent: '09:00 - 10:00 Concluido TOBY' }
+    const used = new Set()
+
+    const activeMatch = findAgendaCardCandidate([finished, active], {
+      interval: '09:00 - 10:00',
+      petName: 'TOBY',
+      statusLabel: 'Agendado',
+    }, used)
+    used.add(activeMatch)
+
+    const finishedMatch = findAgendaCardCandidate([finished, active], {
+      interval: '09:00 - 10:00',
+      petName: 'TOBY',
+      statusLabel: 'Concluido',
+    }, used)
+
+    expect(activeMatch).toBe(active)
+    expect(finishedMatch).toBe(finished)
   })
 })
