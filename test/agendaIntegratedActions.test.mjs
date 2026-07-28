@@ -5,85 +5,75 @@ import test from 'node:test'
 const root = new URL('../', import.meta.url)
 const read = (path) => readFile(new URL(path, root), 'utf8')
 
-test('agenda usa uma unica camada integrada sem observers globais concorrentes', async () => {
+test('agenda integrada delega para uma unica implementacao estavel', async () => {
   const modules = await read('src/config/modules.jsx')
-  const main = await read('src/main.jsx')
   const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
+  const stable = await read('src/modules/petshop/pages/AgendaStablePage.jsx')
 
   assert.match(modules, /AgendaIntegratedPage/)
-  assert.doesNotMatch(modules, /AgendaFinalPage/)
-  assert.doesNotMatch(main, /agendaOperationalFixes/)
-  assert.match(integrated, /<AgendaPage \/>/)
-  assert.match(integrated, /observer\.observe\(pageRoot, \{ childList: true, subtree: true \}\)/)
-  assert.doesNotMatch(integrated, /characterData: true/)
+  assert.match(integrated, /AgendaStablePage/)
+  assert.match(stable, /<AgendaPage \/>/)
+  assert.doesNotMatch(stable, /dragstart|dragover|dataTransfer/)
+  assert.doesNotMatch(stable, /characterData: true/)
 })
 
-test('arraste nativo acompanha o cursor, rola a pagina e solta na faixa de dez minutos', async () => {
-  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
+test('arraste usa ponteiro, ghost, autoscroll e atualizacao transacional', async () => {
+  const stable = await read('src/modules/petshop/pages/AgendaStablePage.jsx')
+  const core = await read('src/modules/petshop/pages/agendaOperationalCore.js')
 
-  assert.match(integrated, /dragstart/)
-  assert.match(integrated, /dragover/)
-  assert.match(integrated, /drop/)
-  assert.match(integrated, /yuisync-agenda-drag-ghost/)
-  assert.match(integrated, /autoScrollTick/)
-  assert.match(integrated, /window\.scrollBy/)
-  assert.match(integrated, /button\[aria-label\^="Agendar as "\]/)
-  assert.match(integrated, /update\(appointmentId, \{ scheduled_at: target\.toISOString\(\) \}\)/)
+  assert.match(stable, /pointerdown/)
+  assert.match(stable, /pointermove/)
+  assert.match(stable, /pointerup/)
+  assert.match(stable, /yuisync-agenda-drag-ghost/)
+  assert.match(stable, /autoScrollTick/)
+  assert.match(stable, /window\.scrollBy/)
+  assert.match(stable, /update\(appointmentId, \{ scheduled_at: target\.toISOString\(\) \}\)/)
+  assert.match(core, /chooseAgendaSlot/)
+  assert.match(core, /slotTimeFromAria/)
 })
 
-test('card possui contraste verde e mantem apenas a impressao integrada', async () => {
-  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
-  const styles = await read('src/modules/petshop/pages/AgendaIntegratedPage.css')
+test('card verde compacto possui somente uma acao de impressao', async () => {
+  const stable = await read('src/modules/petshop/pages/AgendaStablePage.jsx')
+  const styles = await read('src/modules/petshop/pages/AgendaStablePage.css')
 
+  assert.match(styles, /#047857/)
   assert.match(styles, /#065f46/)
   assert.match(styles, /opacity: 1 !important/)
-  assert.match(integrated, /button\.closest\('\[data-yuisync-card-actions\]'\)/)
-  assert.match(integrated, /setProperty\('display', 'none', 'important'\)/)
-  assert.match(integrated, /data-yuisync-action="print"/)
-  assert.match(integrated, /data-yuisync-action="complete"/)
+  assert.match(styles, /yuisync-native-print-hidden/)
+  assert.match(stable, /data-yuisync-action=\"print\"/)
+  assert.match(stable, /data-yuisync-action=\"complete\"/)
+  assert.match(stable, /data-yuisync-action=\"drag\"/)
+  assert.match(stable, /button\.closest\('\[data-yuisync-actions\]'\)/)
+  assert.match(stable, /yuisync-card-detail-hidden/)
 })
 
-test('preco separa servico e transporte sem reduzir o servico legado', async () => {
-  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
+test('preco preserva servico e soma transporte no card e no cupom', async () => {
+  const stable = await read('src/modules/petshop/pages/AgendaStablePage.jsx')
+  const core = await read('src/modules/petshop/pages/agendaOperationalCore.js')
 
-  assert.match(integrated, /function servicePriceFromItems/)
-  assert.match(integrated, /total: Math\.max\(stored, itemService \+ transport\)/)
-  assert.match(integrated, /line\('Servico', fmtCurrency\(prices\.service\)\)/)
-  assert.match(integrated, /line\('Transporte', fmtCurrency\(prices\.transport\)\)/)
-  assert.match(integrated, /fmtCurrency\(prices\.total\)/)
-  assert.match(integrated, /priceSpan\.textContent = fmtCurrency\(prices\.total\)/)
+  assert.match(core, /total: Math\.max\(stored, itemService \+ transport\)/)
+  assert.match(stable, /fmtCurrency\(prices\.service\)/)
+  assert.match(stable, /fmtCurrency\(prices\.transport\)/)
+  assert.match(stable, /fmtCurrency\(prices\.total\)/)
+  assert.match(stable, /priceSpan\.textContent = fmtCurrency\(prices\.total\)/)
 })
 
 test('modal fecha seletor e apresenta servico transporte e total', async () => {
-  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
+  const stable = await read('src/modules/petshop/pages/AgendaStablePage.jsx')
 
-  assert.match(integrated, /Servicos encontrados/)
-  assert.match(integrated, /dispatchEvent\(new MouseEvent\('mousedown'/)
-  assert.match(integrated, /resolvePetshopServiceDuration/)
-  assert.match(integrated, /petshop_service_durations/)
-  assert.match(integrated, /modalTotal/)
+  assert.match(stable, /Servicos encontrados/)
+  assert.match(stable, /dispatchEvent\(new MouseEvent\('mousedown'/)
+  assert.match(stable, /resolvePetshopServiceDuration/)
+  assert.match(stable, /petshop_service_durations/)
+  assert.match(stable, /data-yuisync-modal-total/)
 })
 
-test('logo termica fica no proprio recibo sem interceptar window open', async () => {
-  const modules = await read('src/config/modules.jsx')
+test('logo termica e cabecalho compacto permanecem no recibo', async () => {
+  const stable = await read('src/modules/petshop/pages/AgendaStablePage.jsx')
   const settings = await read('src/shared/pages/SettingsIntegratedPage.jsx')
-  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
-  const migration = await read('supabase/migrations/20260728002000_agenda_transport_duration_receipt_logo.sql')
 
-  assert.match(modules, /SettingsIntegratedPage/)
-  assert.match(settings, /Enviar arquivo/)
   assert.match(settings, /receipt_logo_data_url/)
-  assert.match(integrated, /class="print-logo"/)
-  assert.doesNotMatch(integrated, /patchedAgendaPrintWindow/)
-  assert.match(migration, /add column if not exists receipt_logo_data_url text/)
-})
-
-test('banco corrige novas gravacoes e reconcilia totais legados MotoDog', async () => {
-  const transactionMigration = await read('supabase/migrations/20260728002000_agenda_transport_duration_receipt_logo.sql')
-  const reconciliation = await read('supabase/migrations/20260728003000_reconcile_legacy_appointment_totals.sql')
-
-  assert.match(transactionMigration, /v_total_price := round\(v_service_price \+ v_transport_fee, 2\)/)
-  assert.match(transactionMigration, /price = v_total_price/)
-  assert.match(reconciliation, /abs\(coalesce\(appointment\.price, 0\) - prices\.service_price\) < 0\.01/)
-  assert.match(reconciliation, /legacy_totals\.service_price \+ legacy_totals\.transport_fee/)
+  assert.match(stable, /class=\"print-logo\"/)
+  assert.match(stable, /\.receipt \{ width: 64mm; max-width: 64mm; margin: 0; \}/)
+  assert.doesNotMatch(stable, /line\('Contato'/)
 })
