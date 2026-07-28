@@ -7,12 +7,12 @@ import {
 } from 'lucide-react'
 
 const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
-const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaIntegratedPage'))
+const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPackageIntegratedPage'))
 const VendasPage = lazy(() => import('../modules/petshop/pages/VendasPage'))
 const EstoquePage = lazy(() => import('../modules/petshop/pages/EstoquePage'))
 const PetsPage = lazy(() => import('../modules/petshop/pages/PetsPage'))
 const ChatPage = lazy(() => import('../modules/petshop/pages/ChatPage'))
-const PlanosPage = lazy(() => import('../modules/petshop/pages/PlanosPage'))
+const PlanosPage = lazy(() => import('../modules/petshop/pages/PlanosCatalogPage'))
 const FidelidadePage = lazy(() => import('../modules/petshop/pages/FidelidadePage'))
 const EquipePage = lazy(() => import('../modules/petshop/pages/EquipePage'))
 const CampanhasPage = lazy(() => import('../modules/petshop/pages/CampanhasPage'))
