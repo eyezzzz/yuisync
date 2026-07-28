@@ -85,5 +85,5 @@ test('banco corrige novas gravacoes e reconcilia totais legados MotoDog', async 
   assert.match(transactionMigration, /v_total_price := round\(v_service_price \+ v_transport_fee, 2\)/)
   assert.match(transactionMigration, /price = v_total_price/)
   assert.match(reconciliation, /abs\(coalesce\(appointment\.price, 0\) - prices\.service_price\) < 0\.01/)
-  assert.match(reconciliation, /service_price \+ legacy_totals\.transport_fee/)
+  assert.match(reconciliation, /legacy_totals\.service_price \+ legacy_totals\.transport_fee/)
 })
