@@ -16,7 +16,7 @@ test('camada operacional mantem um unico botao, card verde e arraste nativo', as
   assert.match(fixes, /positioningWrapper\.style\.pointerEvents = 'none'/)
   assert.match(fixes, /card\.style\.pointerEvents = 'auto'/)
   assert.match(fixes, /keepSinglePrintButton/)
-  assert.match(fixes, /data-yuisync-duplicate-print/)
+  assert.match(fixes, /yuisyncDuplicatePrint/)
   assert.match(fixes, /background-color: #065f46 !important/)
   assert.match(fixes, /contentButton\.draggable = movable/)
   assert.match(fixes, /text\/yuisync-appointment/)
