@@ -4,6 +4,7 @@ import { supabase } from '../../lib/supabase'
 import { useModuleCtx } from '../../context/ModuleContext'
 import { useAuthCtx } from '../../context/AuthContext'
 import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '../../lib/tenant'
+import { searchTerms } from '../lib/searchMatch'
 
 const BASE_SELECT = 'id, module_id, type, name, document, phone, email, address, neighborhood, city, notes, active, details, created_at'
 const CLIENT_PAGE_SIZE = 1000
@@ -104,19 +105,21 @@ const isSearchFilterError = (error) => {
 }
 
 const applyClientSearch = (query, term, includePetFields = true) => {
-  if (!term) return query
-  const filters = [
-    `name.ilike.%${term}%`,
-    `phone.ilike.%${term}%`,
-    `email.ilike.%${term}%`,
-  ]
-  if (includePetFields) {
-    filters.push(
-      `details->>pet_name.ilike.%${term}%`,
-      `details->>breed.ilike.%${term}%`,
-    )
-  }
-  return query.or(filters.join(','))
+  const terms = searchTerms(sanitizeSearch(term))
+  return terms.reduce((currentQuery, currentTerm) => {
+    const filters = [
+      `name.ilike.%${currentTerm}%`,
+      `phone.ilike.%${currentTerm}%`,
+      `email.ilike.%${currentTerm}%`,
+    ]
+    if (includePetFields) {
+      filters.push(
+        `details->>pet_name.ilike.%${currentTerm}%`,
+        `details->>breed.ilike.%${currentTerm}%`,
+      )
+    }
+    return currentQuery.or(filters.join(','))
+  }, query)
 }
 
 const normalizeSpecies = (value) => {
