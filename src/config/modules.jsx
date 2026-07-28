@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 
 const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
-const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPage'))
+const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaIntegratedPage'))
 const VendasPage = lazy(() => import('../modules/petshop/pages/VendasPage'))
 const EstoquePage = lazy(() => import('../modules/petshop/pages/EstoquePage'))
 const PetsPage = lazy(() => import('../modules/petshop/pages/PetsPage'))
