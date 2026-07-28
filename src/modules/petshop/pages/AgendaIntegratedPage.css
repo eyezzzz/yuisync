@@ -1,1 +1,94 @@
-[data-yuisync-appointment-id] { background: #065f46 !important; color: #f0fdf4 !important; opacity: 1 !important; }
+[data-yuisync-appointment-id] {
+  background: linear-gradient(135deg, #047857 0%, #065f46 100%) !important;
+  border-color: rgba(16, 185, 129, 0.8) !important;
+  color: #f0fdf4 !important;
+  opacity: 1 !important;
+  box-shadow: 0 10px 24px rgba(6, 78, 59, 0.28) !important;
+  cursor: grab;
+  isolation: isolate;
+}
+
+[data-yuisync-appointment-id] > button.w-full.text-left,
+[data-yuisync-appointment-id] > button.w-full.text-left p,
+[data-yuisync-appointment-id] > button.w-full.text-left span:not(.badge),
+[data-yuisync-appointment-id] > button.w-full.text-left div {
+  color: #f0fdf4 !important;
+}
+
+[data-yuisync-appointment-id] > button.w-full.text-left .text-muted,
+[data-yuisync-appointment-id] > button.w-full.text-left [class*="text-muted"] {
+  color: #d1fae5 !important;
+}
+
+[data-yuisync-appointment-id] [data-yuisync-appointment-total] {
+  color: #a7f3d0 !important;
+  font-weight: 900 !important;
+}
+
+[data-yuisync-appointment-id].is-yuisync-dragging {
+  opacity: 1 !important;
+  cursor: grabbing !important;
+  outline: 2px solid rgba(52, 211, 153, 0.95);
+  outline-offset: 2px;
+}
+
+.yuisync-agenda-card-actions {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.yuisync-agenda-action-button,
+.yuisync-agenda-drag-handle {
+  display: inline-flex;
+  width: 30px;
+  height: 30px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  border: 1px solid rgba(167, 243, 208, 0.55);
+  background: rgba(6, 78, 59, 0.94);
+  color: #d1fae5;
+  box-shadow: 0 5px 14px rgba(0, 0, 0, 0.24);
+}
+
+.yuisync-agenda-drag-handle { cursor: grab; }
+
+.yuisync-agenda-action-button:hover {
+  background: #047857;
+  color: #ffffff;
+}
+
+.yuisync-agenda-action-button.is-complete {
+  background: #059669;
+  color: #ffffff;
+}
+
+.yuisync-agenda-action-button:disabled { opacity: 0.55; }
+
+[data-yuisync-drop-active] {
+  background: rgba(16, 185, 129, 0.18) !important;
+  outline: 2px solid rgba(16, 185, 129, 0.85) !important;
+  outline-offset: -2px;
+}
+
+.yuisync-agenda-drag-ghost {
+  position: fixed !important;
+  z-index: 99999 !important;
+  pointer-events: none !important;
+  opacity: 1 !important;
+  background: linear-gradient(135deg, #047857 0%, #065f46 100%) !important;
+  border: 2px solid #34d399 !important;
+  color: #f0fdf4 !important;
+  box-shadow: 0 18px 42px rgba(6, 78, 59, 0.42) !important;
+}
+
+.yuisync-agenda-drag-ghost p,
+.yuisync-agenda-drag-ghost span,
+.yuisync-agenda-drag-ghost div {
+  color: #f0fdf4 !important;
+}
