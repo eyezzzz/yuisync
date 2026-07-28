@@ -106,17 +106,16 @@ export function appointmentPriceBreakdown(appointment, transportOptions) {
   const stored = Math.max(0, moneyNumber(appointment?.price))
   const items = Array.isArray(appointment?.service_items) ? appointment.service_items : []
   const itemService = servicePriceFromItems(appointment)
+  const transportCovered = items.some((item) => item?.transport_benefit_used === true)
 
-  // Quando existe snapshot de itens, o valor persistido e a fonte de verdade do
-  // que ainda deve ser cobrado. Assim um pacote pode zerar somente o banho,
-  // somente o MotoDog ou os dois sem o preview recolocar a tarifa abatida.
+  // O snapshot explicita quando o MotoDog foi abatido. Sem essa marca, preserva
+  // a reconciliacao legada: servico armazenado + tarifa configurada.
   if (items.length > 0) {
-    const total = Math.max(stored, itemService)
-    const transport = Math.min(catalogTransport, Math.max(0, total - itemService))
+    const transport = transportCovered ? 0 : catalogTransport
     return {
       service: itemService,
       transport,
-      total,
+      total: Math.max(stored, itemService + transport),
     }
   }
 
