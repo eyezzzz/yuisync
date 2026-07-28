@@ -5,22 +5,26 @@ import test from 'node:test'
 const root = new URL('../', import.meta.url)
 const read = (path) => readFile(new URL(path, root), 'utf8')
 
-test('camada operacional da agenda e carregada no bootstrap', async () => {
+test('agenda operacional nao injeta scripts globais no bootstrap', async () => {
   const main = await read('src/main.jsx')
-  assert.match(main, /import '\.\/agendaOperationalFixes'/)
+  const modules = await read('src/config/modules.jsx')
+
+  assert.doesNotMatch(main, /agendaOperationalFixes/)
+  assert.match(modules, /AgendaIntegratedPage/)
+  assert.doesNotMatch(modules, /AgendaFinalPage/)
 })
 
-test('camada operacional mantem um unico botao, card verde e arraste nativo', async () => {
-  const fixes = await read('src/agendaOperationalFixes.js')
+test('integracao mantem um unico botao card verde e arraste com autoscroll', async () => {
+  const integrated = await read('src/modules/petshop/pages/AgendaIntegratedPage.jsx')
+  const styles = await read('src/modules/petshop/pages/AgendaIntegratedPage.css')
 
-  assert.match(fixes, /positioningWrapper\.style\.pointerEvents = 'none'/)
-  assert.match(fixes, /card\.style\.pointerEvents = 'auto'/)
-  assert.match(fixes, /keepSinglePrintButton/)
-  assert.match(fixes, /yuisyncDuplicatePrint/)
-  assert.match(fixes, /background-color: #065f46 !important/)
-  assert.match(fixes, /contentButton\.draggable = movable/)
-  assert.match(fixes, /text\/yuisync-appointment/)
-  assert.match(fixes, /slotForVerticalPoint/)
-  assert.match(fixes, /dispatchPointer\('pointerup'/)
-  assert.match(fixes, /MutationObserver/)
+  assert.match(integrated, /outer\.style\.pointerEvents = 'none'/)
+  assert.match(integrated, /card\.style\.pointerEvents = 'auto'/)
+  assert.match(integrated, /data-yuisync-hidden-legacy-print/)
+  assert.match(integrated, /dragstart/)
+  assert.match(integrated, /dragover/)
+  assert.match(integrated, /autoScrollTick/)
+  assert.match(integrated, /slotAtPoint/)
+  assert.match(styles, /background: linear-gradient/)
+  assert.match(styles, /#065f46/)
 })
