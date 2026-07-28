@@ -1,4 +1,5 @@
 const APPOINTMENT_CARD_SELECTOR = '[data-yuisync-appointment-id]'
+const STYLE_ID = 'yuisync-agenda-operational-styles'
 let nativeDragCard = null
 
 function normalize(value = '') {
@@ -8,7 +9,37 @@ function normalize(value = '') {
     .toLowerCase()
 }
 
+function ensureAgendaStyles() {
+  if (document.getElementById(STYLE_ID)) return
+  const style = document.createElement('style')
+  style.id = STYLE_ID
+  style.textContent = `
+    ${APPOINTMENT_CARD_SELECTOR} {
+      opacity: 1 !important;
+      background: var(--card) !important;
+      box-shadow: 0 8px 22px rgba(0, 0, 0, .28) !important;
+      pointer-events: auto !important;
+    }
+    ${APPOINTMENT_CARD_SELECTOR}[data-yuisync-movable="true"] {
+      cursor: grab !important;
+      user-select: none !important;
+      -webkit-user-select: none !important;
+    }
+    ${APPOINTMENT_CARD_SELECTOR}[data-yuisync-movable="true"]:active {
+      cursor: grabbing !important;
+      outline: 2px solid rgba(52, 211, 153, .6);
+      outline-offset: 2px;
+    }
+    ${APPOINTMENT_CARD_SELECTOR} button[aria-label*="Imprimir"]:not([data-yuisync-action="print"]),
+    ${APPOINTMENT_CARD_SELECTOR} button[title*="Imprimir"]:not([data-yuisync-action="print"]) {
+      display: none !important;
+    }
+  `
+  document.head.appendChild(style)
+}
+
 function syncAgendaOperationalFixes() {
+  ensureAgendaStyles()
   document.querySelectorAll(APPOINTMENT_CARD_SELECTOR).forEach((card) => {
     const positioningWrapper = card.parentElement
     if (positioningWrapper && positioningWrapper.style.pointerEvents !== 'none') {
@@ -45,7 +76,7 @@ function dispatchPointer(type, target, sourceEvent) {
     pointerId: 1,
     pointerType: 'mouse',
     isPrimary: true,
-    button: type === 'pointerup' ? 0 : 0,
+    button: 0,
     buttons: type === 'pointerup' ? 0 : 1,
     clientX: sourceEvent.clientX,
     clientY: sourceEvent.clientY,
