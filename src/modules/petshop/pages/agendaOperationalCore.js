@@ -150,3 +150,27 @@ export function chooseAgendaSlot(slots, clientX, clientY) {
       - Math.abs((right.rect.top + right.rect.bottom) / 2 - clientY)
     ))[0]?.slot || null
 }
+
+export function findAgendaCardCandidate(candidates, {
+  interval,
+  petName,
+  statusLabel,
+}, usedCards = new Set()) {
+  const normalizedInterval = normalizeText(interval)
+  const normalizedPet = normalizeText(petName)
+  const normalizedStatus = normalizeText(statusLabel)
+  const available = Array.from(candidates || []).filter((candidate) => !usedCards.has(candidate))
+
+  const exact = available.find((candidate) => {
+    const text = normalizeText(candidate?.textContent)
+    return text.includes(normalizedInterval)
+      && text.includes(normalizedPet)
+      && text.includes(normalizedStatus)
+  })
+  if (exact) return exact
+
+  return available.find((candidate) => {
+    const text = normalizeText(candidate?.textContent)
+    return text.includes(normalizedInterval) && text.includes(normalizedPet)
+  }) || null
+}
