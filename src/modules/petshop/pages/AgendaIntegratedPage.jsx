@@ -223,6 +223,14 @@ function AgendaFluidRefinement() {
     }
 
     const onClickCapture = (event) => {
+      const selectedService = event.target.closest?.('[role="listbox"][aria-label="Servicos encontrados"] [role="option"]')
+      if (selectedService) {
+        window.setTimeout(() => {
+          document.querySelector('input[aria-label="Buscar servico para adicionar"]')?.blur()
+          document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+        }, 0)
+      }
+
       const refreshButton = event.target.closest?.('.page button[title="Atualizar"]')
       if (!refreshButton) return
       if (!pendingMove && Date.now() > suppressRefreshUntil) return
