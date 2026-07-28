@@ -7,7 +7,7 @@ import {
 } from 'lucide-react'
 
 const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
-const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPage'))
+const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaWorkspacePage'))
 const VendasPage = lazy(() => import('../modules/petshop/pages/VendasPage'))
 const EstoquePage = lazy(() => import('../modules/petshop/pages/EstoquePage'))
 const PetsPage = lazy(() => import('../modules/petshop/pages/PetsPage'))
@@ -102,7 +102,7 @@ export const MODULES = {
       {
         title: 'Administracao',
         items: [
-          { id: 'usuarios', label: 'Usuarios', icon: Users, roles: ['admin_pet'] },
+          { id: 'usuarios', label: 'Usuarios & Cargos', icon: Users, roles: ['admin_pet'] },
           { id: 'equipe', label: 'Equipe & Comissoes', icon: Users, roles: ['admin_pet'] },
           { id: 'config', label: 'Configuracoes', icon: Settings, roles: ['admin_pet'] },
           { id: 'logs', label: 'Logs', icon: FileText, roles: ['admin_pet'] },
