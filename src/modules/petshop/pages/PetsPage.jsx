@@ -9,6 +9,7 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { fmtCurrency, fmtDate } from '../../../lib/supabase'
 import { importLegacyRows } from '../../../lib/api'
 import { parseLegacyClients } from '../../../shared/lib/legacyImport'
+import { matchesSearchTerms } from '../../../shared/lib/searchMatch'
 
 const SPECIES = [
   { value: 'dog', label: 'Cao', icon: Dog },
@@ -106,8 +107,8 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
               <div><label className="inp-label">CEP</label><input className="inp" value={form.zip_code || ''} onChange={(e) => setField('zip_code', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Email</label><input className="inp" value={form.email} onChange={(e) => setField('email', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Endereco</label><input className="inp" value={form.owner_address} onChange={(e) => setField('owner_address', e.target.value)} /></div>
-            <div><label className="inp-label">Numero</label><input className="inp" value={form.address_number || ''} onChange={(e) => setField('address_number', e.target.value)} /></div>
-            <div><label className="inp-label">Complemento</label><input className="inp" value={form.address_complement || ''} onChange={(e) => setField('address_complement', e.target.value)} /></div>
+              <div><label className="inp-label">Numero</label><input className="inp" value={form.address_number || ''} onChange={(e) => setField('address_number', e.target.value)} /></div>
+              <div><label className="inp-label">Complemento</label><input className="inp" value={form.address_complement || ''} onChange={(e) => setField('address_complement', e.target.value)} /></div>
               <div><label className="inp-label">Bairro</label><input className="inp" value={form.owner_neighborhood} onChange={(e) => setField('owner_neighborhood', e.target.value)} /></div>
               <div><label className="inp-label">Cidade</label><input className="inp" value={form.owner_city} onChange={(e) => setField('owner_city', e.target.value)} /></div>
               <div><label className="inp-label">Referencia</label><input className="inp" value={form.address_reference || ''} onChange={(e) => setField('address_reference', e.target.value)} /></div>
@@ -302,7 +303,15 @@ export default function PetsPage() {
     const queryDigits = digits(search)
     return (pets || []).filter((pet) => {
       const subscription = latestSubscriptionByClient.get(pet.id)
-      const matchesText = Boolean(query) && [pet.owner_name, pet.pet_name, pet.breed, pet.owner_address, pet.owner_neighborhood, pet.owner_city, subscription?.subscription_plans?.name].some((field) => normalize(field).includes(query))
+      const matchesText = Boolean(query) && matchesSearchTerms(search, [
+        pet.owner_name,
+        pet.pet_name,
+        pet.breed,
+        pet.owner_address,
+        pet.owner_neighborhood,
+        pet.owner_city,
+        subscription?.subscription_plans?.name,
+      ])
       const matchesDigits = Boolean(queryDigits) && [pet.phone, pet.owner_cpf].some((field) => digits(field).includes(queryDigits))
       const matchesSearch = (!query && !queryDigits) || matchesText || matchesDigits
       const matchesSpecies = !speciesFilter || pet.species === speciesFilter
