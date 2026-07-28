@@ -68,6 +68,15 @@ const FLUID_AGENDA_STYLES = `
   .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > div:first-child > p:first-of-type {
     font-size: 9px !important;
   }
+
+  .yuisync-resolved-card .yuisync-package-label {
+    color: #a7f3d0 !important;
+    font-size: 10px !important;
+    font-weight: 900 !important;
+    letter-spacing: .035em !important;
+    text-transform: uppercase !important;
+    white-space: nowrap !important;
+  }
 `
 
 const minutesFromTime = (value = '') => {
@@ -98,6 +107,37 @@ const shiftedInterval = (currentText, targetTime) => {
 const findIntervalNode = (card) => [...(card?.querySelectorAll?.('p') || [])]
   .find((node) => /\d{2}:\d{2}\s*-\s*\d{2}:\d{2}/.test(String(node.textContent || '')))
 
+const normalizeCardText = (value = '') => String(value || '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .toLowerCase()
+
+const currencyValue = (value = '') => {
+  const parsed = Number(String(value || '')
+    .replace(/[^\d,.-]/g, '')
+    .replace(/\.(?=\d{3}(?:\D|$))/g, '')
+    .replace(',', '.'))
+  return Number.isFinite(parsed) ? parsed : null
+}
+
+const applyPackageLabels = () => {
+  document.querySelectorAll('.yuisync-resolved-card').forEach((card) => {
+    const text = normalizeCardText(card.textContent)
+    const price = [...card.querySelectorAll('span')]
+      .find((node) => /^r\$\s*/i.test(String(node.textContent || '').trim()))
+    if (!price) return
+
+    const amount = currencyValue(price.textContent)
+    const packageBath = amount !== null && Math.abs(amount) < 0.005 && text.includes('banho')
+    if (packageBath) {
+      price.textContent = 'PACOTE BANHO'
+      price.classList.add('yuisync-package-label')
+    } else {
+      price.classList.remove('yuisync-package-label')
+    }
+  })
+}
+
 function AgendaFluidRefinement() {
   useEffect(() => {
     let dragStart = null
@@ -112,6 +152,7 @@ function AgendaFluidRefinement() {
         const height = outer?.getBoundingClientRect?.().height || card.getBoundingClientRect().height
         card.dataset.yuisyncDensity = height <= 58 ? 'micro' : height <= 100 ? 'compact' : 'regular'
       })
+      applyPackageLabels()
     }
 
     const scheduleDensity = () => {
