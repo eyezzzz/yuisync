@@ -17,7 +17,7 @@ const FidelidadePage = lazy(() => import('../modules/petshop/pages/FidelidadePag
 const EquipePage = lazy(() => import('../modules/petshop/pages/EquipePage'))
 const CampanhasPage = lazy(() => import('../modules/petshop/pages/CampanhasPage'))
 const CaixaPage = lazy(() => import('../modules/petshop/pages/CaixaPage'))
-const OrdensEntregaPage = lazy(() => import('../modules/petshop/pages/OrdensEntregaPage'))
+const OrdensEntregaPage = lazy(() => import('../modules/petshop/pages/OrdensBanhoTosaIntegratedPage'))
 const GrowthPage = lazy(() => import('../modules/petshop/pages/GrowthPage'))
 const UsersPage = lazy(() => import('../shared/pages/UsersPage'))
 const SettingsPage = lazy(() => import('../shared/pages/SettingsIntegratedPage'))
