@@ -83,11 +83,17 @@ test('ajuste manual limita consumo entre zero e a quantidade contratada', () => 
   })
 })
 
-test('tela de planos oferece pesquisa e edição manual sem migration adicional', async () => {
-  const page = await read('src/modules/petshop/pages/PlanosPaymentIntegratedPage.jsx')
+test('tela de planos renderiza busca, edição, cancelamento e cliente pesquisável de forma nativa', async () => {
+  const page = await read('src/modules/petshop/pages/PlanosNativePage.jsx')
+  const modules = await read('src/config/modules.jsx')
+
   assert.match(page, /Pesquisar por tutor, pet, telefone ou pacote/)
   assert.match(page, /Editar consumo/)
+  assert.match(page, /Confirmar cancelamento/)
+  assert.match(page, /Digite tutor, pet ou telefone/)
   assert.match(page, /client_subscriptions/)
   assert.match(page, /services_used/)
-  assert.match(page, /Reduzir um consumo libera novamente unidades/)
+  assert.match(page, /Reduzir o consumo libera saldo/)
+  assert.doesNotMatch(page, /MutationObserver/)
+  assert.match(modules, /PlanosNativePage/)
 })
