@@ -93,7 +93,7 @@ function AppointmentFinanceCard({
   const zeroTotal = totals.total <= 0.005
 
   return (
-    <article className={`rounded-2xl border p-4 ${sale ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : 'border-[var(--border)] bg-card'}`}>
+    <article className={`rounded-2xl border p-4 ${sale || zeroTotal ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : 'border-[var(--border)] bg-card'}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="flex items-center gap-2 text-base font-black text-text">
@@ -105,6 +105,8 @@ function AppointmentFinanceCard({
         </div>
         {sale ? (
           <span className="badge badge-green">Lancado no caixa</span>
+        ) : zeroTotal ? (
+          <span className="badge badge-blue">Coberto pelo pacote</span>
         ) : (
           <span className="badge badge-amber">Aguardando pagamento</span>
         )}
@@ -146,74 +148,69 @@ function AppointmentFinanceCard({
           </div>
           <strong className="text-emerald-300">Venda #{String(sale.id || '').slice(0, 8)}</strong>
         </div>
+      ) : zeroTotal ? (
+        <div className="mt-4 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm">
+          <p className="flex items-center gap-2 font-bold text-emerald-300"><CheckCircle2 size={15} /> Beneficio consumido pelo pacote</p>
+          <p className="mt-1 text-xs text-muted">Nenhuma cobranca adicional e nenhuma nova receita. O valor ja entrou no caixa na ativacao do pacote.</p>
+        </div>
       ) : active ? (
         <div className="mt-4 space-y-4 rounded-2xl border border-amber-500/25 bg-amber-500/[0.06] p-4">
-          {!zeroTotal && (
-            <>
-              <div>
-                <p className="text-[10px] font-black uppercase tracking-widest text-muted">Forma de pagamento</p>
-                <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
-                  {PAYMENT_METHODS.map((method) => {
-                    const Icon = method.icon
-                    const selected = !splitEnabled && paymentMethod === method.value
-                    return (
-                      <button
-                        key={method.value}
-                        type="button"
-                        onClick={() => onPaymentMethod(method.value)}
-                        className={`rounded-xl border px-3 py-3 text-left text-xs font-bold transition-colors ${selected ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] bg-white/[0.03] text-muted hover:text-text'}`}
-                      >
-                        <Icon size={15} className="mb-2" />
-                        {method.label}
-                      </button>
-                    )
-                  })}
+          <div>
+            <p className="text-[10px] font-black uppercase tracking-widest text-muted">Forma de pagamento</p>
+            <div className="mt-2 grid grid-cols-2 gap-2 md:grid-cols-4">
+              {PAYMENT_METHODS.map((method) => {
+                const Icon = method.icon
+                const selected = !splitEnabled && paymentMethod === method.value
+                return (
+                  <button
+                    key={method.value}
+                    type="button"
+                    onClick={() => onPaymentMethod(method.value)}
+                    className={`rounded-xl border px-3 py-3 text-left text-xs font-bold transition-colors ${selected ? 'border-emerald-400/50 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] bg-white/[0.03] text-muted hover:text-text'}`}
+                  >
+                    <Icon size={15} className="mb-2" />
+                    {method.label}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <label className="flex items-center gap-2 text-xs font-bold text-text">
+            <input
+              type="checkbox"
+              checked={splitEnabled}
+              onChange={(event) => onSplitEnabled(event.target.checked)}
+            />
+            Dividir pagamento em duas formas
+          </label>
+
+          {splitEnabled && (
+            <div className="grid gap-3 md:grid-cols-2">
+              {splits.map((split, index) => (
+                <div key={index} className="grid grid-cols-[1fr_120px] gap-2">
+                  <select
+                    className="inp"
+                    value={split.method}
+                    onChange={(event) => onSplitChange(index, 'method', event.target.value)}
+                  >
+                    {PAYMENT_METHODS.map((method) => <option key={method.value} value={method.value}>{method.label}</option>)}
+                  </select>
+                  <input
+                    aria-label={`Valor da forma ${index + 1}`}
+                    className="inp"
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={split.amount}
+                    onChange={(event) => onSplitChange(index, 'amount', event.target.value)}
+                    placeholder="0,00"
+                  />
                 </div>
-              </div>
-
-              <label className="flex items-center gap-2 text-xs font-bold text-text">
-                <input
-                  type="checkbox"
-                  checked={splitEnabled}
-                  onChange={(event) => onSplitEnabled(event.target.checked)}
-                />
-                Dividir pagamento em duas formas
-              </label>
-
-              {splitEnabled && (
-                <div className="grid gap-3 md:grid-cols-2">
-                  {splits.map((split, index) => (
-                    <div key={index} className="grid grid-cols-[1fr_120px] gap-2">
-                      <select
-                        className="inp"
-                        value={split.method}
-                        onChange={(event) => onSplitChange(index, 'method', event.target.value)}
-                      >
-                        {PAYMENT_METHODS.map((method) => <option key={method.value} value={method.value}>{method.label}</option>)}
-                      </select>
-                      <input
-                        aria-label={`Valor da forma ${index + 1}`}
-                        className="inp"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={split.amount}
-                        onChange={(event) => onSplitChange(index, 'amount', event.target.value)}
-                        placeholder="0,00"
-                      />
-                    </div>
-                  ))}
-                  <p className="text-xs text-muted md:col-span-2">
-                    Informado: {fmtCurrency(splitTotal(splits))} · Necessario: {fmtCurrency(totals.total)}
-                  </p>
-                </div>
-              )}
-            </>
-          )}
-
-          {zeroTotal && (
-            <div className="rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">
-              Atendimento totalmente coberto pelo pacote. O fechamento sera registrado com valor zero para manter historico e indicadores.
+              ))}
+              <p className="text-xs text-muted md:col-span-2">
+                Informado: {fmtCurrency(splitTotal(splits))} · Necessario: {fmtCurrency(totals.total)}
+              </p>
             </div>
           )}
 
@@ -222,7 +219,7 @@ function AppointmentFinanceCard({
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button>
             <button type="button" disabled={checkingOut} onClick={onCheckout} className="btn btn-primary flex-1 justify-center">
-              <CheckCircle2 size={15} /> {checkingOut ? 'Lancando...' : zeroTotal ? 'Confirmar pacote' : 'Confirmar pagamento'}
+              <CheckCircle2 size={15} /> {checkingOut ? 'Lancando...' : 'Confirmar pagamento'}
             </button>
           </div>
         </div>
@@ -361,7 +358,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
           .map((item, index) => ({ method: item.method, amount: Number(item.amount), position: index + 1 }))
         : []
 
-      if (totals.total > 0.005 && splitEnabled && Math.abs(splitTotal(paymentSplits) - totals.total) > 0.01) {
+      if (splitEnabled && Math.abs(splitTotal(paymentSplits) - totals.total) > 0.01) {
         throw new Error('Os pagamentos divididos precisam fechar exatamente o valor do atendimento.')
       }
 
@@ -370,7 +367,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
           tenant_id: activeTenantId,
           module_id: moduleId,
           appointment_id: appointment.id,
-          payment_method: totals.total <= 0.005 ? 'pacote' : paymentMethod,
+          payment_method: paymentMethod,
           payment_splits: paymentSplits,
           transport_fee: totals.transport,
           transport_catalog_fee: totals.catalogTransport,
@@ -388,8 +385,14 @@ export default function BanhoTosaPdvPanel({ setPage }) {
     }
   }
 
-  const pendingCount = appointments.filter((appointment) => !salesByAppointment.has(String(appointment.id))).length
-  const paidCount = appointments.length - pendingCount
+  const financialState = useMemo(() => appointments.map((appointment) => ({
+    appointment,
+    sale: salesByAppointment.get(String(appointment.id)) || null,
+    totals: totalsFor(appointment),
+  })), [appointments, salesByAppointment, totalsFor])
+  const pendingCount = financialState.filter((entry) => !entry.sale && entry.totals.total > 0.005).length
+  const packageCount = financialState.filter((entry) => !entry.sale && entry.totals.total <= 0.005).length
+  const paidCount = financialState.filter((entry) => entry.sale).length
   const totalReceived = sales.reduce((sum, sale) => sum + Number(sale.total_price || 0), 0)
 
   return (
@@ -397,7 +400,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h2 className="flex items-center gap-2 text-xl font-black text-text"><Scissors size={20} className="text-amber-400" /> Banho & Tosa</h2>
-          <p className="mt-1 text-sm text-muted">Atendimentos concluidos aguardam conferencia antes de entrar no caixa e no faturamento do dia.</p>
+          <p className="mt-1 text-sm text-muted">Pacotes cobertos apenas consomem o saldo. Somente valores extras ou atendimentos avulsos entram para pagamento.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <label className="flex items-center gap-2 rounded-xl border border-[var(--border)] bg-card px-3 py-2 text-xs font-bold text-muted">
@@ -409,41 +412,39 @@ export default function BanhoTosaPdvPanel({ setPage }) {
         </div>
       </div>
 
-      <div className="grid gap-3 md:grid-cols-3">
-        <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-black uppercase tracking-widest text-muted">Aguardando fechamento</p><p className="mt-2 text-3xl font-black text-amber-400">{pendingCount}</p></div>
+      <div className="grid gap-3 md:grid-cols-4">
+        <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-black uppercase tracking-widest text-muted">Aguardando pagamento</p><p className="mt-2 text-3xl font-black text-amber-400">{pendingCount}</p></div>
+        <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-black uppercase tracking-widest text-muted">Cobertos pelo pacote</p><p className="mt-2 text-3xl font-black text-sky-400">{packageCount}</p></div>
         <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-black uppercase tracking-widest text-muted">Lancados no caixa</p><p className="mt-2 text-3xl font-black text-emerald-400">{paidCount}</p></div>
-        <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-black uppercase tracking-widest text-muted">Receita confirmada</p><p className="mt-2 text-3xl font-black text-sky-400">{fmtCurrency(totalReceived)}</p></div>
+        <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-black uppercase tracking-widest text-muted">Receita de extras/avulsos</p><p className="mt-2 text-3xl font-black text-violet-400">{fmtCurrency(totalReceived)}</p></div>
       </div>
 
       {loadError && <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{loadError}</p>}
 
       {loading ? (
         <div className="flex items-center gap-2 py-12 text-sm text-muted"><RefreshCw size={15} className="animate-spin" /> Carregando atendimentos concluidos...</div>
-      ) : appointments.length ? (
+      ) : financialState.length ? (
         <div className="grid gap-4 xl:grid-cols-2">
-          {appointments.map((appointment) => {
-            const totals = totalsFor(appointment)
-            return (
-              <AppointmentFinanceCard
-                key={appointment.id}
-                appointment={appointment}
-                sale={salesByAppointment.get(String(appointment.id))}
-                totals={totals}
-                checkingOut={checkingOut}
-                active={activeId === appointment.id}
-                paymentMethod={paymentMethod}
-                splitEnabled={splitEnabled}
-                splits={splits}
-                error={activeId === appointment.id ? checkoutError : ''}
-                onOpen={() => openCheckout(appointment, totals)}
-                onClose={() => setActiveId(null)}
-                onPaymentMethod={(method) => { setPaymentMethod(method); setSplitEnabled(false) }}
-                onSplitEnabled={setSplitEnabled}
-                onSplitChange={updateSplit}
-                onCheckout={() => void checkout(appointment, totals)}
-              />
-            )
-          })}
+          {financialState.map(({ appointment, sale, totals }) => (
+            <AppointmentFinanceCard
+              key={appointment.id}
+              appointment={appointment}
+              sale={sale}
+              totals={totals}
+              checkingOut={checkingOut}
+              active={activeId === appointment.id}
+              paymentMethod={paymentMethod}
+              splitEnabled={splitEnabled}
+              splits={splits}
+              error={activeId === appointment.id ? checkoutError : ''}
+              onOpen={() => openCheckout(appointment, totals)}
+              onClose={() => setActiveId(null)}
+              onPaymentMethod={(method) => { setPaymentMethod(method); setSplitEnabled(false) }}
+              onSplitEnabled={setSplitEnabled}
+              onSplitChange={updateSplit}
+              onCheckout={() => void checkout(appointment, totals)}
+            />
+          ))}
         </div>
       ) : (
         <div className="rounded-2xl border border-dashed border-[var(--border)] p-12 text-center text-sm text-muted">
