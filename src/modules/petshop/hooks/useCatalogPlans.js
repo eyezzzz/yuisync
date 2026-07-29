@@ -126,17 +126,22 @@ export function useCatalogPlans() {
     if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar a assinatura.')
     if (!payload.plan_id || !payload.client_id) throw new Error('Selecione o plano e o cliente.')
 
+    const isNewSubscription = !payload.id
+    const requestedStatus = payload.status || 'active'
+    const status = isNewSubscription && requestedStatus === 'active'
+      ? 'pending_payment'
+      : requestedStatus
     const startedAt = payload.started_at || todayISO()
     const cycle = payload.billing_cycle || payload.plan?.billing_cycle || 'monthly'
     const row = {
       module_id: moduleId,
       plan_id: payload.plan_id,
       client_id: payload.client_id,
-      status: payload.status || 'active',
+      status,
       started_at: startedAt,
       next_billing_date: payload.next_billing_date || addDays(startedAt, BILLING_CYCLE_DAYS[cycle] || 30),
       services_used: payload.services_used || {},
-      cancelled_at: payload.status === 'cancelled' ? new Date().toISOString() : null,
+      cancelled_at: status === 'cancelled' ? new Date().toISOString() : null,
       updated_at: new Date().toISOString(),
     }
 
@@ -150,7 +155,7 @@ export function useCatalogPlans() {
     })
 
     if (response.error) throw response.error
-    return {
+    const subscription = {
       ...response.data,
       client: formatClient(response.data.clients || {}),
       subscription_plans: response.data.subscription_plans
@@ -160,6 +165,19 @@ export function useCatalogPlans() {
           }
         : null,
     }
+
+    if (isNewSubscription && subscription.status === 'pending_payment' && typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('yuisync:subscription-pending-payment', {
+        detail: {
+          subscriptionId: subscription.id,
+          clientId: subscription.client_id,
+          clientName: subscription.client?.owner_name || '',
+          planName: subscription.subscription_plans?.name || '',
+        },
+      }))
+    }
+
+    return subscription
   }, [activeTenantId, moduleId, runScoped])
 
   return {
