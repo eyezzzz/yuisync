@@ -327,11 +327,11 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
             </div>
             ${row('Tutor', pet.owner_name)}
             ${row('Pet', pet.pet_name)}
-            ${row('Raca / especie', pet.breed || pet.species)}
+            ${row('Raca', pet.breed || pet.species)}
             ${row('Data e hora', `${date} - ${interval}`)}
             ${row('Servico', serviceLabel(appt))}
-            ${row('Responsavel', responsible)}
-            ${row('Observacoes', appt.notes || 'Nenhuma observacao')}
+            ${row('Resp.', responsible)}
+            ${row('Obs.', appt.notes || 'Nenhuma observacao')}
             <div class="footer center">Impresso em ${escapeReceiptHtml(new Date().toLocaleString('pt-BR'))}</div>
           </main>
         </body>

@@ -38,6 +38,31 @@ test('atendimento integralmente coberto pelo pacote nao gera valor a receber', (
   assert.equal(appointmentNeedsPayment(appointment, transportOptions), false)
 })
 
+test('snapshot antigo com preco residual e beneficio consumido fica zerado', () => {
+  const appointment = {
+    id: 'appointment-stale-package',
+    price: 55,
+    transport_mode: 'cliente_leva',
+    subscription_benefit_status: 'consumed',
+    subscription_benefits: [{
+      kind: 'service',
+      service_code: 'banho_pequeno',
+      status: 'consumed',
+    }],
+    service_items: [{
+      code: 'banho_pequeno',
+      unit_price: 55,
+      catalog_price: 75,
+    }],
+  }
+
+  const totals = appointmentCheckoutTotals(appointment, transportOptions)
+  assert.equal(totals.total, 0)
+  assert.equal(totals.catalogTotal, 75)
+  assert.equal(totals.discount, 75)
+  assert.equal(appointmentNeedsPayment(appointment, transportOptions), false)
+})
+
 test('atendimento avulso e extra fora do pacote permanecem cobraveis', () => {
   const avulso = {
     id: 'appointment-retail',
@@ -121,6 +146,7 @@ test('Agenda e checkout nativo de Ordens usam o fluxo financeiro compartilhado',
   assert.match(panel, /readQueuedAppointmentCheckout\(\)/)
   assert.match(panel, /APPOINTMENT_CHECKOUT_EVENT/)
   assert.match(panel, /openCheckout\(entry\.appointment, entry\.totals\)/)
+  assert.match(panel, /reconcile_petshop_completed_appointment_package/)
   assert.match(panel, /checkout_petshop_appointment_transaction/)
   assert.match(agendaWrapper, /AgendaIntegratedPage setPage=\{setPage\}/)
 
@@ -130,4 +156,15 @@ test('Agenda e checkout nativo de Ordens usam o fluxo financeiro compartilhado',
   assert.match(orders, /APPOINTMENT_CHECKOUT_EVENT/)
   assert.doesNotMatch(ordersWrapper, /createPortal|MutationObserver|data-yuisync-banho-tosa-content/)
   assert.match(ordersWrapper, /return <OrdensEntregaPage setPage=\{setPage\} \/>/)
+})
+
+
+test('migration reconcilia pacote e nao insere sale item sem produto', async () => {
+  const sql = await readFile(new URL('../supabase/migrations/20260729172000_petshop_checkout_package_reconciliation.sql', import.meta.url), 'utf8')
+  assert.match(sql, /reconcile_petshop_completed_appointment_package/)
+  assert.match(sql, /reserve_petshop_subscription_benefit/)
+  assert.match(sql, /if v_net_total <= 0\.005 then/)
+  assert.match(sql, /'package_only', true/)
+  assert.match(sql, /if v_product_id is not null then/)
+  assert.doesNotMatch(sql, /v_tenant_id, v_sale_id, null, 1/)
 })

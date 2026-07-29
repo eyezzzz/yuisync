@@ -287,7 +287,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
       const appointmentResponse = await runScoped(async (includeTenant) => {
         let query = supabase
           .from('appointments')
-          .select('id,tenant_id,module_id,client_id,service_type,service_group,service_items,scheduled_at,duration_min,price,status,notes,responsible_staff_name,responsible_staff_key,transport_mode,transport_label,updated_at,clients(id,name,phone,details)')
+          .select('id,tenant_id,module_id,client_id,service_type,service_group,service_items,scheduled_at,duration_min,price,status,notes,responsible_staff_name,responsible_staff_key,transport_mode,transport_label,subscription_id,subscription_benefit_used,subscription_benefits,subscription_discount,subscription_label,subscription_benefit_status,updated_at,clients(id,name,phone,details)')
           .eq('module_id', moduleId)
           .eq('status', 'concluido')
           .gte('scheduled_at', start)
@@ -297,7 +297,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
       })
       if (appointmentResponse.error) throw appointmentResponse.error
 
-      const appointmentRows = (appointmentResponse.data || [])
+      let appointmentRows = (appointmentResponse.data || [])
         .map(mapAppointment)
         .filter(isGroomingAppointment)
       const ids = appointmentRows.map((appointment) => appointment.id)
@@ -314,6 +314,23 @@ export default function BanhoTosaPdvPanel({ setPage }) {
         if (salesResponse.error) throw salesResponse.error
         saleRows = salesResponse.data || []
       }
+
+      const soldAppointmentIds = new Set(saleRows.map((sale) => String(sale.appointment_id)))
+      appointmentRows = await Promise.all(appointmentRows.map(async (appointment) => {
+        if (soldAppointmentIds.has(String(appointment.id))) return appointment
+        const reconciliation = await supabase.rpc('reconcile_petshop_completed_appointment_package', {
+          p_appointment_id: appointment.id,
+        })
+        if (reconciliation.error) {
+          const message = String(reconciliation.error.message || '')
+          if (message.includes('reconcile_petshop_completed_appointment_package')) {
+            throw new Error('Aplique a migration 20260729172000_petshop_checkout_package_reconciliation.sql antes de usar o fechamento.')
+          }
+          throw reconciliation.error
+        }
+        const reconciled = reconciliation.data?.appointment
+        return reconciled ? { ...appointment, ...reconciled, client: appointment.client } : appointment
+      }))
 
       setAppointments(appointmentRows)
       setSales(saleRows)

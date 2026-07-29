@@ -189,11 +189,11 @@ function ResolvedAgendaOperations({ setPage }) {
         ${line('Status', status)}
         ${line('Tutor', pet.owner_name)}
         ${line('Pet', pet.pet_name)}
-        ${line('Raca/especie', pet.breed || pet.species)}
+        ${line('Raca', pet.breed || pet.species)}
         ${line('Data e hora', `${dateText} - ${appointmentInterval(appointment)}`)}
         ${line('Servico', appointmentServiceText(appointment, serviceLabel))}
-        ${line('Responsavel', responsible)}
-        ${line('Observacoes', appointment.notes || 'Nenhuma observacao')}
+        ${line('Resp.', responsible)}
+        ${line('Obs.', appointment.notes || 'Nenhuma observacao')}
       </div>
     `
     const opened = writeAndPrint(receiptShell({ storeSettings, title, content }))
