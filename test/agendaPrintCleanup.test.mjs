@@ -17,6 +17,7 @@ test('ficha de atendimento nao imprime valores nem checklist', () => {
   assert.equal(appointmentBlock.includes('prices.'), false)
   assert.equal(appointmentBlock.includes('CONTROLE:'), false)
   assert.equal(appointmentBlock.includes('checklist'), false)
+  assert.equal(appointmentBlock.includes("line('Endereco'"), false)
 })
 
 test('agenda do dia nao imprime valor dos atendimentos', () => {
