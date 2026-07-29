@@ -71,6 +71,18 @@ test('agenda aplica cards verdes desde a primeira renderizacao e botoes fixos', 
   assert.match(enhancement, /INSTRUCOES PARA O PROFISSIONAL/)
 })
 
+test('painel da agenda mostra pacote prioritario e todas as tosas sem limite de 12 itens', async () => {
+  const panel = await read('src/modules/petshop/pages/AgendaPackageNativePanel.jsx')
+  const integration = await read('src/modules/petshop/pages/AgendaPackageIntegratedPage.jsx')
+
+  assert.match(panel, /Pacote ativo · prioridade/)
+  assert.match(panel, /Usar \$\{packageName\(activeSubscription\)\}/)
+  assert.match(panel, /Tosas cadastradas/)
+  assert.match(panel, /sem limite de 12 itens/)
+  assert.match(panel, /subscriptionMatchesSearch/)
+  assert.match(integration, /AgendaPackageNativePanel/)
+})
+
 test('ordens possui aba Banho & Tosa e fechamento transacional idempotente', async () => {
   const orders = await read('src/modules/petshop/pages/OrdensBanhoTosaIntegratedPage.jsx')
   const panel = await read('src/modules/petshop/pages/BanhoTosaPdvPanel.jsx')
@@ -88,7 +100,7 @@ test('ordens possui aba Banho & Tosa e fechamento transacional idempotente', asy
 
 test('pacote e vendido antes de liberar saldo e abre o pagamento no nome do cliente', async () => {
   const hook = await read('src/modules/petshop/hooks/useCatalogPlans.js')
-  const integration = await read('src/modules/petshop/pages/PlanosPaymentIntegratedPage.jsx')
+  const integration = await read('src/modules/petshop/pages/PlanosNativePage.jsx')
   const packagePanel = await read('src/modules/petshop/pages/PackageActivationPdvPanel.jsx')
   const migration = await read('supabase/migrations/20260729092950_petshop_subscription_checkout.sql')
 
