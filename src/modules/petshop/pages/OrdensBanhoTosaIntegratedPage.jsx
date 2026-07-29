@@ -4,6 +4,7 @@ import { Scissors } from 'lucide-react'
 
 import OrdensEntregaPage from './OrdensEntregaPage'
 import BanhoTosaPdvPanel from './BanhoTosaPdvPanel'
+import PackageActivationPdvPanel from './PackageActivationPdvPanel'
 
 const ORDERS_BRIDGE_STYLES = `
   [data-yuisync-orders-active='true'] > * {
@@ -59,8 +60,13 @@ function ensurePortalRoot(parent, attribute, insertAfter = false) {
   return root
 }
 
+function requestedInitialTab() {
+  if (typeof window === 'undefined') return false
+  return window.sessionStorage.getItem('yuisync:orders-tab') === 'banho_tosa'
+}
+
 function BanhoTosaTabBridge({ setPage }) {
-  const [active, setActive] = useState(false)
+  const [active, setActive] = useState(requestedInitialTab)
   const [tabRoot, setTabRoot] = useState(null)
   const [contentRoot, setContentRoot] = useState(null)
   const pageRef = useRef(null)
@@ -94,6 +100,10 @@ function BanhoTosaTabBridge({ setPage }) {
     if (frameRef.current) return
     frameRef.current = window.requestAnimationFrame(sync)
   }, [sync])
+
+  useEffect(() => {
+    if (active) window.sessionStorage.removeItem('yuisync:orders-tab')
+  }, [active])
 
   useEffect(() => {
     const observer = new MutationObserver(scheduleSync)
@@ -133,7 +143,10 @@ function BanhoTosaTabBridge({ setPage }) {
         tabRoot,
       )}
       {contentRoot && active && createPortal(
-        <BanhoTosaPdvPanel setPage={setPage} />,
+        <div data-yuisync-banho-tosa-checkout className="space-y-6">
+          <PackageActivationPdvPanel />
+          <BanhoTosaPdvPanel setPage={setPage} />
+        </div>,
         contentRoot,
       )}
     </>
