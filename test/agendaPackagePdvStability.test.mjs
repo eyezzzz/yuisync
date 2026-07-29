@@ -32,6 +32,14 @@ test('pacote ativo encontra nome composto mesmo com primeiro e ultimo nome visiv
   assert.equal(matched?.id, 'subscription-1')
 })
 
+test('assinatura aguardando pagamento nao aparece como pacote ativo na agenda', () => {
+  const matched = matchActivePackageSubscription(
+    [{ ...activeSubscription, status: 'pending_payment' }],
+    'Marcos Carvalho · Bento',
+  )
+  assert.equal(matched, null)
+})
+
 test('servicos de tosa cadastrados sao reconhecidos para o atalho da agenda', () => {
   assert.equal(isTosaCatalogService({ name: 'TOSA HIGIENICA PORTE PEQUENO' }), true)
   assert.equal(isTosaCatalogService({ name: 'BANHO PET PORTE PEQUENO' }), false)
@@ -59,7 +67,7 @@ test('agenda aplica cards verdes desde a primeira renderizacao e botoes fixos', 
   assert.match(enhancement, /relative\.w-full\.rounded-lg\.border\.p-2\.text-left\.shadow-sm/)
   assert.match(enhancement, /width: 28px !important/)
   assert.match(enhancement, /white-space: normal !important/)
-  assert.match(enhancement, /data-yuisync-action=\"print\"/)
+  assert.match(enhancement, /data-yuisync-action="print"/)
   assert.match(enhancement, /INSTRUCOES PARA O PROFISSIONAL/)
 })
 
@@ -71,8 +79,27 @@ test('ordens possui aba Banho & Tosa e fechamento transacional idempotente', asy
   assert.match(orders, /Banho & Tosa/)
   assert.match(panel, /checkout_petshop_appointment_transaction/)
   assert.match(panel, /Conferir pagamento e lancar no caixa/)
+  assert.match(panel, /Nenhuma cobranca adicional e nenhuma nova receita/)
   assert.match(migration, /sales_tenant_appointment_unique/)
   assert.match(migration, /'agenda'/)
   assert.match(migration, /appointment_id/)
   assert.doesNotMatch(migration, /update public\.products\s+set stock_quantity/i)
+})
+
+test('pacote e vendido antes de liberar saldo e abre o pagamento no nome do cliente', async () => {
+  const hook = await read('src/modules/petshop/hooks/useCatalogPlans.js')
+  const integration = await read('src/modules/petshop/pages/PlanosPaymentIntegratedPage.jsx')
+  const packagePanel = await read('src/modules/petshop/pages/PackageActivationPdvPanel.jsx')
+  const migration = await read('supabase/migrations/20260729092950_petshop_subscription_checkout.sql')
+
+  assert.match(hook, /pending_payment/)
+  assert.match(hook, /yuisync:subscription-pending-payment/)
+  assert.match(integration, /Continuar para pagamento/)
+  assert.match(integration, /setPage\?\.\('ordens'\)/)
+  assert.match(packagePanel, /Receber e ativar pacote/)
+  assert.match(packagePanel, /checkout_petshop_subscription_transaction/)
+  assert.match(migration, /sales_tenant_subscription_unique/)
+  assert.match(migration, /source,[\s\S]*'assinatura'/)
+  assert.match(migration, /set status = 'active'/)
+  assert.match(migration, /services_used = '\{\}'::jsonb/)
 })
