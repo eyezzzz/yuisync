@@ -28,6 +28,22 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: Relax whitespace-sensitive replacement
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply_native_agenda_package_patch.py')
+          text = path.read_text(encoding='utf-8')
+          text = text.replace(
+              '    "                               <span className=\\"block text-xs text-muted\\">{fmtCurrency(service.price)} · {displayedDuration} min</span>\\n",',
+              '    "<span className=\\"block text-xs text-muted\\">{fmtCurrency(service.price)} · {displayedDuration} min</span>\\n",',
+          )
+          text = text.replace(
+              '    "                               <span className=\\"block text-xs text-muted\\">{packageServiceCodes.has(String(service.value)) ? \'Pacote · R$ 0,00\' : fmtCurrency(service.price)} · {displayedDuration} min</span>\\n",',
+              '    "<span className=\\"block text-xs text-muted\\">{packageServiceCodes.has(String(service.value)) ? \'Pacote · R$ 0,00\' : fmtCurrency(service.price)} · {displayedDuration} min</span>\\n",',
+          )
+          path.write_text(text, encoding='utf-8')
+          PY
       - name: Apply deterministic source patch
         run: python scripts/apply_native_agenda_package_patch.py
       - name: Commit patched Agenda
