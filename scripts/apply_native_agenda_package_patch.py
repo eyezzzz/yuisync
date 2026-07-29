@@ -133,3 +133,5 @@ if workflow_path.exists():
     workflow_path.unlink()
 if script_path.exists():
     script_path.unlink()
+
+# workflow already exists; this push triggers it.
