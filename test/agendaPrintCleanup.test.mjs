@@ -34,6 +34,7 @@ test('modal nativo usa a mesma ficha limpa', () => {
   assert.equal(nativeReceiptBlock.includes('Endereco completo'), false)
   assert.equal(nativeReceiptBlock.includes("row('Transporte'"), false)
   assert.equal(nativeReceiptBlock.includes('transportAddress'), false)
+  assert.equal(nativeReceiptBlock.includes('store_address'), false)
 })
 
 test('todos os caminhos restauram e aguardam a logo', () => {
@@ -50,6 +51,11 @@ test('tipografia foi ampliada nos dois modelos', () => {
   assert.match(resolvedReceiptShell, /\.line strong \{[^}]*font-size: 9\.5px/)
   assert.match(nativeReceiptBlock, /\.row \{[^}]*font-size: 10\.5px/)
   assert.match(nativeReceiptBlock, /\.label \{[^}]*font-size: 9\.5px/)
+})
+
+test('botao diario chama diretamente a ficha limpa', () => {
+  assert.match(resolvedSource, /data-yuisync-action="print"/)
+  assert.match(resolvedSource, /action\.dataset\.yuisyncAction === 'print'\) printAppointment\(appointment\)/)
 })
 
 test('integracao de pacote nao intercepta mais o clique de imprimir', () => {
