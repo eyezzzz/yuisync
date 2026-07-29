@@ -58,7 +58,12 @@ function storeAddress(storeSettings) {
 }
 
 function receiptShell({ storeSettings, title, content }) {
-  const logo = String(storeSettings?.receipt_logo_data_url || '')
+  const logo = String(
+    storeSettings?.receipt_logo_data_url
+    || storeSettings?.store_logo_url
+    || storeSettings?.logo_url
+    || '',
+  )
   const header = logo
     ? `<img class="print-logo" src="${escapeHtml(logo)}" alt="Logo da empresa"/>`
     : `
@@ -80,20 +85,20 @@ function receiptShell({ storeSettings, title, content }) {
           .receipt { width: 64mm; max-width: 64mm; margin: 0; }
           .center { text-align: center; }
           .print-logo { display:block; width:auto; max-width:56mm; max-height:22mm; margin:0 auto 2.5mm; object-fit:contain; filter:grayscale(1) contrast(2); }
-          .store { font-size: 14px; font-weight: 900; text-transform: uppercase; }
-          .store-line { margin-top: 1px; font-size: 8px; line-height: 1.25; overflow-wrap: anywhere; }
-          .title { margin: 3mm 0 2mm; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 1.6mm 0; font-size: 11px; font-weight: 900; }
+          .store { font-size: 15px; font-weight: 900; text-transform: uppercase; }
+          .store-line { margin-top: 1px; font-size: 9px; line-height: 1.25; overflow-wrap: anywhere; }
+          .title { margin: 3mm 0 2mm; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 1.6mm 0; font-size: 12px; font-weight: 900; }
           .details { border-top: 1px solid #000; border-bottom: 1px solid #000; padding: 1.5mm 0; }
-          .line { display: grid; grid-template-columns: 18mm minmax(0, 1fr); gap: 1.5mm; padding: .7mm 0; font-size: 9px; line-height: 1.28; }
-          .line strong { font-size: 8px; text-transform: uppercase; }
+          .line { display: grid; grid-template-columns: 18mm minmax(0, 1fr); gap: 1.5mm; padding: .8mm 0; font-size: 10px; line-height: 1.28; }
+          .line strong { font-size: 9px; text-transform: uppercase; }
           .line span { min-width: 0; font-weight: 700; overflow-wrap: anywhere; }
           .appointment { padding: 1.8mm 0; border-bottom: 1px dashed #000; page-break-inside: avoid; }
-          .appointment-title { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2mm; font-size: 10px; font-weight: 900; }
-          .appointment-line { margin-top: .7mm; font-size: 8.5px; line-height: 1.3; overflow-wrap: anywhere; }
+          .appointment-title { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2mm; font-size: 11px; font-weight: 900; }
+          .appointment-line { margin-top: .8mm; font-size: 9.5px; line-height: 1.3; overflow-wrap: anywhere; }
           .checklist { margin-top: 2.5mm; border: 1px solid #000; padding: 1.5mm; font-size: 8.5px; line-height: 1.65; }
           .total { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2mm; margin-top: 2.5mm; padding-top: 1.5mm; border-top: 2px solid #000; font-size: 12px; font-weight: 900; }
           .total span:last-child { white-space: nowrap; text-align: right; }
-          .footer { margin-top: 3mm; font-size: 7.5px; line-height: 1.3; }
+          .footer { margin-top: 3mm; font-size: 8.5px; line-height: 1.3; }
           @media print { body { position: absolute; inset: 0 auto auto 0; } }
         </style>
       </head>
@@ -116,7 +121,29 @@ function writeAndPrint(html) {
   if (!printWindow) return false
   printWindow.document.write(html)
   printWindow.document.close()
-  printThermalReceipt(printWindow)
+
+  let printed = false
+  const printWhenReady = () => {
+    if (printed) return
+    printed = true
+    printThermalReceipt(printWindow)
+  }
+  const images = [...printWindow.document.images]
+  const pendingImages = images.filter((image) => !image.complete)
+  if (pendingImages.length === 0) {
+    window.setTimeout(printWhenReady, 80)
+  } else {
+    let remaining = pendingImages.length
+    const settleImage = () => {
+      remaining -= 1
+      if (remaining <= 0) window.setTimeout(printWhenReady, 80)
+    }
+    pendingImages.forEach((image) => {
+      image.addEventListener('load', settleImage, { once: true })
+      image.addEventListener('error', settleImage, { once: true })
+    })
+    window.setTimeout(printWhenReady, 1500)
+  }
   return true
 }
 
@@ -173,7 +200,6 @@ function ResolvedAgendaOperations({ setPage }) {
     const responsible = appointment.responsible_staff_name || appointment.responsible_staff_key || 'Nao informado'
     const date = new Date(appointment.scheduled_at || '')
     const dateText = Number.isNaN(date.getTime()) ? 'Nao informada' : date.toLocaleDateString('pt-BR')
-    const prices = appointmentPriceBreakdown(appointment, transportOptions)
     const line = (label, value) => `<div class="line"><strong>${escapeHtml(label)}</strong><span>${escapeHtml(value || 'Nao informado')}</span></div>`
     const content = `
       <div class="details">
@@ -186,28 +212,20 @@ function ResolvedAgendaOperations({ setPage }) {
         ${line('Responsavel', responsible)}
         ${line('Observacoes', appointment.notes || 'Nenhuma observacao')}
       </div>
-      <div class="checklist"><strong>CONTROLE:</strong><br/>[ ] Pet recebido &nbsp; [ ] Servico iniciado<br/>[ ] Servico concluido &nbsp; [ ] Tutor avisado</div>
-      <div class="details" style="margin-top:2.5mm">
-        ${line('Servico', fmtCurrency(prices.service))}
-        ${line('Transporte', fmtCurrency(prices.transport))}
-      </div>
-      <div class="total"><span>TOTAL</span><span>${escapeHtml(fmtCurrency(prices.total))}</span></div>
     `
     const opened = writeAndPrint(receiptShell({ storeSettings, title, content }))
     setNotice(opened ? '' : 'O navegador bloqueou a janela de impressao. Libere pop-ups para o YuiSync.')
-  }, [serviceLabel, statusBadge, storeSettings, transportOptions])
+  }, [serviceLabel, statusBadge, storeSettings])
 
   const printDay = useCallback(() => {
     const rows = operationalAppointments.map((appointment, index) => {
       const pet = appointment?.pets || {}
       const status = statusBadge(appointment.status).label
-      const prices = appointmentPriceBreakdown(appointment, transportOptions)
       return `
         <section class="appointment">
           <div class="appointment-title"><span>${escapeHtml(`${index + 1}. ${appointmentInterval(appointment)}`)}</span><span>${escapeHtml(status)}</span></div>
           <div class="appointment-line"><strong>${escapeHtml(pet.pet_name || 'Pet')}</strong> - Tutor: ${escapeHtml(pet.owner_name || 'Cliente')}</div>
           <div class="appointment-line">Servico: ${escapeHtml(appointmentServiceText(appointment, serviceLabel))}</div>
-          <div class="appointment-line">Total: ${escapeHtml(fmtCurrency(prices.total))}</div>
           ${appointment.notes ? `<div class="appointment-line">Obs.: ${escapeHtml(appointment.notes)}</div>` : ''}
         </section>
       `
@@ -222,7 +240,7 @@ function ResolvedAgendaOperations({ setPage }) {
     `
     const opened = writeAndPrint(receiptShell({ storeSettings, title: 'AGENDA DO DIA', content }))
     setNotice(opened ? '' : 'O navegador bloqueou a janela de impressao. Libere pop-ups para o YuiSync.')
-  }, [operationalAppointments, selectedDate, serviceLabel, statusBadge, storeSettings, transportOptions])
+  }, [operationalAppointments, selectedDate, serviceLabel, statusBadge, storeSettings])
 
   const completeAppointment = useCallback(async (appointmentId) => {
     setNotice('')
