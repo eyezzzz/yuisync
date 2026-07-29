@@ -1,0 +1,34 @@
+name: Apply agenda completion checkout
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - scripts/apply_agenda_completion_checkout_patch.py
+      - .github/workflows/apply-agenda-completion-checkout.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: feat/agenda-completion-financial-checkout
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply deterministic source patch
+        run: python scripts/apply_agenda_completion_checkout_patch.py
+      - name: Commit patched completion flow
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --quiet && exit 0
+          git commit -m "feat: integrar conclusao da agenda ao caixa"
+          git push origin HEAD:feat/agenda-completion-financial-checkout
