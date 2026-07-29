@@ -264,10 +264,10 @@ function AgendaFluidRefinement() {
   return <style>{FLUID_AGENDA_STYLES}</style>
 }
 
-export default function AgendaIntegratedPage() {
+export default function AgendaIntegratedPage({ setPage }) {
   return (
     <>
-      <AgendaResolvedPage />
+      <AgendaResolvedPage setPage={setPage} />
       <AgendaFluidRefinement />
     </>
   )

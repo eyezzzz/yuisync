@@ -15,11 +15,12 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { fmtCurrency, supabase } from '../../../lib/supabase'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
+import { normalizeTransportOptions } from './agendaOperationalCore'
 import {
-  appointmentPriceBreakdown,
-  normalizeTransportOptions,
-  transportFeeForMode,
-} from './agendaOperationalCore'
+  appointmentCheckoutTotals,
+  clearQueuedAppointmentCheckout,
+  readQueuedAppointmentCheckout,
+} from './appointmentCheckoutFlow'
 import {
   appointmentHasTransportBenefit,
   appointmentServiceNames,
@@ -75,6 +76,7 @@ function AppointmentFinanceCard({
   appointment,
   sale,
   totals,
+  highlighted,
   checkingOut,
   active,
   paymentMethod,
@@ -93,7 +95,7 @@ function AppointmentFinanceCard({
   const zeroTotal = totals.total <= 0.005
 
   return (
-    <article className={`rounded-2xl border p-4 ${sale || zeroTotal ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : 'border-[var(--border)] bg-card'}`}>
+    <article data-yuisync-appointment-checkout={appointment.id} className={`rounded-2xl border p-4 ${highlighted ? 'ring-2 ring-amber-400/60' : ''} ${sale || zeroTotal ? 'border-emerald-500/25 bg-emerald-500/[0.06]' : 'border-[var(--border)] bg-card'}`}>
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="flex items-center gap-2 text-base font-black text-text">
@@ -236,7 +238,9 @@ export default function BanhoTosaPdvPanel({ setPage }) {
   const { activeTenantId, storeSettings } = useAuthCtx()
   const { activeModuleId } = useModuleCtx()
   const moduleId = activeModuleId || 'petshop'
-  const [date, setDate] = useState(localDate())
+  const initialCheckoutTarget = useMemo(() => readQueuedAppointmentCheckout(), [])
+  const [date, setDate] = useState(initialCheckoutTarget?.date || localDate())
+  const [focusedId, setFocusedId] = useState(initialCheckoutTarget?.appointment_id || null)
   const [appointments, setAppointments] = useState([])
   const [sales, setSales] = useState([])
   const [loading, setLoading] = useState(true)
@@ -312,28 +316,12 @@ export default function BanhoTosaPdvPanel({ setPage }) {
     [sales],
   )
 
-  const totalsFor = useCallback((appointment) => {
-    const breakdown = appointmentPriceBreakdown(appointment, transportOptions)
-    const mode = appointment.transport_mode || 'cliente_leva'
-    const catalogTransport = transportFeeForMode(transportOptions, mode)
-    const netTransport = appointmentHasTransportBenefit(appointment) ? 0 : breakdown.transport
-    const items = Array.isArray(appointment.service_items) ? appointment.service_items : []
-    const catalogServices = items.length
-      ? items.reduce((sum, item) => sum + Math.max(0, Number(item?.catalog_price ?? item?.default_price ?? item?.unit_price ?? item?.price ?? 0)), 0)
-      : Math.max(0, Number(appointment.price || 0))
-    const catalogTotal = Math.max(breakdown.total, catalogServices + catalogTransport)
-    const total = Math.max(0, breakdown.service + netTransport)
-    return {
-      service: breakdown.service,
-      transport: netTransport,
-      catalogTransport,
-      catalogTotal,
-      total,
-      discount: Math.max(0, catalogTotal - total),
-    }
-  }, [transportOptions])
+  const totalsFor = useCallback(
+    (appointment) => appointmentCheckoutTotals(appointment, transportOptions),
+    [transportOptions],
+  )
 
-  function openCheckout(appointment, totals) {
+  const openCheckout = useCallback((appointment, totals) => {
     setActiveId(appointment.id)
     setPaymentMethod('dinheiro')
     setSplitEnabled(false)
@@ -342,7 +330,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
       { method: 'dinheiro', amount: totals.total ? totals.total.toFixed(2) : '' },
       { method: 'pix', amount: '' },
     ])
-  }
+  }, [])
 
   function updateSplit(index, key, value) {
     setSplits((current) => current.map((item, itemIndex) => itemIndex === index ? { ...item, [key]: value } : item))
@@ -377,6 +365,8 @@ export default function BanhoTosaPdvPanel({ setPage }) {
       if (response.error) throw response.error
 
       setActiveId(null)
+      setFocusedId(null)
+      clearQueuedAppointmentCheckout()
       await reload()
     } catch (error) {
       setCheckoutError(error?.message || 'Nao foi possivel lancar o atendimento no caixa.')
@@ -390,6 +380,23 @@ export default function BanhoTosaPdvPanel({ setPage }) {
     sale: salesByAppointment.get(String(appointment.id)) || null,
     totals: totalsFor(appointment),
   })), [appointments, salesByAppointment, totalsFor])
+
+  useEffect(() => {
+    if (!focusedId || loading) return
+    const entry = financialState.find((item) => String(item.appointment.id) === String(focusedId))
+    if (!entry) return
+    if (entry.sale || entry.totals.total <= 0.005) {
+      clearQueuedAppointmentCheckout()
+      setFocusedId(null)
+      return
+    }
+    openCheckout(entry.appointment, entry.totals)
+    clearQueuedAppointmentCheckout()
+    window.requestAnimationFrame(() => {
+      document.querySelector(`[data-yuisync-appointment-checkout="${entry.appointment.id}"]`)?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    })
+  }, [financialState, focusedId, loading, openCheckout])
+
   const pendingCount = financialState.filter((entry) => !entry.sale && entry.totals.total > 0.005).length
   const packageCount = financialState.filter((entry) => !entry.sale && entry.totals.total <= 0.005).length
   const paidCount = financialState.filter((entry) => entry.sale).length
@@ -431,6 +438,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
               appointment={appointment}
               sale={sale}
               totals={totals}
+              highlighted={String(focusedId || activeId || '') === String(appointment.id)}
               checkingOut={checkingOut}
               active={activeId === appointment.id}
               paymentMethod={paymentMethod}
