@@ -1,0 +1,807 @@
+name: Apply package checkout reconciliation
+
+on:
+  push:
+    branches: [fix/package-checkout-reconciliation]
+    paths: [.github/workflows/apply-package-checkout-fix.yml]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/package-checkout-reconciliation
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply package, checkout and receipt fixes
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{label}: expected 1 occurrence, found {count}')
+              return text.replace(old, new, 1)
+
+          flow_path = Path('src/modules/petshop/pages/appointmentCheckoutFlow.js')
+          flow = flow_path.read_text()
+          replacement = r'''function activePackageBenefits(appointment = {}) {
+            const benefits = Array.isArray(appointment.subscription_benefits) ? appointment.subscription_benefits : []
+            return benefits.filter((benefit) => ['reserved', 'consumed'].includes(String(benefit?.status || appointment.subscription_benefit_status || 'reserved')))
+          }
+
+          function itemHasServiceBenefit(item = {}, benefits = [], itemCount = 0) {
+            if (item?.benefit_used === true || item?.subscription_benefit_used === true) return true
+            const code = String(item?.code || item?.service_type || '').trim()
+            const key = String(item?.benefit_key || '').trim()
+            const serviceBenefits = benefits.filter((benefit) => benefit?.kind === 'service')
+            return serviceBenefits.some((benefit) => {
+              const benefitCode = String(benefit?.service_code || '').trim()
+              const benefitKey = String(benefit?.key || benefit?.benefit_key || '').trim()
+              return (code && benefitCode === code)
+                || (key && benefitKey === key)
+                || (itemCount === 1 && !benefitCode)
+            })
+          }
+
+          export function appointmentCheckoutTotals(appointment = {}, transportOptions = []) {
+            const breakdown = appointmentPriceBreakdown(appointment, transportOptions)
+            const mode = appointment.transport_mode || appointment.motodog?.mode || 'cliente_leva'
+            const catalogTransport = transportFeeForMode(transportOptions, mode)
+            const benefits = activePackageBenefits(appointment)
+            const transportCovered = appointmentHasTransportBenefit(appointment)
+              || benefits.some((benefit) => benefit?.kind === 'transport')
+            const netTransport = transportCovered ? 0 : breakdown.transport
+            const items = Array.isArray(appointment.service_items) ? appointment.service_items : []
+            const catalogServices = items.length
+              ? items.reduce((sum, item) => sum + Math.max(0, Number(
+                item?.catalog_price
+                ?? item?.default_price
+                ?? item?.unit_price
+                ?? item?.price
+                ?? 0,
+              )), 0)
+              : Math.max(0, Number(appointment.price || 0) - catalogTransport)
+            const netServices = items.length
+              ? items.reduce((sum, item) => (
+                sum + (itemHasServiceBenefit(item, benefits, items.length)
+                  ? 0
+                  : Math.max(0, Number(item?.unit_price ?? item?.price ?? item?.default_price ?? 0)))
+              ), 0)
+              : (benefits.some((benefit) => benefit?.kind === 'service') ? 0 : breakdown.service)
+            const total = Math.max(0, netServices + netTransport)
+            const catalogTotal = Math.max(total, catalogServices + catalogTransport)
+
+            return {
+              service: netServices,
+              transport: netTransport,
+              catalogTransport,
+              catalogTotal,
+              total,
+              discount: Math.max(0, catalogTotal - total),
+            }
+          }
+
+          export function appointmentNeedsPayment'''
+          flow, count = re.subn(
+              r'export function appointmentCheckoutTotals\(appointment = \{\}, transportOptions = \[\]\) \{.*?\n\}\n\nexport function appointmentNeedsPayment',
+              replacement,
+              flow,
+              count=1,
+              flags=re.S,
+          )
+          if count != 1:
+              raise RuntimeError('appointment checkout totals block not found')
+          flow_path.write_text(flow)
+
+          panel_path = Path('src/modules/petshop/pages/BanhoTosaPdvPanel.jsx')
+          panel = panel_path.read_text()
+          panel = replace_once(
+              panel,
+              ".select('id,tenant_id,module_id,client_id,service_type,service_group,service_items,scheduled_at,duration_min,price,status,notes,responsible_staff_name,responsible_staff_key,transport_mode,transport_label,updated_at,clients(id,name,phone,details)')",
+              ".select('id,tenant_id,module_id,client_id,service_type,service_group,service_items,scheduled_at,duration_min,price,status,notes,responsible_staff_name,responsible_staff_key,transport_mode,transport_label,subscription_id,subscription_benefit_used,subscription_benefits,subscription_discount,subscription_label,subscription_benefit_status,updated_at,clients(id,name,phone,details)')",
+              'load package snapshot fields',
+          )
+          panel = replace_once(
+              panel,
+              "      const appointmentRows = (appointmentResponse.data || [])\n        .map(mapAppointment)\n        .filter(isGroomingAppointment)",
+              "      let appointmentRows = (appointmentResponse.data || [])\n        .map(mapAppointment)\n        .filter(isGroomingAppointment)",
+              'make appointment rows mutable',
+          )
+          panel = replace_once(
+              panel,
+              "        saleRows = salesResponse.data || []\n      }\n\n      setAppointments(appointmentRows)",
+              "        saleRows = salesResponse.data || []\n      }\n\n      const soldAppointmentIds = new Set(saleRows.map((sale) => String(sale.appointment_id)))\n      appointmentRows = await Promise.all(appointmentRows.map(async (appointment) => {\n        if (soldAppointmentIds.has(String(appointment.id))) return appointment\n        const reconciliation = await supabase.rpc('reconcile_petshop_completed_appointment_package', {\n          p_appointment_id: appointment.id,\n        })\n        if (reconciliation.error) {\n          const message = String(reconciliation.error.message || '')\n          if (message.includes('reconcile_petshop_completed_appointment_package')) {\n            throw new Error('Aplique a migration 20260729172000_petshop_checkout_package_reconciliation.sql antes de usar o fechamento.')\n          }\n          throw reconciliation.error\n        }\n        const reconciled = reconciliation.data?.appointment\n        return reconciled ? { ...appointment, ...reconciled, client: appointment.client } : appointment\n      }))\n\n      setAppointments(appointmentRows)",
+              'reconcile completed package appointments',
+          )
+          panel_path.write_text(panel)
+
+          agenda_path = Path('src/modules/petshop/pages/AgendaPage.jsx')
+          agenda = agenda_path.read_text()
+          agenda = replace_once(agenda, "${row('Raca / especie', pet.breed || pet.species)}", "${row('Raca', pet.breed || pet.species)}", 'native receipt breed label')
+          agenda = replace_once(agenda, "${row('Responsavel', responsible)}", "${row('Resp.', responsible)}", 'native receipt responsible label')
+          agenda = replace_once(agenda, "${row('Observacoes', appt.notes || 'Nenhuma observacao')}", "${row('Obs.', appt.notes || 'Nenhuma observacao')}", 'native receipt notes label')
+          agenda_path.write_text(agenda)
+
+          resolved_path = Path('src/modules/petshop/pages/AgendaResolvedPage.jsx')
+          resolved = resolved_path.read_text()
+          resolved = replace_once(resolved, "${line('Raca/especie', pet.breed || pet.species)}", "${line('Raca', pet.breed || pet.species)}", 'operational receipt breed label')
+          resolved = replace_once(resolved, "${line('Responsavel', responsible)}", "${line('Resp.', responsible)}", 'operational receipt responsible label')
+          resolved = replace_once(resolved, "${line('Observacoes', appointment.notes || 'Nenhuma observacao')}", "${line('Obs.', appointment.notes || 'Nenhuma observacao')}", 'operational receipt notes label')
+          resolved_path.write_text(resolved)
+
+          migration = r'''begin;
+
+          create or replace function public.reserve_petshop_subscription_benefit(
+            p_subscription_id uuid,
+            p_tenant_id uuid,
+            p_candidates text[]
+          )
+          returns text
+          language plpgsql
+          security definer
+          set search_path = public
+          as $$
+          declare
+            v_subscription record;
+            v_candidate text;
+            v_candidate_key text;
+            v_plan_service jsonb;
+            v_usage_key text;
+            v_limit integer;
+            v_used integer;
+          begin
+            if p_subscription_id is null or p_tenant_id is null then return null; end if;
+
+            select
+              subscription.id,
+              coalesce(subscription.services_used, '{}'::jsonb) as services_used,
+              coalesce(plan.services, '[]'::jsonb) as plan_services
+            into v_subscription
+            from public.client_subscriptions subscription
+            join public.subscription_plans plan
+              on plan.id = subscription.plan_id
+             and plan.tenant_id = subscription.tenant_id
+             and plan.module_id = subscription.module_id
+            where subscription.id = p_subscription_id
+              and subscription.tenant_id = p_tenant_id
+              and subscription.status = 'active'
+              and plan.active = true
+            for update of subscription;
+
+            if not found then return null; end if;
+
+            foreach v_candidate in array coalesce(p_candidates, array[]::text[])
+            loop
+              v_candidate := nullif(trim(v_candidate), '');
+              if v_candidate is null then continue; end if;
+              v_candidate_key := public.petshop_plan_service_key(v_candidate, v_candidate, null);
+              v_plan_service := null;
+
+              select value
+              into v_plan_service
+              from jsonb_array_elements(v_subscription.plan_services)
+              where lower(trim(coalesce(value->>'service_type', ''))) = lower(v_candidate)
+                 or lower(trim(coalesce(value->>'service_code', ''))) = lower(v_candidate)
+                 or public.petshop_plan_service_key(
+                      coalesce(value->>'service_name', value->>'label'),
+                      coalesce(value->>'service_code', value->>'service_type'),
+                      value->>'group_type'
+                    ) = v_candidate_key
+              order by case
+                when lower(trim(coalesce(value->>'service_type', ''))) = lower(v_candidate) then 0
+                when lower(trim(coalesce(value->>'service_code', ''))) = lower(v_candidate) then 1
+                else 2
+              end
+              limit 1;
+
+              if v_plan_service is null then continue; end if;
+              v_usage_key := coalesce(
+                nullif(trim(v_plan_service->>'service_type'), ''),
+                nullif(trim(v_plan_service->>'service_code'), '')
+              );
+              if v_usage_key is null then continue; end if;
+
+              v_limit := greatest(0, coalesce(nullif(v_plan_service->>'qty_per_cycle', '')::integer, 0));
+              v_used := greatest(0, coalesce(nullif(v_subscription.services_used->>v_usage_key, '')::integer, 0));
+
+              if v_limit > v_used then
+                v_subscription.services_used := jsonb_set(
+                  v_subscription.services_used,
+                  array[v_usage_key],
+                  to_jsonb(v_used + 1),
+                  true
+                );
+                update public.client_subscriptions
+                set services_used = v_subscription.services_used,
+                    updated_at = now()
+                where id = v_subscription.id
+                  and tenant_id = p_tenant_id;
+                return v_usage_key;
+              end if;
+            end loop;
+
+            return null;
+          end;
+          $$;
+
+          create or replace function public.reconcile_petshop_completed_appointment_package(p_appointment_id uuid)
+          returns jsonb
+          language plpgsql
+          security definer
+          set search_path = public
+          as $$
+          declare
+            v_appointment public.appointments%rowtype;
+            v_subscription_id uuid;
+            v_plan_name text;
+            v_items jsonb := '[]'::jsonb;
+            v_item jsonb;
+            v_benefits jsonb := '[]'::jsonb;
+            v_new_benefits jsonb := '[]'::jsonb;
+            v_service_code text;
+            v_service_name text;
+            v_group text;
+            v_benefit_key text;
+            v_catalog_unit numeric;
+            v_net_unit numeric;
+            v_catalog_transport numeric := 0;
+            v_catalog_total numeric := 0;
+            v_net_total numeric := 0;
+            v_any_benefit boolean := false;
+            v_covered boolean := false;
+            v_transport_covered boolean := false;
+            v_changed boolean := false;
+          begin
+            if auth.uid() is null then raise exception 'Sessao autenticada obrigatoria.'; end if;
+
+            select * into v_appointment
+            from public.appointments
+            where id = p_appointment_id
+            for update;
+
+            if not found then raise exception 'Agendamento nao encontrado.'; end if;
+            if v_appointment.module_id <> 'petshop' or not public.has_tenant_access(v_appointment.tenant_id) then
+              raise exception 'Agendamento nao pertence ao tenant ativo.';
+            end if;
+            if lower(coalesce(v_appointment.status, '')) not in ('concluido', 'completed', 'finalizado') then
+              return jsonb_build_object('changed', false, 'appointment', to_jsonb(v_appointment));
+            end if;
+            if exists (
+              select 1 from public.sales sale
+              where sale.tenant_id = v_appointment.tenant_id
+                and sale.appointment_id = v_appointment.id
+            ) then
+              return jsonb_build_object('changed', false, 'appointment', to_jsonb(v_appointment));
+            end if;
+
+            select subscription.id, plan.name
+            into v_subscription_id, v_plan_name
+            from public.client_subscriptions subscription
+            join public.subscription_plans plan
+              on plan.id = subscription.plan_id
+             and plan.tenant_id = subscription.tenant_id
+             and plan.module_id = subscription.module_id
+            where subscription.tenant_id = v_appointment.tenant_id
+              and subscription.module_id = v_appointment.module_id
+              and subscription.client_id = v_appointment.client_id
+              and subscription.status = 'active'
+              and plan.active = true
+            order by
+              case when subscription.id = v_appointment.subscription_id then 0 else 1 end,
+              subscription.started_at desc,
+              subscription.created_at desc
+            limit 1;
+
+            v_items := case
+              when jsonb_typeof(coalesce(v_appointment.service_items, '[]'::jsonb)) = 'array'
+                then coalesce(v_appointment.service_items, '[]'::jsonb)
+              else '[]'::jsonb
+            end;
+            v_benefits := case
+              when jsonb_typeof(coalesce(v_appointment.subscription_benefits, '[]'::jsonb)) = 'array'
+                then coalesce(v_appointment.subscription_benefits, '[]'::jsonb)
+              else '[]'::jsonb
+            end;
+            v_new_benefits := v_benefits;
+
+            for v_item in select * from jsonb_array_elements(v_items)
+            loop
+              v_service_code := coalesce(nullif(trim(v_item->>'code'), ''), nullif(trim(v_item->>'service_type'), ''));
+              v_service_name := coalesce(nullif(trim(v_item->>'name'), ''), nullif(trim(v_item->>'label'), ''), v_service_code, 'Servico');
+              v_group := coalesce(nullif(trim(v_item->>'group_type'), ''), v_appointment.service_group);
+              v_catalog_unit := greatest(0, coalesce(
+                nullif(v_item->>'catalog_price', '')::numeric,
+                nullif(v_item->>'default_price', '')::numeric,
+                nullif(v_item->>'unit_price', '')::numeric,
+                nullif(v_item->>'price', '')::numeric,
+                0
+              ));
+              v_net_unit := greatest(0, coalesce(
+                nullif(v_item->>'unit_price', '')::numeric,
+                nullif(v_item->>'price', '')::numeric,
+                v_catalog_unit
+              ));
+              v_catalog_total := v_catalog_total + v_catalog_unit;
+              v_benefit_key := null;
+
+              select coalesce(nullif(benefit->>'key', ''), nullif(benefit->>'benefit_key', ''))
+              into v_benefit_key
+              from jsonb_array_elements(v_benefits) benefit
+              where benefit->>'kind' = 'service'
+                and coalesce(benefit->>'status', v_appointment.subscription_benefit_status, 'reserved') in ('reserved', 'consumed')
+                and (
+                  (v_service_code is not null and benefit->>'service_code' = v_service_code)
+                  or (nullif(v_item->>'benefit_key', '') is not null and coalesce(benefit->>'key', benefit->>'benefit_key') = v_item->>'benefit_key')
+                )
+              limit 1;
+
+              v_covered := coalesce(nullif(v_item->>'benefit_used', '')::boolean, false)
+                or coalesce(nullif(v_item->>'subscription_benefit_used', '')::boolean, false)
+                or v_benefit_key is not null;
+
+              if not v_covered and v_subscription_id is not null then
+                v_benefit_key := public.reserve_petshop_subscription_benefit(
+                  v_subscription_id,
+                  v_appointment.tenant_id,
+                  array[
+                    v_service_code,
+                    public.petshop_plan_service_key(v_service_name, v_service_code, v_group)
+                  ]
+                );
+                v_covered := v_benefit_key is not null;
+                v_changed := v_changed or v_covered;
+              end if;
+
+              if v_covered then
+                v_any_benefit := true;
+                if not exists (
+                  select 1 from jsonb_array_elements(v_new_benefits) benefit
+                  where benefit->>'kind' = 'service'
+                    and coalesce(benefit->>'service_code', '') = coalesce(v_service_code, '')
+                    and coalesce(benefit->>'status', 'reserved') in ('reserved', 'consumed')
+                ) then
+                  v_new_benefits := v_new_benefits || jsonb_build_array(jsonb_build_object(
+                    'kind', 'service',
+                    'key', coalesce(v_benefit_key, v_service_code),
+                    'service_code', v_service_code,
+                    'label', v_service_name,
+                    'catalog_price', v_catalog_unit,
+                    'status', 'consumed'
+                  ));
+                end if;
+              else
+                v_net_total := v_net_total + v_net_unit;
+              end if;
+            end loop;
+
+            if jsonb_array_length(v_items) = 0 then
+              v_catalog_unit := greatest(0, coalesce(v_appointment.price, 0));
+              v_catalog_total := v_catalog_total + v_catalog_unit;
+              if v_subscription_id is not null then
+                v_benefit_key := public.reserve_petshop_subscription_benefit(
+                  v_subscription_id,
+                  v_appointment.tenant_id,
+                  array[
+                    v_appointment.service_type,
+                    public.petshop_plan_service_key(v_appointment.service_type, v_appointment.service_type, v_appointment.service_group)
+                  ]
+                );
+              end if;
+              if v_benefit_key is not null then
+                v_any_benefit := true;
+                v_changed := true;
+                v_new_benefits := v_new_benefits || jsonb_build_array(jsonb_build_object(
+                  'kind', 'service', 'key', v_benefit_key, 'service_code', v_appointment.service_type,
+                  'label', v_appointment.service_type, 'catalog_price', v_catalog_unit, 'status', 'consumed'
+                ));
+              else
+                v_net_total := v_net_total + v_catalog_unit;
+              end if;
+            end if;
+
+            v_catalog_transport := public.resolve_petshop_transport_fee(
+              v_appointment.tenant_id,
+              v_appointment.module_id,
+              coalesce(v_appointment.transport_mode, 'cliente_leva')
+            );
+            v_catalog_total := v_catalog_total + v_catalog_transport;
+
+            select exists (
+              select 1 from jsonb_array_elements(v_benefits) benefit
+              where benefit->>'kind' = 'transport'
+                and coalesce(benefit->>'status', v_appointment.subscription_benefit_status, 'reserved') in ('reserved', 'consumed')
+            ) into v_transport_covered;
+            if not v_transport_covered then
+              select exists (
+                select 1 from jsonb_array_elements(v_items) item
+                where coalesce(nullif(item->>'transport_benefit_used', '')::boolean, false)
+              ) into v_transport_covered;
+            end if;
+
+            if v_catalog_transport > 0 and not v_transport_covered and v_subscription_id is not null then
+              v_benefit_key := public.reserve_petshop_subscription_benefit(
+                v_subscription_id,
+                v_appointment.tenant_id,
+                array['motodog']
+              );
+              v_transport_covered := v_benefit_key is not null;
+              v_changed := v_changed or v_transport_covered;
+              if v_transport_covered then
+                v_new_benefits := v_new_benefits || jsonb_build_array(jsonb_build_object(
+                  'kind', 'transport', 'key', v_benefit_key, 'transport_mode', 'buscar_e_levar',
+                  'label', 'MotoDog - buscar e levar', 'catalog_price', v_catalog_transport, 'status', 'consumed'
+                ));
+              end if;
+            end if;
+
+            if v_transport_covered then
+              v_any_benefit := true;
+            else
+              v_net_total := v_net_total + v_catalog_transport;
+            end if;
+
+            if v_any_benefit then
+              update public.appointments
+              set subscription_benefits = public.mark_petshop_subscription_benefits(v_new_benefits, 'consumed'),
+                  subscription_discount = round(greatest(0, v_catalog_total - v_net_total), 2),
+                  subscription_label = coalesce(v_appointment.subscription_label, v_plan_name, 'Pacote banho'),
+                  subscription_benefit_status = 'consumed',
+                  price = round(greatest(0, v_net_total), 2),
+                  updated_at = now()
+              where id = v_appointment.id
+              returning * into v_appointment;
+            end if;
+
+            return jsonb_build_object(
+              'changed', v_changed,
+              'appointment', to_jsonb(v_appointment)
+            );
+          end;
+          $$;
+
+          revoke all on function public.reconcile_petshop_completed_appointment_package(uuid) from public;
+          grant execute on function public.reconcile_petshop_completed_appointment_package(uuid) to authenticated, service_role;
+
+          create or replace function public.checkout_petshop_appointment_transaction(p_payload jsonb)
+          returns jsonb
+          language plpgsql
+          security definer
+          set search_path = public
+          as $$
+          declare
+            v_tenant_id uuid := nullif(p_payload->>'tenant_id', '')::uuid;
+            v_module_id text := coalesce(nullif(trim(p_payload->>'module_id'), ''), 'petshop');
+            v_appointment_id uuid := nullif(p_payload->>'appointment_id', '')::uuid;
+            v_profile_id uuid := auth.uid();
+            v_payment_method text := nullif(trim(p_payload->>'payment_method'), '');
+            v_splits jsonb := coalesce(p_payload->'payment_splits', '[]'::jsonb);
+            v_split jsonb;
+            v_split_total numeric := 0;
+            v_appointment record;
+            v_existing record;
+            v_sale_id uuid;
+            v_items jsonb := '[]'::jsonb;
+            v_benefits jsonb := '[]'::jsonb;
+            v_item jsonb;
+            v_service_code text;
+            v_service_name text;
+            v_product_id uuid;
+            v_net_unit numeric;
+            v_catalog_unit numeric;
+            v_net_service_total numeric := 0;
+            v_catalog_service_total numeric := 0;
+            v_transport_net numeric := 0;
+            v_transport_catalog numeric := 0;
+            v_net_total numeric := 0;
+            v_subtotal numeric := 0;
+            v_discount numeric := 0;
+            v_service_covered boolean := false;
+            v_transport_covered boolean := false;
+            v_item_names text[] := array[]::text[];
+          begin
+            if v_profile_id is null then raise exception 'Sessao autenticada obrigatoria.'; end if;
+            if v_tenant_id is null or not public.has_tenant_access(v_tenant_id) then raise exception 'Tenant invalido ou sem permissao.'; end if;
+            if v_module_id <> 'petshop' then raise exception 'Fechamento disponivel somente para petshop.'; end if;
+            if v_appointment_id is null then raise exception 'Agendamento nao informado.'; end if;
+
+            perform public.reconcile_petshop_completed_appointment_package(v_appointment_id);
+
+            select appointment.*, client.name as client_name, client.phone as client_phone
+            into v_appointment
+            from public.appointments appointment
+            left join public.clients client
+              on client.id = appointment.client_id
+             and client.tenant_id = appointment.tenant_id
+             and client.module_id = appointment.module_id
+            where appointment.id = v_appointment_id
+              and appointment.tenant_id = v_tenant_id
+              and appointment.module_id = v_module_id
+            for update of appointment;
+
+            if not found then raise exception 'Agendamento nao encontrado no tenant ativo.'; end if;
+            if lower(coalesce(v_appointment.status, '')) not in ('concluido', 'completed', 'finalizado') then
+              raise exception 'O agendamento precisa estar concluido antes do fechamento no caixa.';
+            end if;
+
+            select id, total_price, payment_method into v_existing
+            from public.sales
+            where tenant_id = v_tenant_id and appointment_id = v_appointment_id
+            limit 1;
+            if found then
+              return jsonb_build_object('sale_id', v_existing.id, 'total', v_existing.total_price, 'payment_method', v_existing.payment_method, 'duplicated', true);
+            end if;
+
+            v_items := case when jsonb_typeof(v_appointment.service_items) = 'array' then v_appointment.service_items else '[]'::jsonb end;
+            v_benefits := case when jsonb_typeof(v_appointment.subscription_benefits) = 'array' then v_appointment.subscription_benefits else '[]'::jsonb end;
+
+            for v_item in select * from jsonb_array_elements(v_items)
+            loop
+              v_service_code := coalesce(nullif(trim(v_item->>'code'), ''), nullif(trim(v_item->>'service_type'), ''));
+              v_service_name := coalesce(nullif(trim(v_item->>'name'), ''), nullif(trim(v_item->>'label'), ''), v_service_code, 'Servico');
+              v_catalog_unit := greatest(0, coalesce(
+                nullif(v_item->>'catalog_price', '')::numeric,
+                nullif(v_item->>'default_price', '')::numeric,
+                nullif(v_item->>'unit_price', '')::numeric,
+                nullif(v_item->>'price', '')::numeric,
+                0
+              ));
+              select exists (
+                select 1 from jsonb_array_elements(v_benefits) benefit
+                where benefit->>'kind' = 'service'
+                  and coalesce(benefit->>'status', v_appointment.subscription_benefit_status, 'reserved') in ('reserved', 'consumed')
+                  and (
+                    (v_service_code is not null and benefit->>'service_code' = v_service_code)
+                    or (nullif(v_item->>'benefit_key', '') is not null and coalesce(benefit->>'key', benefit->>'benefit_key') = v_item->>'benefit_key')
+                  )
+              ) into v_service_covered;
+              v_service_covered := v_service_covered
+                or coalesce(nullif(v_item->>'benefit_used', '')::boolean, false)
+                or coalesce(nullif(v_item->>'subscription_benefit_used', '')::boolean, false);
+              v_net_unit := case when v_service_covered then 0 else greatest(0, coalesce(
+                nullif(v_item->>'unit_price', '')::numeric,
+                nullif(v_item->>'price', '')::numeric,
+                v_catalog_unit
+              )) end;
+              v_net_service_total := v_net_service_total + v_net_unit;
+              v_catalog_service_total := v_catalog_service_total + v_catalog_unit;
+              v_item_names := array_append(v_item_names, v_service_name);
+            end loop;
+
+            if jsonb_array_length(v_items) = 0 then
+              v_net_service_total := greatest(0, coalesce(v_appointment.price, 0));
+              v_catalog_service_total := v_net_service_total;
+              v_item_names := array_append(v_item_names, coalesce(v_appointment.service_type, 'Servico'));
+            end if;
+
+            v_transport_catalog := public.resolve_petshop_transport_fee(v_tenant_id, v_module_id, coalesce(v_appointment.transport_mode, 'cliente_leva'));
+            select exists (
+              select 1 from jsonb_array_elements(v_benefits) benefit
+              where benefit->>'kind' = 'transport'
+                and coalesce(benefit->>'status', v_appointment.subscription_benefit_status, 'reserved') in ('reserved', 'consumed')
+            ) into v_transport_covered;
+            if not v_transport_covered then
+              select exists (
+                select 1 from jsonb_array_elements(v_items) item
+                where coalesce(nullif(item->>'transport_benefit_used', '')::boolean, false)
+              ) into v_transport_covered;
+            end if;
+            v_transport_net := case when v_transport_covered then 0 else v_transport_catalog end;
+
+            v_net_total := round(greatest(0, v_net_service_total + v_transport_net), 2);
+            v_subtotal := round(greatest(v_net_total, v_catalog_service_total + v_transport_catalog), 2);
+            v_discount := round(greatest(0, v_subtotal - v_net_total), 2);
+
+            if v_net_total <= 0.005 then
+              return jsonb_build_object(
+                'sale_id', null,
+                'appointment_id', v_appointment_id,
+                'subtotal', v_subtotal,
+                'discount', v_discount,
+                'total', 0,
+                'payment_method', 'pacote',
+                'package_only', true,
+                'duplicated', false
+              );
+            end if;
+
+            if jsonb_array_length(v_splits) > 0 then
+              for v_split in select * from jsonb_array_elements(v_splits)
+              loop
+                if coalesce(v_split->>'method', '') not in ('dinheiro', 'debito', 'credito', 'pix') then raise exception 'Forma de pagamento dividida invalida.'; end if;
+                if coalesce(nullif(v_split->>'amount', '')::numeric, 0) <= 0 then raise exception 'Valor de pagamento dividido invalido.'; end if;
+                v_split_total := v_split_total + (v_split->>'amount')::numeric;
+              end loop;
+              if abs(v_split_total - v_net_total) > 0.01 then raise exception 'Pagamentos divididos nao fecham o total do agendamento.'; end if;
+              v_payment_method := 'multiplo';
+            elsif v_payment_method not in ('dinheiro', 'debito', 'credito', 'pix') then
+              raise exception 'Selecione uma forma de pagamento valida.';
+            end if;
+
+            insert into public.sales (
+              tenant_id, module_id, client_id, profile_id, customer_name, customer_phone,
+              payment_method, subtotal, discount, total_price, status, source, fulfillment_type,
+              notes, idempotency_key, appointment_id
+            ) values (
+              v_tenant_id, v_module_id, v_appointment.client_id, v_profile_id,
+              coalesce(nullif(trim(v_appointment.client_name), ''), 'Cliente'),
+              nullif(trim(v_appointment.client_phone), ''), v_payment_method,
+              v_subtotal, v_discount, v_net_total, 'concluido', 'agenda', 'servico',
+              concat_ws(
+                ' | ',
+                'Agendamento: ' || v_appointment_id::text,
+                case when coalesce(trim(v_appointment.notes), '') <> '' then 'Instrucoes: ' || trim(v_appointment.notes) end,
+                case when coalesce(trim(p_payload->>'notes'), '') <> '' then trim(p_payload->>'notes') end,
+                'Servicos: ' || array_to_string(v_item_names, ', '),
+                case when v_transport_catalog > 0 then 'Transporte: ' || coalesce(v_appointment.transport_label, v_appointment.transport_mode) end
+              ),
+              'appointment:' || v_appointment_id::text,
+              v_appointment_id
+            ) returning id into v_sale_id;
+
+            for v_item in select * from jsonb_array_elements(v_items)
+            loop
+              v_service_code := coalesce(nullif(trim(v_item->>'code'), ''), nullif(trim(v_item->>'service_type'), ''));
+              v_catalog_unit := greatest(0, coalesce(
+                nullif(v_item->>'catalog_price', '')::numeric,
+                nullif(v_item->>'default_price', '')::numeric,
+                nullif(v_item->>'unit_price', '')::numeric,
+                nullif(v_item->>'price', '')::numeric,
+                0
+              ));
+              v_product_id := null;
+              select service.source_product_id into v_product_id
+              from public.petshop_services service
+              where service.tenant_id = v_tenant_id
+                and service.module_id = v_module_id
+                and service.code = v_service_code
+                and service.source_product_id is not null
+              limit 1;
+              if v_product_id is null and v_service_code like 'catalog_%' then
+                select product.id into v_product_id
+                from public.products product
+                where product.tenant_id = v_tenant_id
+                  and product.module_id = v_module_id
+                  and replace(product.id::text, '-', '') = substring(v_service_code from 9)
+                limit 1;
+              end if;
+              if v_product_id is not null then
+                insert into public.sale_items (tenant_id, sale_id, product_id, quantity, unit_price, subtotal, upsell)
+                values (v_tenant_id, v_sale_id, v_product_id, 1, v_catalog_unit, v_catalog_unit, false);
+              end if;
+            end loop;
+
+            for v_split in select * from jsonb_array_elements(v_splits)
+            loop
+              insert into public.sale_payment_splits (
+                tenant_id, module_id, sale_id, payment_method, amount, position
+              ) values (
+                v_tenant_id, v_module_id, v_sale_id, v_split->>'method',
+                (v_split->>'amount')::numeric,
+                coalesce(nullif(v_split->>'position', '')::integer, 1)
+              );
+            end loop;
+
+            return jsonb_build_object(
+              'sale_id', v_sale_id,
+              'appointment_id', v_appointment_id,
+              'subtotal', v_subtotal,
+              'discount', v_discount,
+              'total', v_net_total,
+              'payment_method', v_payment_method,
+              'package_only', false,
+              'duplicated', false
+            );
+          exception
+            when unique_violation then
+              select id, total_price, payment_method into v_existing
+              from public.sales
+              where tenant_id = v_tenant_id and appointment_id = v_appointment_id
+              limit 1;
+              if found then
+                return jsonb_build_object('sale_id', v_existing.id, 'total', v_existing.total_price, 'payment_method', v_existing.payment_method, 'duplicated', true);
+              end if;
+              raise;
+          end;
+          $$;
+
+          revoke all on function public.checkout_petshop_appointment_transaction(jsonb) from public;
+          grant execute on function public.checkout_petshop_appointment_transaction(jsonb) to authenticated, service_role;
+
+          commit;
+          '''
+          Path('supabase/migrations/20260729172000_petshop_checkout_package_reconciliation.sql').write_text(migration)
+
+          test_path = Path('test/agendaCompletionFinancialCheckout.test.mjs')
+          tests = test_path.read_text()
+          anchor = "test('atendimento avulso e extra fora do pacote permanecem cobraveis', () => {"
+          package_test = r'''test('snapshot antigo com preco residual e beneficio consumido fica zerado', () => {
+            const appointment = {
+              id: 'appointment-stale-package',
+              price: 55,
+              transport_mode: 'cliente_leva',
+              subscription_benefit_status: 'consumed',
+              subscription_benefits: [{
+                kind: 'service',
+                service_code: 'banho_pequeno',
+                status: 'consumed',
+              }],
+              service_items: [{
+                code: 'banho_pequeno',
+                unit_price: 55,
+                catalog_price: 75,
+              }],
+            }
+
+            const totals = appointmentCheckoutTotals(appointment, transportOptions)
+            assert.equal(totals.total, 0)
+            assert.equal(totals.catalogTotal, 75)
+            assert.equal(totals.discount, 75)
+            assert.equal(appointmentNeedsPayment(appointment, transportOptions), false)
+          })
+
+          '''
+          tests = replace_once(tests, anchor, package_test + anchor, 'insert stale package test')
+          tests = replace_once(
+              tests,
+              "  assert.match(panel, /checkout_petshop_appointment_transaction/)\n",
+              "  assert.match(panel, /reconcile_petshop_completed_appointment_package/)\n  assert.match(panel, /checkout_petshop_appointment_transaction/)\n",
+              'validate reconciliation RPC',
+          )
+          tests += r'''
+
+          test('migration reconcilia pacote e nao insere sale item sem produto', async () => {
+            const sql = await readFile(new URL('../supabase/migrations/20260729172000_petshop_checkout_package_reconciliation.sql', import.meta.url), 'utf8')
+            assert.match(sql, /reconcile_petshop_completed_appointment_package/)
+            assert.match(sql, /reserve_petshop_subscription_benefit/)
+            assert.match(sql, /if v_net_total <= 0\.005 then/)
+            assert.match(sql, /'package_only', true/)
+            assert.match(sql, /if v_product_id is not null then/)
+            assert.doesNotMatch(sql, /v_tenant_id, v_sale_id, null, 1/)
+          })
+          '''
+          test_path.write_text(tests)
+
+          print_test_path = Path('test/agendaPrintCleanup.test.mjs')
+          print_tests = print_test_path.read_text()
+          print_tests += r'''
+
+          test('rotulos termicos permanecem curtos e sem quebra desnecessaria', () => {
+            assert.match(resolvedAppointmentBlock, /line\('Raca'/)
+            assert.match(resolvedAppointmentBlock, /line\('Resp\.'/)
+            assert.match(resolvedAppointmentBlock, /line\('Obs\.'/)
+            assert.doesNotMatch(resolvedAppointmentBlock, /Raca\/especie|Responsavel|Observacoes/)
+            assert.match(nativeReceiptBlock, /row\('Raca'/)
+            assert.match(nativeReceiptBlock, /row\('Resp\.'/)
+            assert.match(nativeReceiptBlock, /row\('Obs\.'/)
+          })
+          '''
+          print_test_path.write_text(print_tests)
+          PY
+
+          node --test test/agendaCompletionFinancialCheckout.test.mjs test/agendaPrintCleanup.test.mjs
+
+      - name: Commit final patch
+        shell: bash
+        run: |
+          rm -f .github/workflows/apply-package-checkout-fix.yml
+          git config user.name "YuiSync Automation"
+          git config user.email "actions@users.noreply.github.com"
+          git add src/modules/petshop/pages/appointmentCheckoutFlow.js \
+                  src/modules/petshop/pages/BanhoTosaPdvPanel.jsx \
+                  src/modules/petshop/pages/AgendaPage.jsx \
+                  src/modules/petshop/pages/AgendaResolvedPage.jsx \
+                  supabase/migrations/20260729172000_petshop_checkout_package_reconciliation.sql \
+                  test/agendaCompletionFinancialCheckout.test.mjs \
+                  test/agendaPrintCleanup.test.mjs \
+                  .github/workflows/apply-package-checkout-fix.yml
+          git commit -m "fix: reconciliar pacote no fechamento do atendimento"
+          git push origin HEAD:fix/package-checkout-reconciliation
