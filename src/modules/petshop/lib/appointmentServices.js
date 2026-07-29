@@ -6,7 +6,7 @@ const stripAccents = (value = '') => String(value || '')
 
 const VALID_APPOINTMENT_GROUPS = new Set(['banho_tosa', 'veterinaria'])
 const VETERINARY_PATTERN = /\b(vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao|hemograma|radiograf|raio[ -]?x|coleta|sorolog|odontolog|anestesia|medicacao|eletrocard|ecocard|emergencia|procedimento)\w*/
-const GROOMING_PATTERN = /\b(banho|tosa|desembolo|escovac|hidrat|higien|groom|perfume|spa|trim|unha|unhas|ouvido|orelhas)\w*/
+const GROOMING_PATTERN = /\b(banho|tosa|tosagem|desembolo|escovac|hidrat|higien|groom|perfume|spa|trim|unha|unhas|ouvido|orelhas)\w*/
 
 export function normalizeAppointmentServiceText(value = '') {
   return stripAccents(value)
@@ -15,10 +15,10 @@ export function normalizeAppointmentServiceText(value = '') {
 export function classifyAppointmentServiceGroup(service = {}) {
   const declared = stripAccents(service.group_type || service.groupType || service.service_group || '')
 
-  // A classificacao cadastrada e a fonte de verdade. Heuristica por nome existe
-  // apenas para registros legados que ainda nao possuem um grupo definido.
+  // Grupos operacionais validos continuam sendo a fonte de verdade. Cadastros
+  // antigos marcados como "outro" podem ser recuperados pelo nome/categoria,
+  // evitando que banhos e tosas desaparecam da Agenda.
   if (VALID_APPOINTMENT_GROUPS.has(declared)) return declared
-  if (declared === 'outro' || declared === 'motoboy') return 'outro'
 
   const text = stripAccents([
     service.code,
@@ -29,8 +29,10 @@ export function classifyAppointmentServiceGroup(service = {}) {
     service.description,
   ].filter(Boolean).join(' '))
 
-  if (VETERINARY_PATTERN.test(text)) return 'veterinaria'
-  if (GROOMING_PATTERN.test(text)) return 'banho_tosa'
+  if (declared !== 'motoboy') {
+    if (VETERINARY_PATTERN.test(text)) return 'veterinaria'
+    if (GROOMING_PATTERN.test(text)) return 'banho_tosa'
+  }
   return 'outro'
 }
 
