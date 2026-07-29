@@ -75,7 +75,7 @@ Isso executará:
 ## 📂 Estrutura do Projeto
 
 - `src/`: Código fonte do frontend (React).
-- `server/`: Código fonte do backend (Node.js).
+- `server/`: Código fonte do backend Node.js.
 - `database/`: Scripts SQL para configuração do banco de dados.
 - `supabase/`: Funções de borda (Edge Functions) do Supabase.
 - `scripts/`: Scripts utilitários de desenvolvimento.
@@ -85,3 +85,5 @@ Isso executará:
 ## 📄 Licença
 
 Este projeto está sob a licença ISC.
+
+<!-- production-deploy-retry: 2026-07-29T15:15:00-03:00 -->
