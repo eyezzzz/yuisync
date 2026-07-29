@@ -7,6 +7,7 @@ import { appointmentHasTransportBenefit } from '../lib/appointmentPackageUi'
 
 export const APPOINTMENT_CHECKOUT_SESSION_KEY = 'yuisync:appointment-checkout'
 export const ORDERS_TAB_SESSION_KEY = 'yuisync:orders-tab'
+export const APPOINTMENT_CHECKOUT_EVENT = 'yuisync:appointment-checkout-queued'
 
 export function appointmentCheckoutTotals(appointment = {}, transportOptions = []) {
   const breakdown = appointmentPriceBreakdown(appointment, transportOptions)
@@ -49,6 +50,7 @@ export function queueAppointmentCheckout(appointment = {}) {
   }
   window.sessionStorage.setItem(APPOINTMENT_CHECKOUT_SESSION_KEY, JSON.stringify(target))
   window.sessionStorage.setItem(ORDERS_TAB_SESSION_KEY, 'banho_tosa')
+  window.dispatchEvent(new CustomEvent(APPOINTMENT_CHECKOUT_EVENT, { detail: target }))
   return target
 }
 

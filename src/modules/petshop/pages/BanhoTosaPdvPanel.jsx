@@ -17,6 +17,7 @@ import { fmtCurrency, supabase } from '../../../lib/supabase'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
 import { normalizeTransportOptions } from './agendaOperationalCore'
 import {
+  APPOINTMENT_CHECKOUT_EVENT,
   appointmentCheckoutTotals,
   clearQueuedAppointmentCheckout,
   readQueuedAppointmentCheckout,
@@ -259,6 +260,23 @@ export default function BanhoTosaPdvPanel({ setPage }) {
     (runner) => runWithTenantFallback(activeTenantId, runner),
     [activeTenantId],
   )
+
+  const syncQueuedCheckout = useCallback(() => {
+    const target = readQueuedAppointmentCheckout()
+    if (!target?.appointment_id) return
+    if (target.date) setDate(target.date)
+    setFocusedId(String(target.appointment_id))
+  }, [])
+
+  useEffect(() => {
+    syncQueuedCheckout()
+    window.addEventListener(APPOINTMENT_CHECKOUT_EVENT, syncQueuedCheckout)
+    window.addEventListener('focus', syncQueuedCheckout)
+    return () => {
+      window.removeEventListener(APPOINTMENT_CHECKOUT_EVENT, syncQueuedCheckout)
+      window.removeEventListener('focus', syncQueuedCheckout)
+    }
+  }, [syncQueuedCheckout])
 
   const reload = useCallback(async () => {
     if (!activeTenantId) return
