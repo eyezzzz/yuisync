@@ -1,9 +1,18 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Calendar, ClipboardList, MapPin, MessageSquare, Package, Printer, RefreshCw, Truck, UserCheck } from 'lucide-react'
+import { Calendar, ClipboardList, MapPin, MessageSquare, Package, Printer, RefreshCw, Scissors, Truck, UserCheck } from 'lucide-react'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { fmtCurrency, todayISO } from '../../../lib/supabase'
 import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { SERVICE_ORDER_FLOW, usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
+import BanhoTosaPdvPanel from './BanhoTosaPdvPanel'
+import { APPOINTMENT_CHECKOUT_EVENT, ORDERS_TAB_SESSION_KEY } from './appointmentCheckoutFlow'
+
+function requestedInitialOrderType() {
+  if (typeof window === 'undefined') return 'entrega'
+  return window.sessionStorage.getItem(ORDERS_TAB_SESSION_KEY) === 'banho_tosa'
+    ? 'banho_tosa'
+    : 'entrega'
+}
 
 const ALL_STATUS_STEPS = [
   { id: 'pendente', label: 'Pendente' },
@@ -449,7 +458,7 @@ function CompletedOrdersTable({ orders, onPrint, fallbackItemsForOrder, setPage 
 export default function OrdensEntregaPage({ setPage }) {
   const { loadOrderAssignees, loadServiceOrders, updateServiceOrder } = usePetshopAdvanced()
   const { storeSettings } = useAuthCtx()
-  const [orderType, setOrderType] = useState('entrega')
+  const [orderType, setOrderType] = useState(requestedInitialOrderType)
   const [activeOrders, setActiveOrders] = useState([])
   const [completedOrders, setCompletedOrders] = useState([])
   const [historyDate, setHistoryDate] = useState(todayISO())
@@ -489,8 +498,33 @@ export default function OrdensEntregaPage({ setPage }) {
   }
 
   useEffect(() => {
+    if (orderType === 'banho_tosa') {
+      setLoading(false)
+      return
+    }
     reload(orderType, historyDate)
   }, [orderType, historyDate])
+
+  useEffect(() => {
+    const openQueuedCheckout = () => {
+      if (window.sessionStorage.getItem(ORDERS_TAB_SESSION_KEY) === 'banho_tosa') {
+        setOrderType('banho_tosa')
+      }
+    }
+    openQueuedCheckout()
+    window.addEventListener(APPOINTMENT_CHECKOUT_EVENT, openQueuedCheckout)
+    window.addEventListener('focus', openQueuedCheckout)
+    return () => {
+      window.removeEventListener(APPOINTMENT_CHECKOUT_EVENT, openQueuedCheckout)
+      window.removeEventListener('focus', openQueuedCheckout)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (orderType === 'banho_tosa') {
+      window.sessionStorage.removeItem(ORDERS_TAB_SESSION_KEY)
+    }
+  }, [orderType])
 
   async function handleAssign(order, assignedTo) {
     try {
@@ -561,7 +595,10 @@ export default function OrdensEntregaPage({ setPage }) {
         {[
           { id: 'entrega', label: 'Entregas' },
           { id: 'servico', label: 'Ordens de servico' },
-        ].map((item) => (
+          { id: 'banho_tosa', label: 'Banho & Tosa', icon: Scissors },
+        ].map((item) => {
+          const Icon = item.icon
+          return (
           <button
             key={item.id}
             onClick={() => setOrderType(item.id)}
@@ -570,11 +607,19 @@ export default function OrdensEntregaPage({ setPage }) {
             }`}
             style={orderType === item.id ? { backgroundColor: 'var(--primary)' } : {}}
           >
+            {Icon && <Icon size={14} />}
             {item.label}
           </button>
-        ))}
+          )
+        })}
       </div>
 
+      {orderType === 'banho_tosa' ? (
+        <section data-yuisync-native-banho-tosa-tab className="space-y-6">
+          <BanhoTosaPdvPanel setPage={setPage} />
+        </section>
+      ) : (
+        <>
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border)] bg-card px-4 py-3">
         <div>
           <p className="text-sm font-bold text-text">Operacao ativa de hoje</p>
@@ -684,6 +729,8 @@ export default function OrdensEntregaPage({ setPage }) {
               </div>
             )}
           </section>
+        </>
+      )}
         </>
       )}
     </div>
