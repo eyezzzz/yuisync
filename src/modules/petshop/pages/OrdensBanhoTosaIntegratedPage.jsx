@@ -4,7 +4,7 @@ import { Scissors } from 'lucide-react'
 
 import OrdensEntregaPage from './OrdensEntregaPage'
 import BanhoTosaPdvPanel from './BanhoTosaPdvPanel'
-import PackageActivationPdvPanel from './PackageActivationPdvPanel'
+import PackageActivationReliablePanel from './PackageActivationReliablePanel'
 
 const ORDERS_BRIDGE_STYLES = `
   [data-yuisync-orders-active='true'] > * {
@@ -144,7 +144,7 @@ function BanhoTosaTabBridge({ setPage }) {
       )}
       {contentRoot && active && createPortal(
         <div data-yuisync-banho-tosa-checkout className="space-y-6">
-          <PackageActivationPdvPanel />
+          <PackageActivationReliablePanel />
           <BanhoTosaPdvPanel setPage={setPage} />
         </div>,
         contentRoot,
