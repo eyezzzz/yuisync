@@ -12,7 +12,6 @@ import {
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { fmtCurrency, supabase } from '../../../lib/supabase'
-import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
 import { useCatalogPlans } from '../hooks/useCatalogPlans'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
@@ -25,7 +24,6 @@ import {
   packageCatalogEntries,
 } from '../lib/appointmentPackageUi'
 import {
-  appointmentPriceBreakdown,
   normalizeTransportOptions,
   transportFeeForMode,
 } from './agendaOperationalCore'
@@ -482,61 +480,6 @@ export default function AgendaBookingEnhancements() {
     frameRef.current = window.requestAnimationFrame(syncDom)
   }, [syncDom])
 
-  const fetchLatestAppointment = useCallback(async (appointmentId) => {
-    const response = await runScoped(async (includeTenant) => {
-      let query = supabase
-        .from('appointments')
-        .select('id,client_id,service_type,service_items,scheduled_at,duration_min,price,status,notes,responsible_staff_name,responsible_staff_key,transport_mode,transport_label,transport_address,transport_neighborhood,transport_city,transport_reference,clients(id,name,phone,email,details)')
-        .eq('id', appointmentId)
-        .eq('module_id', moduleId)
-        .single()
-      return applyTenantFilter(query, activeTenantId, includeTenant)
-    })
-    if (response.error) throw response.error
-    return response.data
-  }, [activeTenantId, moduleId, runScoped])
-
-  const printLatestAppointment = useCallback(async (appointmentId) => {
-    const appointment = await fetchLatestAppointment(appointmentId)
-    const client = appointment.clients || {}
-    const details = client.details || {}
-    const petName = details.pet_name || 'Pet'
-    const names = appointmentServiceNames(appointment)
-    const responsible = appointment.responsible_staff_name || appointment.responsible_staff_key || 'Nao informado'
-    const prices = appointmentPriceBreakdown(appointment, transportOptions)
-    const date = new Date(appointment.scheduled_at || '')
-    const intervalStart = Number.isNaN(date.getTime()) ? '-' : date.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    const end = new Date(date.getTime() + Math.max(10, Number(appointment.duration_min || 60)) * 60000)
-    const intervalEnd = Number.isNaN(end.getTime()) ? '-' : end.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
-    const printWindow = window.open('', '_blank')
-    if (!printWindow) throw new Error('O navegador bloqueou a janela de impressao.')
-
-    const html = `
-      <html><head><meta charset="utf-8"/><title>Ficha de atendimento</title><style>
-        @page { margin: 0; } * { box-sizing: border-box; } html, body { width: 80mm; margin: 0; padding: 0; color: #000; background: #fff; }
-        body { font-family: Arial, Helvetica, sans-serif; padding: 3mm 0 3mm 2mm; }
-        main { width: 64mm; max-width: 64mm; }
-        h1 { margin: 0 0 3mm; border-bottom: 1px dashed #000; padding-bottom: 2mm; text-align: center; font-size: 13px; }
-        .line { display: grid; grid-template-columns: 18mm minmax(0,1fr); gap: 1.5mm; padding: .8mm 0; font-size: 9px; line-height: 1.3; }
-        .line b { font-size: 8px; text-transform: uppercase; } .line span { overflow-wrap: anywhere; font-weight: 700; }
-        .notes { margin-top: 2mm; border: 1px solid #000; padding: 2mm; font-size: 9px; line-height: 1.4; white-space: pre-wrap; overflow-wrap: anywhere; }
-        .total { margin-top: 2mm; border-top: 2px solid #000; padding-top: 1.5mm; display: flex; justify-content: space-between; font-size: 12px; font-weight: 900; }
-      </style></head><body><main>
-        <h1>FICHA DE ATENDIMENTO</h1>
-        <div class="line"><b>Tutor</b><span>${escapeHtml(client.name || 'Nao informado')}</span></div>
-        <div class="line"><b>Pet</b><span>${escapeHtml(petName)}</span></div>
-        <div class="line"><b>Horario</b><span>${escapeHtml(`${intervalStart} - ${intervalEnd}`)}</span></div>
-        <div class="line"><b>Servico</b><span>${escapeHtml(names.join(' + '))}</span></div>
-        <div class="line"><b>Responsavel</b><span>${escapeHtml(responsible)}</span></div>
-        <div class="line"><b>Transporte</b><span>${escapeHtml(appointment.transport_label || appointment.transport_mode || 'Cliente traz e busca')}</span></div>
-        <div class="notes"><b>INSTRUCOES PARA O PROFISSIONAL</b><br/>${escapeHtml(appointment.notes || 'Nenhuma observacao')}</div>
-        <div class="total"><span>TOTAL</span><span>${escapeHtml(fmtCurrency(prices.total))}</span></div>
-      </main></body></html>
-    `
-    printWindow.document.write(html)
-    printWindow.document.close()
-    printThermalReceipt(printWindow)
-  }, [fetchLatestAppointment, transportOptions])
 
   useEffect(() => {
     void refreshData()
@@ -546,18 +489,6 @@ export default function AgendaBookingEnhancements() {
     const onClick = (event) => {
       const clientOption = event.target.closest?.('[role="listbox"][aria-label="Resultados de clientes"] [role="option"]')
       if (clientOption) window.setTimeout(() => resolveSubscription(clientOption.textContent), 0)
-
-      const printAction = event.target.closest?.('[data-yuisync-action="print"]')
-      if (printAction) {
-        const card = printAction.closest('[data-yuisync-appointment-id]')
-        const appointmentId = card?.dataset?.yuisyncAppointmentId
-        if (appointmentId) {
-          event.preventDefault()
-          event.stopPropagation()
-          event.stopImmediatePropagation?.()
-          void printLatestAppointment(appointmentId).catch((error) => window.alert(error?.message || 'Nao foi possivel imprimir o agendamento atualizado.'))
-        }
-      }
 
       window.setTimeout(scheduleSync, 0)
     }
@@ -579,7 +510,7 @@ export default function AgendaBookingEnhancements() {
       if (frameRef.current) window.cancelAnimationFrame(frameRef.current)
       restoreDecorations(modalRef.current)
     }
-  }, [printLatestAppointment, refreshData, resolveSubscription, scheduleSync])
+  }, [refreshData, resolveSubscription, scheduleSync])
 
   return (
     <>
