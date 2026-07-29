@@ -1,0 +1,36 @@
+name: Apply native orders checkout
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/apply_native_orders_checkout.py
+      - .github/workflows/apply-native-orders-checkout.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Apply deterministic native checkout patch
+        run: python scripts/apply_native_orders_checkout.py
+      - name: Remove temporary patch automation
+        run: rm scripts/apply_native_orders_checkout.py .github/workflows/apply-native-orders-checkout.yml
+      - name: Commit native orders checkout
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: render appointment checkout in native orders tab"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
