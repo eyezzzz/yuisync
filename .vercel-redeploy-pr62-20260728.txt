@@ -1,2 +1,3 @@
 Redeploy marker for PR #62: catalog-based packages prioritized in Agenda.
 No runtime behavior change.
+Retry requested again on 2026-07-29.
