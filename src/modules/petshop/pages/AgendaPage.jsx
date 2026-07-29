@@ -4,7 +4,7 @@ import {
   Calendar, Plus, Search, ChevronLeft, ChevronRight,
   Clock, X, Check, AlertCircle, RefreshCw, Trash2, Edit2, Receipt,
   Scissors, Droplets, Stethoscope, Syringe, PawPrint, ClipboardList,
-  CheckCircle, Zap, PartyPopper, XCircle, Play, MapPin, Bike
+  CheckCircle, Zap, PartyPopper, XCircle, Play, MapPin, Bike, Wallet
 } from 'lucide-react'
 import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { useClients }         from '../../../shared/hooks/useClients'
@@ -35,6 +35,8 @@ import {
   appointmentTransportLabel,
   isMotodogTransportMode,
 } from '../lib/appointmentOperational'
+import { normalizeTransportOptions } from './agendaOperationalCore'
+import { appointmentCheckoutTotals, appointmentNeedsPayment, queueAppointmentCheckout } from './appointmentCheckoutFlow'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const asAgendaServices = (services = []) =>
@@ -1071,7 +1073,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
 }
 
 // ── Coluna de Status (Kanban) ──────────────────────────────────────────────────
-function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onReceipt, services = SERVICES, staffById = new Map() }) {
+function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onReceipt, onCompletedAction, needsPayment, services = SERVICES, staffById = new Map() }) {
   const sb = statusBadge(appt.status)
   const assigned = staffById.get(appt.responsible_staff_key)
   return (
@@ -1083,8 +1085,8 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
         </div>
         <div className="flex items-center gap-1 mt-0.5">
           {appt.status === 'concluido' && (
-            <button type="button" aria-label="Imprimir recibo" onClick={() => onReceipt(appt)} className="text-muted hover:text-emerald-400" title="Imprimir Recibo">
-              <Receipt size={13}/>
+            <button type="button" aria-label={needsPayment(appt) ? 'Receber atendimento' : 'Imprimir ficha'} onClick={() => onCompletedAction(appt)} className="text-muted hover:text-emerald-400" title={needsPayment(appt) ? 'Receber e lancar no caixa' : 'Imprimir ficha'}>
+              {needsPayment(appt) ? <Wallet size={13}/> : <Receipt size={13}/>}
             </button>
           )}
             <button type="button" aria-label="Editar agendamento" title="Editar" onClick={() => onEdit(appt)} className="text-muted hover:text-amber-400">
@@ -1155,6 +1157,8 @@ function AgendaTimelineView({
   staffById,
   onEdit,
   onReceipt,
+  onCompletedAction,
+  needsPayment,
   onCreateAt,
   onSelectDate,
   slotCapacity = MANUAL_SLOT_CAPACITY,
@@ -1317,16 +1321,21 @@ function AgendaTimelineView({
           <div className="border-t border-[var(--border)] p-3">
             <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-muted">Historico do dia</p>
             <div className="grid gap-2 md:grid-cols-2">
-              {history.map((appt) => (
-                <button
-                  key={appt.id}
-                  type="button"
-                  onClick={() => onEdit(appt)}
-                  className="rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-left text-xs text-muted hover:bg-white/[0.06]"
-                >
-                  {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
-                </button>
-              ))}
+              {history.map((appt) => {
+                const paymentPending = appt.status === 'concluido' && needsPayment(appt)
+                return (
+                  <div key={appt.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-muted">
+                    <button type="button" onClick={() => onEdit(appt)} className="min-w-0 flex-1 truncate text-left hover:text-text">
+                      {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
+                    </button>
+                    {appt.status === 'concluido' && (
+                      <button type="button" onClick={() => onCompletedAction(appt)} className={`shrink-0 rounded-md px-2 py-1 font-bold ${paymentPending ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/12 text-emerald-300'}`}>
+                        {paymentPending ? 'Receber' : 'Imprimir'}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
             </div>
           </div>
         )}
@@ -1425,12 +1434,12 @@ function AgendaTimelineView({
                               {completed && (
                                 <button
                                   type="button"
-                                  aria-label="Imprimir ficha concluida"
-                                  title="Imprimir ficha 80 mm"
-                                  onClick={() => onReceipt(appt)}
-                                  className="shrink-0 rounded p-1 text-emerald-300 hover:bg-emerald-500/15"
+                                  aria-label={needsPayment(appt) ? 'Receber atendimento concluido' : 'Imprimir ficha concluida'}
+                                  title={needsPayment(appt) ? 'Receber e lancar no caixa' : 'Imprimir ficha 80 mm'}
+                                  onClick={() => onCompletedAction(appt)}
+                                  className={`shrink-0 rounded p-1 ${needsPayment(appt) ? 'text-amber-300 hover:bg-amber-500/15' : 'text-emerald-300 hover:bg-emerald-500/15'}`}
                                 >
-                                  <Receipt size={11}/>
+                                  {needsPayment(appt) ? <Wallet size={11}/> : <Receipt size={11}/>}
                                 </button>
                               )}
                             </div>
@@ -1449,7 +1458,7 @@ function AgendaTimelineView({
   )
 }
 
-export default function AgendaPage() {
+export default function AgendaPage({ setPage }) {
   const { appointments, loading, load, create, update, updateStatus, remove, serviceLabel: legacyServiceLabel, statusBadge } =
     useAppointments()
   const { clients: pets, load: loadPets, search: searchPets } = useClients()
@@ -1470,6 +1479,18 @@ export default function AgendaPage() {
   const staff = useMemo(() => normalizeOperationalStaff(storeSettings?.petshop_operational_staff), [storeSettings?.petshop_operational_staff])
 
   const staffById = useMemo(() => new Map((staff || []).map((person) => [person.key, person])), [staff])
+  const transportOptions = useMemo(() => normalizeTransportOptions(storeSettings), [storeSettings])
+  const needsPayment = (appointment) => appointmentNeedsPayment(appointment, transportOptions)
+  const handleCompletedAction = (appointment) => {
+    if (!appointment) return
+    const totals = appointmentCheckoutTotals(appointment, transportOptions)
+    if (totals.total <= 0.005) {
+      setReceipt(appointment)
+      return
+    }
+    queueAppointmentCheckout(appointment)
+    setPage?.('ordens')
+  }
   const serviceLabel = (value) => {
     if (value && typeof value === 'object') return appointmentServiceLabel(value, agendaServices)
     return serviceLabelFallback(value, agendaServices) || legacyServiceLabel(value)
@@ -1540,7 +1561,7 @@ export default function AgendaPage() {
   }
   const handleStatusChange = async (appointmentId, status) => {
     const updated = await updateStatus(appointmentId, status)
-    if (status === 'concluido' && updated) setReceipt(updated)
+    if (status === 'concluido' && updated) handleCompletedAction(updated)
     return updated
   }
 
@@ -1704,6 +1725,8 @@ export default function AgendaPage() {
           staffById={staffById}
           onEdit={(appt) => setModal(appt)}
           onReceipt={setReceipt}
+          onCompletedAction={handleCompletedAction}
+          needsPayment={needsPayment}
           slotCapacity={activeAgendaTab === 'banho_tosa' ? MANUAL_SLOT_CAPACITY : 1}
           onCreateAt={openSlotModal}
           onSelectDate={setSelectedDate}
@@ -1750,9 +1773,9 @@ export default function AgendaPage() {
                             <Edit2 size={13}/>
                           </button>
                           {a.status === 'concluido' && (
-                            <button type="button" aria-label="Imprimir recibo" onClick={() => setReceipt(a)}
-                              className="btn btn-ghost btn-sm btn-icon text-emerald-400 border border-emerald-500/20" title="Imprimir Recibo">
-                              <Receipt size={13}/>
+                            <button type="button" aria-label={needsPayment(a) ? 'Receber atendimento' : 'Imprimir ficha'} onClick={() => handleCompletedAction(a)}
+                              className={`btn btn-ghost btn-sm btn-icon border ${needsPayment(a) ? 'text-amber-400 border-amber-500/20' : 'text-emerald-400 border-emerald-500/20'}`} title={needsPayment(a) ? 'Receber e lancar no caixa' : 'Imprimir ficha'}>
+                              {needsPayment(a) ? <Wallet size={13}/> : <Receipt size={13}/>}
                             </button>
                           )}
                           {['agendado','confirmado'].includes(a.status) && (
@@ -1797,6 +1820,7 @@ export default function AgendaPage() {
                   {colItems.map(a => (
                     <KanbanCard key={a.id} appt={a} serviceLabel={serviceLabel} statusBadge={statusBadge}
                       onEdit={(a) => setModal(a)} onStatus={handleStatusChange} onReceipt={setReceipt}
+                      onCompletedAction={handleCompletedAction} needsPayment={needsPayment}
                       services={agendaServices} staffById={staffById}/>
                   ))}
                   {colItems.length === 0 && (

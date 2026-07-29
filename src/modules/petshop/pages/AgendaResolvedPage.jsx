@@ -22,6 +22,7 @@ import {
   slotTimeFromAria,
   transportFeeForMode,
 } from './agendaOperationalCore'
+import { appointmentCheckoutTotals, queueAppointmentCheckout } from './appointmentCheckoutFlow'
 import './AgendaResolvedPage.css'
 
 const NON_OPERATIONAL_STATUSES = new Set(['cancelado', 'no_show'])
@@ -129,7 +130,7 @@ function findScrollableAncestor(element) {
   return document.scrollingElement || document.documentElement
 }
 
-function ResolvedAgendaOperations() {
+function ResolvedAgendaOperations({ setPage }) {
   const { storeSettings } = useAuthCtx()
   const {
     appointments,
@@ -226,14 +227,22 @@ function ResolvedAgendaOperations() {
   const completeAppointment = useCallback(async (appointmentId) => {
     setNotice('')
     try {
-      await updateStatus(appointmentId, 'concluido')
+      const updated = await updateStatus(appointmentId, 'concluido')
       await load({ date: selectedDate })
       refreshAgendaPage()
-      setNotice('Agendamento concluido.')
+      if (!updated) return
+      const totals = appointmentCheckoutTotals(updated, transportOptions)
+      if (totals.total <= 0.005) {
+        printAppointment(updated)
+        setNotice('Atendimento coberto pelo pacote. Nenhuma nova venda foi criada.')
+        return
+      }
+      queueAppointmentCheckout(updated)
+      setPage?.('ordens')
     } catch (error) {
       setNotice(error?.message || 'Nao foi possivel concluir o agendamento.')
     }
-  }, [load, refreshAgendaPage, selectedDate, updateStatus])
+  }, [load, printAppointment, refreshAgendaPage, selectedDate, setPage, transportOptions, updateStatus])
 
   const moveAppointment = useCallback(async (appointmentId, timeText) => {
     const appointment = operationalAppointments.find((item) => String(item.id) === String(appointmentId))
@@ -642,11 +651,11 @@ function ResolvedAgendaOperations() {
   ) : null
 }
 
-export default function AgendaResolvedPage() {
+export default function AgendaResolvedPage({ setPage }) {
   return (
     <>
-      <AgendaPage />
-      <ResolvedAgendaOperations />
+      <AgendaPage setPage={setPage} />
+      <ResolvedAgendaOperations setPage={setPage} />
     </>
   )
 }

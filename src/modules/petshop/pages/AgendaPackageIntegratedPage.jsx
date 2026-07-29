@@ -9,11 +9,11 @@ const HIDE_LEGACY_PACKAGE_UI = `
   }
 `
 
-export default function AgendaPackageIntegratedPage() {
+export default function AgendaPackageIntegratedPage({ setPage }) {
   return (
     <>
       <style>{HIDE_LEGACY_PACKAGE_UI}</style>
-      <AgendaIntegratedPage />
+      <AgendaIntegratedPage setPage={setPage} />
       <AgendaBookingEnhancements />
     </>
   )
