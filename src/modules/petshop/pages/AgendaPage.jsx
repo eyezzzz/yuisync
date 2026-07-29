@@ -280,23 +280,21 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
     ? scheduled.toLocaleDateString('pt-BR')
     : 'Nao informada'
   const interval = fmtAppointmentInterval(appt)
-  const transport = appointmentTransportLabel(appt.motodog?.mode)
-  const transportAddress = motodogAddressText(appt)
-  const isMotodog = isMotodogTransportMode(appt.motodog?.mode)
+  const title = appt.status === 'concluido' ? 'FICHA DE ATENDIMENTO' : 'FICHA DE AGENDAMENTO'
 
   const handlePrint = () => {
     const printWindow = window.open('', '_blank')
     if (!printWindow) return
-    const storeAddress = [
-      storeSettings?.store_address,
-      storeSettings?.store_neighborhood,
-      storeSettings?.store_city,
-    ].filter(Boolean).join(' - ')
-
+    const logoUrl = String(
+      storeSettings?.receipt_logo_data_url
+      || storeSettings?.store_logo_url
+      || storeSettings?.logo_url
+      || `${window.location.origin}/brand/quatro-patas-logo-mono.png`,
+    )
     const row = (label, value) => `
       <div class="row">
         <div class="label">${escapeReceiptHtml(label)}</div>
-        <div class="value">${escapeReceiptHtml(value || "Nao informado")}</div>
+        <div class="value">${escapeReceiptHtml(value || 'Nao informado')}</div>
       </div>
     `
 
@@ -304,58 +302,66 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
       <html>
         <head>
           <meta charset="utf-8"/>
-          <title>Ficha de atendimento</title>
+          <title>${escapeReceiptHtml(title)}</title>
           <style>
             @page { margin: 0; }
             * { box-sizing: border-box; }
             html, body { width: 80mm; margin: 0; padding: 0; color: #000; background: #fff; }
-            body { font-family: Arial, Helvetica, sans-serif; padding: 4mm 3mm; }
-            .receipt { width: 100%; }
+            body { font-family: Arial, Helvetica, sans-serif; padding: 3mm 0 3mm 2mm; }
+            .receipt { width: 64mm; max-width: 64mm; }
             .center { text-align: center; }
-            .store { font-size: 15px; font-weight: 900; text-transform: uppercase; }
-            .store-line { margin-top: 2px; font-size: 9px; line-height: 1.25; }
-            .title { margin: 4mm 0 2mm; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 2mm 0; font-size: 12px; font-weight: 900; letter-spacing: .4px; }
-            .row { padding: 1.6mm 0; border-bottom: 1px dotted #777; }
-            .label { font-size: 8px; font-weight: 900; text-transform: uppercase; letter-spacing: .4px; }
-            .value { margin-top: .6mm; font-size: 11px; font-weight: 700; line-height: 1.25; white-space: pre-wrap; overflow-wrap: anywhere; }
-            .transport { margin-top: 2mm; border: 1px solid #000; padding: 2mm; }
-            .total { display: flex; justify-content: space-between; gap: 3mm; margin-top: 3mm; padding-top: 2mm; border-top: 2px solid #000; font-size: 13px; font-weight: 900; }
-            .footer { margin-top: 4mm; font-size: 8px; line-height: 1.35; }
+            .logo { display: block; width: auto; max-width: 56mm; max-height: 22mm; margin: 0 auto 2.5mm; object-fit: contain; filter: grayscale(1) contrast(2); }
+            .title { margin: 3mm 0 2mm; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 1.6mm 0; font-size: 13px; font-weight: 900; }
+            .row { display: grid; grid-template-columns: 18mm minmax(0, 1fr); gap: 1.5mm; padding: .8mm 0; border-bottom: 1px dotted #777; font-size: 10.5px; line-height: 1.32; }
+            .label { font-size: 9.5px; font-weight: 900; text-transform: uppercase; }
+            .value { min-width: 0; font-size: 10.5px; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
+            .footer { margin-top: 3mm; font-size: 8.5px; line-height: 1.3; }
             @media print { body { position: absolute; inset: 0 auto auto 0; } }
           </style>
         </head>
         <body>
           <main class="receipt">
             <div class="center">
-              <div class="store">${escapeReceiptHtml(storeSettings?.store_name || "PETSHOP")}</div>
-              <div class="store-line">${escapeReceiptHtml(storeAddress || "Endereco nao configurado")}</div>
-              <div class="store-line">${escapeReceiptHtml(storeSettings?.store_phone || "")}</div>
-              <div class="title">FICHA DE ATENDIMENTO</div>
+              <img class="logo" src="${escapeReceiptHtml(logoUrl)}" alt="Logo da empresa"/>
+              <div class="title">${escapeReceiptHtml(title)}</div>
             </div>
-            ${row("Tutor", pet.owner_name)}
-            ${row("Contato", pet.phone)}
-            ${row("Pet", pet.pet_name)}
-            ${row("Raca / especie", pet.breed || pet.species)}
-            ${row("Data", date)}
-            ${row("Horario", interval)}
-            ${row("Servico", serviceLabel(appt))}
-            ${row("Responsavel", responsible)}
-            <div class="transport">
-              <div class="label">Transporte</div>
-              <div class="value">${escapeReceiptHtml(transport)}</div>
-              ${isMotodog && transportAddress ? `<div class="label" style="margin-top:2mm">Endereco completo</div><div class="value">${escapeReceiptHtml(transportAddress)}</div>` : ""}
-              ${isMotodog && appt.motodog?.reference ? `<div class="label" style="margin-top:2mm">Referencia</div><div class="value">${escapeReceiptHtml(appt.motodog.reference)}</div>` : ""}
-            </div>
-            ${row("Observacoes", appt.notes || "Nenhuma observacao")}
-            <div class="total"><span>VALOR</span><span>${escapeReceiptHtml(fmtCurrency(appt.price))}</span></div>
-            <div class="footer center">Impresso em ${escapeReceiptHtml(new Date().toLocaleString("pt-BR"))}</div>
+            ${row('Tutor', pet.owner_name)}
+            ${row('Pet', pet.pet_name)}
+            ${row('Raca / especie', pet.breed || pet.species)}
+            ${row('Data e hora', `${date} - ${interval}`)}
+            ${row('Servico', serviceLabel(appt))}
+            ${row('Responsavel', responsible)}
+            ${row('Observacoes', appt.notes || 'Nenhuma observacao')}
+            <div class="footer center">Impresso em ${escapeReceiptHtml(new Date().toLocaleString('pt-BR'))}</div>
           </main>
         </body>
       </html>
     `
     printWindow.document.write(receiptHtml)
     printWindow.document.close()
-    printThermalReceipt(printWindow)
+
+    let printed = false
+    const printWhenReady = () => {
+      if (printed) return
+      printed = true
+      printThermalReceipt(printWindow)
+    }
+    const images = [...printWindow.document.images]
+    const pendingImages = images.filter((image) => !image.complete)
+    if (pendingImages.length === 0) {
+      window.setTimeout(printWhenReady, 80)
+    } else {
+      let remaining = pendingImages.length
+      const settleImage = () => {
+        remaining -= 1
+        if (remaining <= 0) window.setTimeout(printWhenReady, 80)
+      }
+      pendingImages.forEach((image) => {
+        image.addEventListener('load', settleImage, { once: true })
+        image.addEventListener('error', settleImage, { once: true })
+      })
+      window.setTimeout(printWhenReady, 1500)
+    }
   }
 
   return createPortal(
@@ -372,8 +378,6 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
             <p><span className="text-muted">Horario:</span> <strong>{date} · {interval}</strong></p>
             <p><span className="text-muted">Servico:</span> <strong>{serviceLabel(appt)}</strong></p>
             <p><span className="text-muted">Responsavel:</span> <strong>{responsible}</strong></p>
-            <p><span className="text-muted">Transporte:</span> <strong>{transport}</strong></p>
-            {isMotodog && transportAddress && <p className="text-xs text-muted">{transportAddress}</p>}
             <p><span className="text-muted">Observacoes:</span> <strong>{appt.notes || 'Nenhuma observacao'}</strong></p>
           </div>
           <button onClick={handlePrint} className="btn btn-primary w-full justify-center gap-2 py-3">
