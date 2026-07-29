@@ -12,6 +12,8 @@ import { useAuthCtx }      from '../../../context/AuthContext'
 import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
+import { useCatalogPlans } from '../hooks/useCatalogPlans'
+import { activeSubscriptionForClient, buildCatalogUsageSummary } from '../lib/catalogPlanServices'
 import { serviceIcon } from '../lib/petshopTeam'
 import {
   normalizeOperationalStaff,
@@ -383,7 +385,7 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, services = SERVICES, staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, services = SERVICES, subscriptions = [], staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -444,13 +446,40 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const petSearch = form.pet_search || ''
   const deferredPetSearch = useDeferredValue(petSearch)
+  const activeSubscription = useMemo(
+    () => activeSubscriptionForClient(subscriptions, form.pet_id),
+    [subscriptions, form.pet_id],
+  )
+  const packageUsage = useMemo(
+    () => activeSubscription ? buildCatalogUsageSummary(activeSubscription, services) : [],
+    [activeSubscription, services],
+  )
+  const packageServiceEntries = useMemo(() => packageUsage.filter((item) => (
+    item.service_kind === 'catalog'
+    && item.catalog_service
+    && item.catalog_service.group_type === serviceGroup
+    && Number(item.remaining || 0) > 0
+  )), [packageUsage, serviceGroup])
+  const packageServiceCodes = useMemo(
+    () => new Set(packageServiceEntries.map((item) => String(item.service_code || item.service_type))),
+    [packageServiceEntries],
+  )
+  const packageTransport = useMemo(
+    () => packageUsage.find((item) => item.service_kind === 'transport' || item.service_type === 'motodog') || null,
+    [packageUsage],
+  )
+  const packageName = activeSubscription?.subscription_plans?.name || 'Pacote ativo'
   const serviceTotals = useMemo(() => {
     const totals = calculateAppointmentServiceTotals(form.service_codes, serviceOptions)
-    if (serviceGroup !== 'banho_tosa') return totals
+    const packageAdjustedPrice = totals.services.reduce((sum, service) => (
+      sum + (packageServiceCodes.has(String(service.value)) ? 0 : Number(service.price || 0))
+    ), 0)
+    if (serviceGroup !== 'banho_tosa') return { ...totals, price: packageAdjustedPrice }
     const durations = normalizeServiceDurations(serviceDurations)
     const weightKg = selectedClient?.weight_kg ?? appt?.pets?.weight_kg ?? null
     return {
       ...totals,
+      price: packageAdjustedPrice,
       duration: totals.services.reduce((sum, service) => sum + resolvePetshopServiceDuration({
         service,
         weightKg,
@@ -458,7 +487,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
         fallbackMin: service.duration || 60,
       }), 0),
     }
-  }, [form.service_codes, serviceOptions, serviceGroup, serviceDurations, selectedClient?.weight_kg, appt?.pets?.weight_kg])
+  }, [form.service_codes, serviceOptions, serviceGroup, serviceDurations, selectedClient?.weight_kg, appt?.pets?.weight_kg, packageServiceCodes])
   const effectiveDuration = Math.max(10, Number(durationOverride || serviceTotals.duration || 0))
   const availableServiceOptions = useMemo(() => {
     const query = safeLower(serviceSearch)
@@ -466,8 +495,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
     return serviceOptions
       .filter((service) => !selectedCodes.has(String(service.value)))
       .filter((service) => !query || safeLower([service.label, service.value].filter(Boolean).join(' ')).includes(query))
-      .slice(0, 12)
-  }, [serviceOptions, form.service_codes, serviceSearch])
+      .sort((left, right) => {
+        const packagePriority = Number(packageServiceCodes.has(String(right.value))) - Number(packageServiceCodes.has(String(left.value)))
+        if (packagePriority !== 0) return packagePriority
+        return String(left.label || '').localeCompare(String(right.label || ''), 'pt-BR')
+      })
+  }, [serviceOptions, form.service_codes, serviceSearch, packageServiceCodes])
   const searchablePets = useMemo(() => (pets || []).map((pet) => ({
     pet,
     searchText: safeLower([
@@ -567,9 +600,20 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
         : [...current.service_codes, serviceCode],
     }))
     setServiceSearch('')
-    setServicePickerOpen(true)
+    setServicePickerOpen(false)
     setErr('')
-    requestAnimationFrame(() => serviceSearchRef.current?.focus())
+  }
+
+  const addPackageServices = () => {
+    const codes = packageServiceEntries.map((item) => String(item.service_code || item.service_type)).filter(Boolean)
+    if (!codes.length) return setErr('O pacote ativo não possui serviço disponível nesta aba.')
+    setForm((current) => ({
+      ...current,
+      service_codes: [...new Set([...current.service_codes, ...codes])],
+    }))
+    setServiceSearch('')
+    setServicePickerOpen(false)
+    setErr('')
   }
 
   const removeService = (serviceCode) => {
@@ -740,6 +784,54 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
 
             <div ref={servicePickerRef}>
               <label className="inp-label">{serviceGroupLabel}</label>
+              {serviceGroup === 'banho_tosa' && activeSubscription && (
+                <section data-yuisync-native-package-panel className="mb-3 rounded-2xl border border-emerald-400/35 bg-emerald-500/10 p-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div>
+                      <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-300">Pacote ativo · prioridade</p>
+                      <p className="mt-1 text-base font-black text-text">{packageName}</p>
+                      <p className="mt-1 text-xs text-muted">{selectedPet?.pet_name || 'Pet'} · Tutor: {selectedPet?.owner_name || 'Cliente'}</p>
+                    </div>
+                    <span className="badge badge-green">Agenda nativa v1</span>
+                  </div>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {packageUsage.map((item) => (
+                      <span key={item.service_type} className={`badge ${Number(item.remaining || 0) > 0 ? 'badge-blue' : 'badge-gray'}`}>
+                        {item.label}: {item.remaining}/{item.total} disponíveis
+                      </span>
+                    ))}
+                  </div>
+                  {packageTransport && Number(packageTransport.remaining || 0) > 0 && (
+                    <p className="mt-2 text-xs font-semibold text-sky-300">MotoDog disponível: {packageTransport.remaining}/{packageTransport.total}. O transporte só é consumido quando selecionado abaixo.</p>
+                  )}
+                  {packageServiceEntries.length > 0 ? (
+                    <>
+                      <button type="button" onClick={addPackageServices} className="btn btn-primary mt-3 w-full justify-center">
+                        Usar {packageName}
+                      </button>
+                      <div className="mt-3 space-y-2">
+                        {packageServiceEntries.map((entry) => (
+                          <button
+                            key={entry.service_type}
+                            type="button"
+                            onClick={() => addService(String(entry.service_code || entry.service_type))}
+                            className="flex w-full items-center gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/8 px-3 py-2 text-left hover:bg-emerald-500/15"
+                          >
+                            <CheckCircle size={15} className="shrink-0 text-emerald-300"/>
+                            <span className="min-w-0 flex-1">
+                              <span className="block truncate text-sm font-bold text-text">{entry.label}</span>
+                              <span className="block text-xs text-muted">{entry.remaining} disponível(is) · R$ 0,00</span>
+                            </span>
+                            <span className="badge badge-green">Pacote</span>
+                          </button>
+                        ))}
+                      </div>
+                    </>
+                  ) : (
+                    <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">O pacote está ativo, mas não possui serviço de banho/tosa disponível neste ciclo.</p>
+                  )}
+                </section>
+              )}
               {serviceOptions.length === 0 ? (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
                   Nenhum servico real esta classificado nesta aba. Revise a area do servico no cadastro.
@@ -779,6 +871,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
                       <div role="listbox" aria-label="Servicos encontrados" className="absolute z-30 mt-2 max-h-64 w-full overflow-y-auto rounded-xl border border-[var(--border2)] bg-surface shadow-2xl">
                         {availableServiceOptions.map((service) => {
                           const Icon = service.icon || PawPrint
+                          const coveredByPackage = packageServiceCodes.has(String(service.value))
                           return (
                             <button
                               key={service.value}
@@ -786,14 +879,14 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
                               role="option"
                               aria-selected="false"
                               onClick={() => addService(service.value)}
-                              className="flex w-full items-center gap-3 border-b border-[var(--border2)] px-3 py-2.5 text-left transition-colors last:border-b-0 hover:bg-white/7"
+                              className={`flex w-full items-center gap-3 border-b border-[var(--border2)] px-3 py-2.5 text-left transition-colors last:border-b-0 ${coveredByPackage ? 'bg-emerald-500/10 hover:bg-emerald-500/15' : 'hover:bg-white/7'}`}
                             >
                               <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400"><Icon size={14}/></span>
                               <span className="min-w-0 flex-1">
                                 <span className="block truncate text-sm font-bold text-text">{service.label}</span>
-                                <span className="block text-xs text-muted">{fmtCurrency(service.price)} · {service.duration || 60} min</span>
+                                <span className={`block text-xs ${coveredByPackage ? 'font-semibold text-emerald-300' : 'text-muted'}`}>{coveredByPackage ? 'Pacote · R$ 0,00' : fmtCurrency(service.price)} · {service.duration || 60} min</span>
                               </span>
-                              <Plus size={15} className="flex-shrink-0 text-amber-400"/>
+                              {coveredByPackage ? <span className="badge badge-green">Pacote</span> : <Plus size={15} className="flex-shrink-0 text-amber-400"/>}
                             </button>
                           )
                         })}
@@ -823,7 +916,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
                             <Icon size={14} className="flex-shrink-0 text-amber-400"/>
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold text-text">{service.label}</span>
-                              <span className="block text-xs text-muted">{fmtCurrency(service.price)} · {displayedDuration} min</span>
+                              <span className="block text-xs text-muted">{packageServiceCodes.has(String(service.value)) ? 'Pacote · R$ 0,00' : fmtCurrency(service.price)} · {displayedDuration} min</span>
                             </span>
                             <button
                               type="button"
@@ -1361,6 +1454,7 @@ export default function AgendaPage() {
     useAppointments()
   const { clients: pets, load: loadPets, search: searchPets } = useClients()
   const { loadPetshopServices } = usePetshopAdvanced()
+  const { loadSubscriptions } = useCatalogPlans()
   const { storeSettings } = useAuthCtx()
 
   const [selectedDate, setSelectedDate] = useState(new Date())
@@ -1372,6 +1466,7 @@ export default function AgendaPage() {
   const [search, setSearch]         = useState('')
   const [activeAgendaTab, setActiveAgendaTab] = useState('banho_tosa')
   const [agendaServices, setAgendaServices] = useState(SERVICES)
+  const [subscriptions, setSubscriptions] = useState([])
   const staff = useMemo(() => normalizeOperationalStaff(storeSettings?.petshop_operational_staff), [storeSettings?.petshop_operational_staff])
 
   const staffById = useMemo(() => new Map((staff || []).map((person) => [person.key, person])), [staff])
@@ -1389,7 +1484,8 @@ export default function AgendaPage() {
   useEffect(() => {
     loadPets()
     loadPetshopServices().then((items) => setAgendaServices(asAgendaServices(items))).catch((err) => console.warn('Falha ao carregar servicos:', err))
-  }, [loadPets, loadPetshopServices])
+    loadSubscriptions().then((items) => setSubscriptions(items || [])).catch((err) => console.warn('Falha ao carregar assinaturas:', err))
+  }, [loadPets, loadPetshopServices, loadSubscriptions])
 
   useEffect(() => {
     if (view === 'agenda') {
@@ -1721,6 +1817,7 @@ export default function AgendaPage() {
           appt={modal?.id ? modal : modal}
           pets={pets}
           services={agendaServices}
+          subscriptions={subscriptions}
           staff={staff}
           serviceDurations={storeSettings?.petshop_service_durations}
           onSearchClients={searchPets}
