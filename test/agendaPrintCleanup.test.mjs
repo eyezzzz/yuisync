@@ -63,3 +63,14 @@ test('integracao de pacote nao intercepta mais o clique de imprimir', () => {
   assert.equal(enhancementsSource.includes('data-yuisync-action="print"'), false)
   assert.equal(enhancementsSource.includes('printThermalReceipt'), false)
 })
+
+
+test('rotulos termicos permanecem curtos e sem quebra desnecessaria', () => {
+  assert.match(resolvedAppointmentBlock, /line\('Raca'/)
+  assert.match(resolvedAppointmentBlock, /line\('Resp\.'/)
+  assert.match(resolvedAppointmentBlock, /line\('Obs\.'/)
+  assert.doesNotMatch(resolvedAppointmentBlock, /Raca\/especie|Responsavel|Observacoes/)
+  assert.match(nativeReceiptBlock, /row\('Raca'/)
+  assert.match(nativeReceiptBlock, /row\('Resp\.'/)
+  assert.match(nativeReceiptBlock, /row\('Obs\.'/)
+})
