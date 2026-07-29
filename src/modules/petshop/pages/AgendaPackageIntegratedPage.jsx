@@ -1,11 +1,12 @@
 import AgendaIntegratedPage from './AgendaIntegratedPage'
 import AgendaBookingEnhancements from './AgendaBookingEnhancements'
-import AgendaPackageInlinePanel from './AgendaPackageInlinePanel'
+import AgendaPackageServiceOption from './AgendaPackageServiceOption'
 
 const HIDE_LEGACY_PACKAGE_UI = `
   [data-yuisync-package-summary-root],
   [data-yuisync-package-picker-root],
-  [data-yuisync-package-transport-root] {
+  [data-yuisync-package-transport-root],
+  [data-yuisync-inline-package-root] {
     display: none !important;
   }
 `
@@ -16,7 +17,7 @@ export default function AgendaPackageIntegratedPage() {
       <style>{HIDE_LEGACY_PACKAGE_UI}</style>
       <AgendaIntegratedPage />
       <AgendaBookingEnhancements />
-      <AgendaPackageInlinePanel />
+      <AgendaPackageServiceOption />
     </>
   )
 }
