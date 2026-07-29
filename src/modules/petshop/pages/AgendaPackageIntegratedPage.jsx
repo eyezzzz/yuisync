@@ -1,11 +1,11 @@
 import AgendaIntegratedPage from './AgendaIntegratedPage'
-import AgendaPackagePriority from './AgendaPackagePriority'
+import AgendaBookingEnhancements from './AgendaBookingEnhancements'
 
 export default function AgendaPackageIntegratedPage() {
   return (
     <>
       <AgendaIntegratedPage />
-      <AgendaPackagePriority />
+      <AgendaBookingEnhancements />
     </>
   )
 }
