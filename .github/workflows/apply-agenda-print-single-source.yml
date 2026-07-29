@@ -3,7 +3,7 @@ name: Apply agenda print single source
 on:
   pull_request:
     branches: [main]
-    types: [opened]
+    types: [synchronize]
 
 permissions:
   contents: write
@@ -58,24 +58,10 @@ jobs:
               '\n',
               'remove duplicate appointment printer',
           )
-          print_interceptor = '''
-              const printAction = event.target.closest?.('[data-yuisync-action="print"]')
-              if (printAction) {
-                const card = printAction.closest('[data-yuisync-appointment-id]')
-                const appointmentId = card?.dataset?.yuisyncAppointmentId
-                if (appointmentId) {
-                  event.preventDefault()
-                  event.stopPropagation()
-                  event.stopImmediatePropagation?.()
-                  void printLatestAppointment(appointmentId).catch((error) => window.alert(error?.message || 'Nao foi possivel imprimir o agendamento atualizado.'))
-                }
-              }
-
-          '''
-          enhancements = replace_once(
+          enhancements = regex_once(
               enhancements,
-              print_interceptor,
-              '',
+              r"\n      const printAction = event\.target\.closest\?\.\('\[data-yuisync-action=\"print\"\]'\)[\s\S]*?\n\n      window\.setTimeout\(scheduleSync, 0\)",
+              '\n      window.setTimeout(scheduleSync, 0)',
               'remove capture-phase print interceptor',
           )
           enhancements = replace_once(
