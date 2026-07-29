@@ -18,7 +18,8 @@ alter table public.sales
       'débito',
       'a_combinar',
       'multiplo',
-      'pacote'
+      'pacote',
+      'cortesia'
     )
   );
 
