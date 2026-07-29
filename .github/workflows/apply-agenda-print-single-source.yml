@@ -1,0 +1,335 @@
+name: Apply agenda print single source
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/agenda-print-single-source'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Apply definitive agenda print fix
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise RuntimeError(f'{label}: expected 1 occurrence, found {count}')
+              return text.replace(old, new, 1)
+
+          def regex_once(text, pattern, replacement, label):
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+              if count != 1:
+                  raise RuntimeError(f'{label}: expected 1 regex match, found {count}')
+              return updated
+
+          enhancements_path = Path('src/modules/petshop/pages/AgendaBookingEnhancements.jsx')
+          enhancements = enhancements_path.read_text()
+          enhancements = replace_once(
+              enhancements,
+              "import { printThermalReceipt } from '../../../lib/thermalPrint'\n",
+              '',
+              'remove enhancement printer import',
+          )
+          enhancements = replace_once(
+              enhancements,
+              '  appointmentPriceBreakdown,\n',
+              '',
+              'remove enhancement price breakdown import',
+          )
+          enhancements = regex_once(
+              enhancements,
+              r"\n  const fetchLatestAppointment = useCallback\([\s\S]*?\n  \}, \[fetchLatestAppointment, transportOptions\]\)\n",
+              '\n',
+              'remove duplicate appointment printer',
+          )
+          print_interceptor = '''
+              const printAction = event.target.closest?.('[data-yuisync-action="print"]')
+              if (printAction) {
+                const card = printAction.closest('[data-yuisync-appointment-id]')
+                const appointmentId = card?.dataset?.yuisyncAppointmentId
+                if (appointmentId) {
+                  event.preventDefault()
+                  event.stopPropagation()
+                  event.stopImmediatePropagation?.()
+                  void printLatestAppointment(appointmentId).catch((error) => window.alert(error?.message || 'Nao foi possivel imprimir o agendamento atualizado.'))
+                }
+              }
+
+          '''
+          enhancements = replace_once(
+              enhancements,
+              print_interceptor,
+              '',
+              'remove capture-phase print interceptor',
+          )
+          enhancements = replace_once(
+              enhancements,
+              '  }, [printLatestAppointment, refreshData, resolveSubscription, scheduleSync])',
+              '  }, [refreshData, resolveSubscription, scheduleSync])',
+              'remove obsolete print dependency',
+          )
+          if 'printLatestAppointment' in enhancements or 'data-yuisync-action="print"' in enhancements:
+              raise RuntimeError('duplicate print implementation remains in AgendaBookingEnhancements')
+          enhancements_path.write_text(enhancements)
+
+          resolved_path = Path('src/modules/petshop/pages/AgendaResolvedPage.jsx')
+          resolved = resolved_path.read_text()
+          resolved = regex_once(
+              resolved,
+              r"\nfunction storeAddress\(storeSettings\) \{[\s\S]*?\n\}\n\nfunction receiptShell",
+              '\nfunction receiptShell',
+              'remove address fallback helper',
+          )
+          old_header = '''function receiptShell({ storeSettings, title, content }) {
+            const logo = String(
+              storeSettings?.receipt_logo_data_url
+              || storeSettings?.store_logo_url
+              || storeSettings?.logo_url
+              || '',
+            )
+            const header = logo
+              ? `<img class="print-logo" src="${escapeHtml(logo)}" alt="Logo da empresa"/>`
+              : `
+                <div class="store">${escapeHtml(storeSettings?.store_name || 'PETSHOP')}</div>
+                <div class="store-line">${escapeHtml(storeAddress(storeSettings) || 'Endereco nao configurado')}</div>
+                <div class="store-line">${escapeHtml(storeSettings?.store_phone || '')}</div>
+              `
+          '''
+          new_header = '''function receiptShell({ storeSettings, title, content }) {
+            const logo = String(
+              storeSettings?.receipt_logo_data_url
+              || storeSettings?.store_logo_url
+              || storeSettings?.logo_url
+              || `${window.location.origin}/brand/quatro-patas-logo-mono.png`,
+            )
+            const header = `<img class="print-logo" src="${escapeHtml(logo)}" alt="Logo da empresa"/>`
+          '''
+          resolved = replace_once(resolved, old_header, new_header, 'force logo fallback without address')
+          resolved = replace_once(resolved, 'font-size: 12px; font-weight: 900;', 'font-size: 13px; font-weight: 900;', 'increase receipt title')
+          resolved = replace_once(resolved, 'font-size: 10px; line-height: 1.28;', 'font-size: 10.5px; line-height: 1.32;', 'increase receipt line')
+          resolved = replace_once(resolved, 'font-size: 9px; text-transform: uppercase;', 'font-size: 9.5px; text-transform: uppercase;', 'increase receipt labels')
+          resolved = replace_once(resolved, 'font-size: 9.5px; line-height: 1.3;', 'font-size: 10px; line-height: 1.32;', 'increase day print line')
+          resolved = resolved.replace('          .checklist { margin-top: 2.5mm; border: 1px solid #000; padding: 1.5mm; font-size: 8.5px; line-height: 1.65; }\n', '')
+          resolved = resolved.replace('          .total { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2mm; margin-top: 2.5mm; padding-top: 1.5mm; border-top: 2px solid #000; font-size: 12px; font-weight: 900; }\n', '')
+          resolved = resolved.replace('          .total span:last-child { white-space: nowrap; text-align: right; }\n', '')
+          resolved_path.write_text(resolved)
+
+          agenda_path = Path('src/modules/petshop/pages/AgendaPage.jsx')
+          agenda = agenda_path.read_text()
+          native_receipt = r'''function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
+            const { storeSettings } = useAuthCtx()
+            const pet = appt.pets || {}
+            const assigned = staffById.get(appt.responsible_staff_key)
+            const responsible = assigned?.name || appt.responsible_staff_name || 'Nao informado'
+            const scheduled = appt.scheduled_at ? new Date(appt.scheduled_at) : null
+            const date = scheduled && !Number.isNaN(scheduled.getTime())
+              ? scheduled.toLocaleDateString('pt-BR')
+              : 'Nao informada'
+            const interval = fmtAppointmentInterval(appt)
+            const title = appt.status === 'concluido' ? 'FICHA DE ATENDIMENTO' : 'FICHA DE AGENDAMENTO'
+
+            const handlePrint = () => {
+              const printWindow = window.open('', '_blank')
+              if (!printWindow) return
+              const logoUrl = String(
+                storeSettings?.receipt_logo_data_url
+                || storeSettings?.store_logo_url
+                || storeSettings?.logo_url
+                || `${window.location.origin}/brand/quatro-patas-logo-mono.png`,
+              )
+              const row = (label, value) => `
+                <div class="row">
+                  <div class="label">${escapeReceiptHtml(label)}</div>
+                  <div class="value">${escapeReceiptHtml(value || 'Nao informado')}</div>
+                </div>
+              `
+
+              const receiptHtml = `
+                <html>
+                  <head>
+                    <meta charset="utf-8"/>
+                    <title>${escapeReceiptHtml(title)}</title>
+                    <style>
+                      @page { margin: 0; }
+                      * { box-sizing: border-box; }
+                      html, body { width: 80mm; margin: 0; padding: 0; color: #000; background: #fff; }
+                      body { font-family: Arial, Helvetica, sans-serif; padding: 3mm 0 3mm 2mm; }
+                      .receipt { width: 64mm; max-width: 64mm; }
+                      .center { text-align: center; }
+                      .logo { display: block; width: auto; max-width: 56mm; max-height: 22mm; margin: 0 auto 2.5mm; object-fit: contain; filter: grayscale(1) contrast(2); }
+                      .title { margin: 3mm 0 2mm; border-top: 1px dashed #000; border-bottom: 1px dashed #000; padding: 1.6mm 0; font-size: 13px; font-weight: 900; }
+                      .row { display: grid; grid-template-columns: 18mm minmax(0, 1fr); gap: 1.5mm; padding: .8mm 0; border-bottom: 1px dotted #777; font-size: 10.5px; line-height: 1.32; }
+                      .label { font-size: 9.5px; font-weight: 900; text-transform: uppercase; }
+                      .value { min-width: 0; font-size: 10.5px; font-weight: 700; white-space: pre-wrap; overflow-wrap: anywhere; }
+                      .footer { margin-top: 3mm; font-size: 8.5px; line-height: 1.3; }
+                      @media print { body { position: absolute; inset: 0 auto auto 0; } }
+                    </style>
+                  </head>
+                  <body>
+                    <main class="receipt">
+                      <div class="center">
+                        <img class="logo" src="${escapeReceiptHtml(logoUrl)}" alt="Logo da empresa"/>
+                        <div class="title">${escapeReceiptHtml(title)}</div>
+                      </div>
+                      ${row('Tutor', pet.owner_name)}
+                      ${row('Pet', pet.pet_name)}
+                      ${row('Raca / especie', pet.breed || pet.species)}
+                      ${row('Data e hora', `${date} - ${interval}`)}
+                      ${row('Servico', serviceLabel(appt))}
+                      ${row('Responsavel', responsible)}
+                      ${row('Observacoes', appt.notes || 'Nenhuma observacao')}
+                      <div class="footer center">Impresso em ${escapeReceiptHtml(new Date().toLocaleString('pt-BR'))}</div>
+                    </main>
+                  </body>
+                </html>
+              `
+              printWindow.document.write(receiptHtml)
+              printWindow.document.close()
+
+              let printed = false
+              const printWhenReady = () => {
+                if (printed) return
+                printed = true
+                printThermalReceipt(printWindow)
+              }
+              const images = [...printWindow.document.images]
+              const pendingImages = images.filter((image) => !image.complete)
+              if (pendingImages.length === 0) {
+                window.setTimeout(printWhenReady, 80)
+              } else {
+                let remaining = pendingImages.length
+                const settleImage = () => {
+                  remaining -= 1
+                  if (remaining <= 0) window.setTimeout(printWhenReady, 80)
+                }
+                pendingImages.forEach((image) => {
+                  image.addEventListener('load', settleImage, { once: true })
+                  image.addEventListener('error', settleImage, { once: true })
+                })
+                window.setTimeout(printWhenReady, 1500)
+              }
+            }
+
+            return createPortal(
+              <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
+                <div className="modal-box max-w-md">
+                  <div className="modal-header">
+                    <h2 className="font-display font-bold text-xl text-text">Ficha 80 mm</h2>
+                    <button type="button" aria-label="Fechar impressao" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
+                  </div>
+                  <div className="modal-body space-y-5">
+                    <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3 text-sm">
+                      <p><span className="text-muted">Tutor:</span> <strong>{pet.owner_name || 'Nao informado'}</strong></p>
+                      <p><span className="text-muted">Pet:</span> <strong>{pet.pet_name || 'Nao informado'}</strong></p>
+                      <p><span className="text-muted">Horario:</span> <strong>{date} · {interval}</strong></p>
+                      <p><span className="text-muted">Servico:</span> <strong>{serviceLabel(appt)}</strong></p>
+                      <p><span className="text-muted">Responsavel:</span> <strong>{responsible}</strong></p>
+                      <p><span className="text-muted">Observacoes:</span> <strong>{appt.notes || 'Nenhuma observacao'}</strong></p>
+                    </div>
+                    <button onClick={handlePrint} className="btn btn-primary w-full justify-center gap-2 py-3">
+                      <Receipt size={16}/> Imprimir ficha
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body,
+            )
+          }
+
+          // ── Modal de Agendamento'''
+          agenda = regex_once(
+              agenda,
+              r"function ReceiptModal\(\{ appt, onClose, serviceLabel, staffById = new Map\(\) \}\) \{[\s\S]*?\n\}\n\n// ── Modal de Agendamento",
+              native_receipt,
+              'replace native receipt modal',
+          )
+          agenda_path.write_text(agenda)
+
+          test_path = Path('test/agendaPrintCleanup.test.mjs')
+          test_path.write_text(r'''import assert from 'node:assert/strict'
+          import fs from 'node:fs'
+          import test from 'node:test'
+
+          const resolvedSource = fs.readFileSync('src/modules/petshop/pages/AgendaResolvedPage.jsx', 'utf8')
+          const agendaSource = fs.readFileSync('src/modules/petshop/pages/AgendaPage.jsx', 'utf8')
+          const enhancementsSource = fs.readFileSync('src/modules/petshop/pages/AgendaBookingEnhancements.jsx', 'utf8')
+
+          const resolvedAppointmentBlock = resolvedSource.slice(
+            resolvedSource.indexOf('const printAppointment = useCallback'),
+            resolvedSource.indexOf('const printDay = useCallback'),
+          )
+          const resolvedReceiptShell = resolvedSource.slice(
+            resolvedSource.indexOf('function receiptShell'),
+            resolvedSource.indexOf('function findScrollableAncestor'),
+          )
+          const nativeReceiptBlock = agendaSource.slice(
+            agendaSource.indexOf('function ReceiptModal'),
+            agendaSource.indexOf('// ── Modal de Agendamento'),
+          )
+
+          test('ficha operacional nao imprime valores, endereco ou checklist', () => {
+            assert.equal(resolvedAppointmentBlock.includes('fmtCurrency('), false)
+            assert.equal(resolvedAppointmentBlock.includes('prices.'), false)
+            assert.equal(resolvedAppointmentBlock.includes('CONTROLE:'), false)
+            assert.equal(resolvedAppointmentBlock.includes('checklist'), false)
+            assert.equal(resolvedAppointmentBlock.includes("line('Endereco'"), false)
+          })
+
+          test('modal nativo usa a mesma ficha limpa', () => {
+            assert.equal(nativeReceiptBlock.includes('fmtCurrency('), false)
+            assert.equal(nativeReceiptBlock.includes('VALOR'), false)
+            assert.equal(nativeReceiptBlock.includes('TOTAL'), false)
+            assert.equal(nativeReceiptBlock.includes('Endereco completo'), false)
+            assert.equal(nativeReceiptBlock.includes("row('Transporte'"), false)
+            assert.equal(nativeReceiptBlock.includes('transportAddress'), false)
+          })
+
+          test('todos os caminhos restauram e aguardam a logo', () => {
+            assert.match(resolvedReceiptShell, /quatro-patas-logo-mono\.png/)
+            assert.match(nativeReceiptBlock, /quatro-patas-logo-mono\.png/)
+            assert.match(resolvedReceiptShell, /image\.addEventListener\('load'/)
+            assert.match(nativeReceiptBlock, /image\.addEventListener\('load'/)
+            assert.match(resolvedReceiptShell, /window\.setTimeout\(printWhenReady, 1500\)/)
+            assert.match(nativeReceiptBlock, /window\.setTimeout\(printWhenReady, 1500\)/)
+          })
+
+          test('tipografia foi ampliada nos dois modelos', () => {
+            assert.match(resolvedReceiptShell, /\.line \{[^}]*font-size: 10\.5px/)
+            assert.match(resolvedReceiptShell, /\.line strong \{[^}]*font-size: 9\.5px/)
+            assert.match(nativeReceiptBlock, /\.row \{[^}]*font-size: 10\.5px/)
+            assert.match(nativeReceiptBlock, /\.label \{[^}]*font-size: 9\.5px/)
+          })
+
+          test('integracao de pacote nao intercepta mais o clique de imprimir', () => {
+            assert.equal(enhancementsSource.includes('printLatestAppointment'), false)
+            assert.equal(enhancementsSource.includes('data-yuisync-action="print"'), false)
+            assert.equal(enhancementsSource.includes('printThermalReceipt'), false)
+          })
+          ''')
+          PY
+
+      - name: Remove temporary workflow and commit final fix
+        shell: bash
+        run: |
+          rm .github/workflows/apply-agenda-print-single-source.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/petshop/pages/AgendaBookingEnhancements.jsx src/modules/petshop/pages/AgendaResolvedPage.jsx src/modules/petshop/pages/AgendaPage.jsx test/agendaPrintCleanup.test.mjs .github/workflows/apply-agenda-print-single-source.yml
+          git commit -m "fix: unificar impressao limpa da agenda"
+          git push origin HEAD:${{ github.head_ref }}
