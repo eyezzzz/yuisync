@@ -5,7 +5,9 @@ const normalize = (value = '') => clean(value)
   .replace(/[\u0300-\u036f]/g, '')
   .toLowerCase()
 
-export const MANUAL_SLOT_CAPACITY = 2
+// Quantidade de colunas visuais exibidas antes da rolagem horizontal.
+// Nao representa limite operacional de agendamentos.
+export const MANUAL_SLOT_CAPACITY = 4
 
 const NON_BLOCKING_STATUSES = new Set(['cancelado', 'cancelled', 'no_show', 'concluido', 'completed', 'finalizado'])
 

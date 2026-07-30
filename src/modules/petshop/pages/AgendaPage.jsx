@@ -229,33 +229,6 @@ const appointmentIntervalBounds = (appt = {}) => {
   return { start, end: new Date(start.getTime() + duration * 60 * 1000) }
 }
 
-const intervalsOverlap = (firstStart, firstEnd, secondStart, secondEnd) => (
-  firstStart < secondEnd && secondStart < firstEnd
-)
-
-const wouldExceedSlotCapacity = ({ start, end, appointments = [], capacity = 1 }) => {
-  const events = [
-    { time: start.getTime(), delta: 1 },
-    { time: end.getTime(), delta: -1 },
-  ]
-
-  appointments.forEach((appt) => {
-    const bounds = appointmentIntervalBounds(appt)
-    if (!bounds || !intervalsOverlap(start, end, bounds.start, bounds.end)) return
-    events.push({ time: Math.max(start.getTime(), bounds.start.getTime()), delta: 1 })
-    events.push({ time: Math.min(end.getTime(), bounds.end.getTime()), delta: -1 })
-  })
-
-  events.sort((a, b) => (a.time - b.time) || (a.delta - b.delta))
-  let concurrent = 0
-  let maximum = 0
-  events.forEach((event) => {
-    concurrent += event.delta
-    maximum = Math.max(maximum, concurrent)
-  })
-  return maximum > Math.max(1, Number(capacity || 1))
-}
-
 const fmtInterval = (appt) => fmtAppointmentInterval(appt)
 
 const PT_WEEKDAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
@@ -639,36 +612,6 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
 
     const candidateStart = new Date(`${form.date}T${form.time}:00`)
     if (Number.isNaN(candidateStart.getTime())) return setErr('Horario invalido')
-    const candidateEnd = new Date(candidateStart.getTime() + effectiveDuration * 60 * 1000)
-    const candidateBlocks = appointmentOccupiesManualSlot({ status: form.status })
-    const relevantAppointments = (appointments || []).filter((item) => (
-      String(item.id || '') !== String(appt?.id || '')
-      && appointmentOccupiesManualSlot(item)
-      && getAppointmentServiceGroup(item, services) === serviceGroup
-    ))
-
-    if (candidateBlocks && form.responsible_staff_key) {
-      const sameResponsibleConflict = relevantAppointments.some((item) => {
-        if (item.responsible_staff_key !== form.responsible_staff_key) return false
-        const bounds = appointmentIntervalBounds(item)
-        return bounds && intervalsOverlap(candidateStart, candidateEnd, bounds.start, bounds.end)
-      })
-      if (sameResponsibleConflict) {
-        return setErr('Este responsavel ja possui atendimento dentro desse intervalo.')
-      }
-    }
-
-    if (candidateBlocks && wouldExceedSlotCapacity({
-      start: candidateStart,
-      end: candidateEnd,
-      appointments: relevantAppointments,
-      capacity: serviceGroup === 'banho_tosa' ? slotCapacity : 1,
-    })) {
-      return setErr(serviceGroup === 'veterinaria'
-        ? 'Ja existe atendimento veterinario dentro desse intervalo.'
-        : 'As duas vagas de banho/tosa ja estao ocupadas em parte desse intervalo.')
-    }
-
     setSaving(true)
     setErr('')
     try {
@@ -1244,16 +1187,19 @@ function AgendaTimelineView({
     const slotCount = Math.max(1, Math.ceil((rangeEnd - rangeStart) / DAILY_SLOT_MINUTES))
     const slots = Array.from({ length: slotCount }, (_, index) => rangeStart + index * DAILY_SLOT_MINUTES)
     const timelineHeight = slots.length * DAILY_ROW_HEIGHT
-    const laneEnds = Array.from({ length: slotCapacity }, () => Number.NEGATIVE_INFINITY)
+    const laneEnds = []
     const positioned = blocking.map((appt) => {
       const bounds = appointmentIntervalBounds(appt)
       const startMs = bounds?.start.getTime() ?? 0
       let lane = laneEnds.findIndex((laneEnd) => laneEnd <= startMs)
-      const overflow = lane < 0
-      if (lane < 0) lane = 0
+      if (lane < 0) {
+        lane = laneEnds.length
+        laneEnds.push(Number.NEGATIVE_INFINITY)
+      }
       laneEnds[lane] = Math.max(laneEnds[lane], bounds?.end.getTime() ?? startMs)
-      return { appt, bounds, lane, overflow }
+      return { appt, bounds, lane }
     })
+    const visualLaneCount = Math.max(slotCapacity, laneEnds.length)
 
     return (
       <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
@@ -1264,12 +1210,12 @@ function AgendaTimelineView({
           </div>
           <div className="flex items-center gap-2 text-xs text-muted">
             <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
-            {slotCapacity} {slotCapacity === 1 ? 'vaga' : 'vagas'} simultaneas
+            {slotCapacity} colunas visuais · agendamentos livres
           </div>
         </div>
 
         <div className="overflow-x-auto">
-          <div className="min-w-[620px] grid" style={{ gridTemplateColumns: '76px minmax(0, 1fr)' }}>
+          <div className="min-w-[860px] grid" style={{ gridTemplateColumns: '76px minmax(0, 1fr)' }}>
             <div className="relative bg-surface/35" style={{ height: timelineHeight }}>
               {slots.map((minute, index) => (
                 <div
@@ -1282,7 +1228,7 @@ function AgendaTimelineView({
               ))}
             </div>
 
-            <div className="relative border-l border-[var(--border)]" style={{ height: timelineHeight }}>
+            <div className="relative border-l border-[var(--border)]" style={{ height: timelineHeight, width: `${Math.max(100, (visualLaneCount / slotCapacity) * 100)}%` }}>
               {slots.map((minute, index) => (
                 <button
                   key={`slot-${minute}`}
@@ -1295,17 +1241,17 @@ function AgendaTimelineView({
                 />
               ))}
 
-              {positioned.map(({ appt, bounds, lane, overflow }) => {
+              {positioned.map(({ appt, bounds, lane }) => {
                 if (!bounds) return null
                 const startMinute = minutesOfDay(bounds.start)
                 const endMinute = minutesOfDay(bounds.end)
                 const top = ((startMinute - rangeStart) / DAILY_SLOT_MINUTES) * DAILY_ROW_HEIGHT + 2
                 const height = Math.max(34, ((endMinute - startMinute) / DAILY_SLOT_MINUTES) * DAILY_ROW_HEIGHT - 4)
-                const laneWidth = 100 / Math.max(1, slotCapacity)
+                const laneWidth = 100 / Math.max(1, visualLaneCount)
                 return (
                   <div
                     key={appt.id}
-                    className={`absolute z-10 overflow-hidden rounded-lg ${overflow ? 'ring-2 ring-red-500/70' : ''}`}
+                    className="absolute z-10 overflow-hidden rounded-lg"
                     style={{
                       top,
                       height,
@@ -1366,7 +1312,7 @@ function AgendaTimelineView({
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
           <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
-          {slotCapacity} {slotCapacity === 1 ? 'vaga' : 'vagas'} por horario
+          {slotCapacity} colunas visuais · agendamentos livres
         </div>
       </div>
 
@@ -1398,10 +1344,18 @@ function AgendaTimelineView({
                 const slotItems = bySlot.get(`${dayKey}-${hour}`) || []
                 const occupying = slotItems.filter(appointmentOccupiesManualSlot)
                 const nonBlocking = slotItems.filter((item) => !appointmentOccupiesManualSlot(item))
-                const lanes = Array.from({ length: slotCapacity }, (_, index) => occupying[index] || null)
+                const visualLaneCount = Math.max(slotCapacity, occupying.length)
+                const lanes = Array.from({ length: visualLaneCount }, (_, index) => occupying[index] || null)
                 return (
                   <div key={`${dayKey}-${hour}`} className="min-h-[118px] border-l border-[var(--border)] p-2 hover:bg-white/[0.03] transition-colors">
-                    <div className={`grid gap-2 ${slotCapacity === 1 ? "grid-cols-1" : "grid-cols-2"}`}>
+                    <div className="overflow-x-auto">
+                      <div
+                        className="grid gap-2"
+                        style={{
+                          gridTemplateColumns: `repeat(${visualLaneCount}, minmax(140px, 1fr))`,
+                          width: `${Math.max(100, (visualLaneCount / slotCapacity) * 100)}%`,
+                        }}
+                      >
                       {lanes.map((appt, laneIndex) => appt ? appointmentCard(appt) : (
                         <button
                           key={`available-${laneIndex}`}
@@ -1410,15 +1364,11 @@ function AgendaTimelineView({
                           className="min-h-[92px] rounded-lg border border-dashed border-emerald-500/25 bg-emerald-500/[0.04] px-2 py-3 text-center text-[10px] font-bold text-emerald-300 hover:border-emerald-400/50 hover:bg-emerald-500/10"
                         >
                           <Plus size={14} className="mx-auto mb-1"/>
-                          Vaga {laneIndex + 1} disponivel
+                          Espaco visual {laneIndex + 1}
                         </button>
                       ))}
+                      </div>
                     </div>
-                    {occupying.length > slotCapacity && (
-                      <p className="mt-2 rounded-md bg-red-500/10 px-2 py-1 text-[10px] text-red-300">
-                        {occupying.length - slotCapacity} agendamento(s) acima da capacidade configurada.
-                      </p>
-                    )}
                     {nonBlocking.length > 0 && (
                       <div className="mt-2 space-y-1">
                         {nonBlocking.map((appt) => {
@@ -1731,7 +1681,7 @@ export default function AgendaPage({ setPage }) {
           onReceipt={setReceipt}
           onCompletedAction={handleCompletedAction}
           needsPayment={needsPayment}
-          slotCapacity={activeAgendaTab === 'banho_tosa' ? MANUAL_SLOT_CAPACITY : 1}
+          slotCapacity={MANUAL_SLOT_CAPACITY}
           onCreateAt={openSlotModal}
           onSelectDate={setSelectedDate}
         />
@@ -1850,7 +1800,7 @@ export default function AgendaPage({ setPage }) {
           serviceDurations={storeSettings?.petshop_service_durations}
           onSearchClients={searchPets}
           appointments={appointments}
-          slotCapacity={getAppointmentServiceGroup(modal, agendaServices) === 'veterinaria' || modal?.serviceGroup === 'veterinaria' ? 1 : MANUAL_SLOT_CAPACITY}
+          slotCapacity={MANUAL_SLOT_CAPACITY}
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}
