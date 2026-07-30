@@ -76,9 +76,30 @@ test('arraste confirma no banco e deixa o jsx nativo recalcular top coluna e lar
   ])
   assert.match(resolved, /chooseAgendaSlot\(slots\(\), event.clientX, event.clientY\)/)
   assert.match(resolved, /void moveAppointment\(id, time\)/)
-  assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)[\s\S]*await load\(\{ date: selectedDate \}\)[\s\S]*refreshAgendaPage\(\)/)
+  assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)[\s\S]*setNotice/)
   assert.match(resolved, /is-yuisync-pointer-dragging/)
+  assert.doesNotMatch(resolved, /refreshAgendaPage/)
   assert.doesNotMatch(integrated, /shiftedInterval|pendingMove|suppressRefreshUntil/)
   assert.doesNotMatch(integrated, /outer\.style\.top|intervalNode\.textContent/)
   assert.doesNotMatch(integrated, /button\[title="Atualizar"\][\s\S]*preventDefault/)
+})
+
+
+test('acoes ficam cancelar imprimir concluir e sincronizam sem recarregar a tabela', async () => {
+  const [resolved, css, hook] = await Promise.all([
+    readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.jsx', import.meta.url), 'utf8'),
+    readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.css', import.meta.url), 'utf8'),
+    readFile(new URL('../src/shared/hooks/useAppointments.js', import.meta.url), 'utf8'),
+  ])
+  const cancelIndex = resolved.indexOf('data-yuisync-action="cancel"')
+  const printIndex = resolved.indexOf('data-yuisync-action="print"')
+  const completeIndex = resolved.indexOf('data-yuisync-action="complete"')
+  assert.ok(cancelIndex >= 0 && cancelIndex < printIndex && printIndex < completeIndex)
+  assert.doesNotMatch(resolved, /data-yuisync-action="drag"/)
+  assert.ok(resolved.includes("updateStatus(appointmentId, 'cancelado')"))
+  assert.ok(resolved.includes('if (action) return'))
+  assert.equal(resolved.includes('button[title="Atualizar"]'), false)
+  assert.ok(css.includes('.yuisync-resolved-action.is-cancel'))
+  assert.ok(hook.includes('APPOINTMENT_SYNC_EVENT'))
+  assert.ok(hook.includes("emitAppointmentSync({ type: 'upsert'"))
 })

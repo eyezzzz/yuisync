@@ -139,9 +139,14 @@
   border-color: rgba(236, 253, 245, 0.8);
 }
 
-.yuisync-resolved-drag-handle {
-  cursor: grab;
-  touch-action: none;
+.yuisync-resolved-action.is-cancel {
+  background: rgba(127, 29, 29, 0.96);
+  border-color: rgba(254, 202, 202, 0.72);
+  color: #fee2e2;
+}
+
+.yuisync-resolved-action.is-cancel:hover {
+  background: rgba(185, 28, 28, 0.98);
 }
 
 .yuisync-resolved-drag-ghost {
