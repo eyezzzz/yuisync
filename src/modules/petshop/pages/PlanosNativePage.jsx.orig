@@ -24,7 +24,6 @@ import { useModuleCtx } from '../../../context/ModuleContext'
 import { fmtCurrency, supabase } from '../../../lib/supabase'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
 import { useClients } from '../../../shared/hooks/useClients'
-import { groupPetsByTutor } from '../../../shared/lib/petTutorGroups'
 import { useCatalogPlans } from '../hooks/useCatalogPlans'
 import { usePetshopAdvanced, BILLING_CYCLES } from '../hooks/usePetshopAdvanced'
 import {
@@ -256,72 +255,43 @@ function PlanModal({ plan, catalogServices, onClose, onSave }) {
 function ClientPicker({ clients, selectedId, onSelect }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
-  const [pendingTutorPets, setPendingTutorPets] = useState([])
   const selected = clients.find((client) => client.id === selectedId)
-  const results = useMemo(() => groupPetsByTutor(clients)
-    .filter((group) => group.pets.some((client) => clientMatches(client, search)))
-    .slice(0, 20), [clients, search])
-
-  const selectTutor = (group) => {
-    if (group.pets.length === 1) {
-      onSelect(group.pets[0].id)
-      setOpen(false)
-      setSearch('')
-      return
-    }
-    setPendingTutorPets(group.pets)
-    setSearch('')
-  }
+  const results = useMemo(() => clients.filter((client) => clientMatches(client, search)).slice(0, 20), [clients, search])
 
   return (
     <div className="relative">
-      <label className="inp-label">Pet que receberá o pacote</label>
+      <label className="inp-label">Cliente / pet</label>
       {!open && selected ? (
-        <button type="button" onClick={() => { setPendingTutorPets([]); setOpen(true) }} className="w-full rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3 text-left">
+        <button type="button" onClick={() => setOpen(true)} className="w-full rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3 text-left">
           <span className="block font-bold text-text">{selected.pet_name || 'Pet não informado'}</span>
           <span className="mt-1 block text-xs text-muted">{selected.owner_name || 'Tutor não informado'}{selected.phone ? ` · ${selected.phone}` : ''}</span>
         </button>
       ) : !open ? (
-        <button type="button" onClick={() => { setPendingTutorPets([]); setOpen(true) }} className="btn btn-secondary w-full justify-center"><Search size={14}/> Pesquisar tutor ou pet</button>
+        <button type="button" onClick={() => setOpen(true)} className="btn btn-secondary w-full justify-center"><Search size={14}/> Pesquisar cliente ou pet</button>
       ) : (
         <div className="rounded-xl border border-[var(--border2)] bg-surface p-3 shadow-xl">
-          {pendingTutorPets.length > 1 ? (
-            <div className="space-y-2">
-              <div className="flex items-center justify-between gap-3">
-                <div>
-                  <p className="text-sm font-bold text-text">Escolha qual pet receberá o pacote</p>
-                  <p className="text-xs text-muted">{pendingTutorPets[0]?.owner_name} possui {pendingTutorPets.length} pets ativos.</p>
-                </div>
-                <button type="button" onClick={() => setPendingTutorPets([])} className="btn btn-ghost btn-sm">Voltar</button>
-              </div>
-              {pendingTutorPets.map((pet) => (
-                <button key={pet.id} type="button" onClick={() => { onSelect(pet.id); setOpen(false); setPendingTutorPets([]) }} className="w-full rounded-xl border border-[var(--border2)] px-3 py-2.5 text-left hover:bg-emerald-500/10">
-                  <span className="block text-sm font-bold text-text">{pet.pet_name || 'Pet não informado'}</span>
-                  <span className="block text-xs text-muted">{pet.breed || pet.species || 'Espécie não informada'}</span>
-                </button>
-              ))}
-            </div>
-          ) : (
-            <>
-              <div className="relative">
-                <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
-                <input autoFocus className="inp pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Digite tutor, pet ou telefone..."/>
-              </div>
-              <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--border2)]">
-                {results.map((group) => (
-                  <button key={group.key} type="button" onClick={() => selectTutor(group)} className="flex w-full items-center justify-between gap-3 border-b border-[var(--border2)] px-3 py-2.5 text-left last:border-0 hover:bg-white/5">
-                    <span className="min-w-0">
-                      <span className="block truncate text-sm font-bold text-text">{group.owner_name || 'Tutor não informado'}</span>
-                      <span className="block truncate text-xs text-muted">{group.pets.length === 1 ? group.pets[0].pet_name || 'Pet não informado' : `${group.pets.length} pets: ${group.pets.map((pet) => pet.pet_name).filter(Boolean).join(', ')}`}</span>
-                    </span>
-                    {group.pets.length > 1 ? <span className="text-[10px] font-bold text-emerald-400">Escolher pet</span> : selectedId === group.pets[0]?.id && <CheckCircle2 size={15} className="shrink-0 text-emerald-400"/>}
-                  </button>
-                ))}
-                {!results.length && <p className="px-3 py-4 text-center text-sm text-muted">Nenhum cliente encontrado.</p>}
-              </div>
-            </>
-          )}
-          <button type="button" onClick={() => { setOpen(false); setSearch(''); setPendingTutorPets([]) }} className="btn btn-ghost btn-sm mt-2 w-full justify-center">Fechar busca</button>
+          <div className="relative">
+            <Search size={14} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
+            <input autoFocus className="inp pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Digite tutor, pet ou telefone..."/>
+          </div>
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-[var(--border2)]">
+            {results.map((client) => (
+              <button
+                key={client.id}
+                type="button"
+                onClick={() => { onSelect(client.id); setOpen(false); setSearch('') }}
+                className="flex w-full items-center justify-between gap-3 border-b border-[var(--border2)] px-3 py-2.5 text-left last:border-0 hover:bg-white/5"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-bold text-text">{client.pet_name || 'Pet não informado'}</span>
+                  <span className="block truncate text-xs text-muted">{client.owner_name || 'Tutor não informado'}{client.phone ? ` · ${client.phone}` : ''}</span>
+                </span>
+                {selectedId === client.id && <CheckCircle2 size={15} className="shrink-0 text-emerald-400"/>}
+              </button>
+            ))}
+            {!results.length && <p className="px-3 py-4 text-center text-sm text-muted">Nenhum cliente encontrado.</p>}
+          </div>
+          <button type="button" onClick={() => { setOpen(false); setSearch('') }} className="btn btn-ghost btn-sm mt-2 w-full justify-center">Fechar busca</button>
         </div>
       )}
     </div>
@@ -340,7 +310,7 @@ function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave })
   const selectedPlan = plans.find((plan) => plan.id === form.plan_id)
 
   async function submit() {
-    if (!form.client_id) return setError('Selecione o pet que receberá o pacote.')
+    if (!form.client_id) return setError('Selecione o cliente e o pet.')
     setSaving(true)
     setError('')
     try {

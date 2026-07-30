@@ -109,52 +109,6 @@ export function buildCatalogUsageSummary(subscription = {}, catalogServices = []
   })
 }
 
-export function activeSubscriptionsForClient(subscriptions = [], clientId = '') {
-  if (!clientId) return []
-  const value = String(clientId)
-  return (Array.isArray(subscriptions) ? subscriptions : [])
-    .filter((subscription) => String(subscription.client_id || subscription.client?.id || '') === value)
-    .filter((subscription) => subscription.status === 'active' && subscription.subscription_plans?.active !== false)
-    .sort((left, right) => {
-      const leftBilling = new Date(left.next_billing_date || '9999-12-31').getTime()
-      const rightBilling = new Date(right.next_billing_date || '9999-12-31').getTime()
-      if (leftBilling !== rightBilling) return leftBilling - rightBilling
-      const leftStart = new Date(left.started_at || 0).getTime()
-      const rightStart = new Date(right.started_at || 0).getTime()
-      return leftStart - rightStart
-    })
-}
-
-export function buildCombinedCatalogUsageSummary(subscriptions = [], catalogServices = []) {
-  const combined = new Map()
-
-  for (const subscription of Array.isArray(subscriptions) ? subscriptions : []) {
-    for (const item of buildCatalogUsageSummary(subscription, catalogServices)) {
-      const key = String(item.service_type || item.service_code || '')
-      if (!key) continue
-      const current = combined.get(key) || {
-        ...item,
-        used: 0,
-        total: 0,
-        remaining: 0,
-        subscription_count: 0,
-        subscription_ids: [],
-        plan_names: [],
-      }
-      current.used += Number(item.used || 0)
-      current.total += Number(item.total || 0)
-      current.remaining += Number(item.remaining || 0)
-      current.subscription_count += 1
-      current.subscription_ids.push(subscription.id)
-      const planName = String(subscription.subscription_plans?.name || '').trim()
-      if (planName && !current.plan_names.includes(planName)) current.plan_names.push(planName)
-      combined.set(key, current)
-    }
-  }
-
-  return [...combined.values()]
-}
-
 export function activeSubscriptionForClient(subscriptions = [], clientId = '') {
   if (!clientId) return null
   return (Array.isArray(subscriptions) ? subscriptions : [])
