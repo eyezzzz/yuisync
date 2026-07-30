@@ -50,20 +50,16 @@ test('agenda resolve pacote ativo pelo id real do cliente', () => {
   assert.equal(usage[0].catalog_service?.value, 'banho_pequeno')
 })
 
-test('variacoes de tosa vencem classificacao legada incorreta', () => {
-  const cases = [
-    'Tosa higienica porte pequeno',
-    'Tosagem na tesoura',
-    'Tosar na maquina',
-    'Trimming e acabamento',
-    'Banho e tosa completa',
-  ]
+test('area cadastrada e a fonte de verdade e texto e apenas fallback', () => {
+  assert.equal(classifyAppointmentServiceGroup({
+    name: 'Tosa higienica',
+    group_type: 'veterinaria',
+  }), 'veterinaria')
 
-  cases.forEach((name) => {
-    const service = { code: name, name, group_type: 'veterinaria', active: true }
-    assert.equal(classifyAppointmentServiceGroup(service), 'banho_tosa')
-    assert.ok(['tosa', 'banho_tosa'].includes(appointmentServiceKind(service)))
-  })
+  assert.equal(classifyAppointmentServiceGroup({
+    name: 'Tosa higienica',
+    group_type: 'outro',
+  }), 'banho_tosa')
 })
 
 test('todos os servicos reais de tosa permanecem no seletor nativo', () => {
@@ -72,7 +68,7 @@ test('todos os servicos reais de tosa permanecem no seletor nativo', () => {
     ...Array.from({ length: 24 }, (_, index) => ({
       code: `tosa_${index + 1}`,
       name: `Tosa especial ${index + 1}`,
-      group_type: index % 2 ? 'outro' : 'veterinaria',
+      group_type: index % 2 ? 'outro' : 'banho_tosa',
       active: true,
     })),
   ]
@@ -82,11 +78,11 @@ test('todos os servicos reais de tosa permanecem no seletor nativo', () => {
   assert.equal(options.filter((service) => appointmentServiceKind(service) === 'tosa').length, 24)
 })
 
-test('agendamento antigo de tosa entra na aba banho e tosa mesmo com grupo errado', () => {
+test('agendamento antigo sem area valida usa o texto como fallback', () => {
   assert.equal(appointmentServiceGroup({
-    service_group: 'veterinaria',
+    service_group: 'outro',
     service_type: 'catalog_tosa_higienica',
-    service_items: [{ name: 'Tosa higienica', group_type: 'veterinaria' }],
+    service_items: [{ name: 'Tosa higienica', group_type: 'outro' }],
   }, []), 'banho_tosa')
 })
 

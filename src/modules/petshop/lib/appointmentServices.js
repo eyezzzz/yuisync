@@ -42,12 +42,14 @@ export function appointmentServiceKind(service = {}) {
 }
 
 export function classifyAppointmentServiceGroup(service = {}) {
+  // A área escolhida no cadastro é a fonte de verdade. Inferência textual só
+  // recupera cadastros antigos que ainda estão como "outro" ou sem grupo.
+  const declared = stripAccents(service.group_type || service.groupType || service.service_group || '')
+  if (VALID_APPOINTMENT_GROUPS.has(declared)) return declared
+
   const kind = appointmentServiceKind(service)
   if (kind === 'veterinaria') return 'veterinaria'
   if (['banho', 'tosa', 'banho_tosa', 'complemento'].includes(kind)) return 'banho_tosa'
-
-  const declared = stripAccents(service.group_type || service.groupType || service.service_group || '')
-  if (VALID_APPOINTMENT_GROUPS.has(declared)) return declared
   return 'outro'
 }
 
