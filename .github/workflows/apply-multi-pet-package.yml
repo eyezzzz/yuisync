@@ -44,8 +44,9 @@ jobs:
           base64 --decode /tmp/yuisync-multi-pet.patch.xz.b64 > /tmp/yuisync-multi-pet.patch.xz
           xz --decompress --stdout /tmp/yuisync-multi-pet.patch.xz > /tmp/yuisync-multi-pet.patch
           echo "424f6c67c91fec9b291d057b7bc790fa9c4eb7137fb71601c471779a3cdc2b86  /tmp/yuisync-multi-pet.patch" | sha256sum --check
-          git apply --check --whitespace=error-all /tmp/yuisync-multi-pet.patch
-          git apply --whitespace=error-all /tmp/yuisync-multi-pet.patch
+          patch --dry-run --batch --forward --fuzz=3 -p1 < /tmp/yuisync-multi-pet.patch
+          patch --batch --forward --fuzz=3 -p1 < /tmp/yuisync-multi-pet.patch
+          find . -name '*.rej' -print -quit | grep -q . && { find . -name '*.rej' -print; exit 1; } || true
           rm -f .github/patches/multi-pet.part00
           rm -f .github/patches/multi-pet.xz00 .github/patches/multi-pet.xz01 .github/patches/multi-pet.xz02 .github/patches/multi-pet.xz03 .github/patches/multi-pet.xz04
           rm -f .github/workflows/apply-multi-pet-package.yml
