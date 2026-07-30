@@ -1272,17 +1272,15 @@ function AgendaTimelineView({
                     <button type="button" onClick={() => onEdit(appt)} className="min-w-0 flex-1 truncate text-left hover:text-text">
                       {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
                     </button>
-                    {appt.status === 'concluido' && (
-                      <button
-                        type="button"
-                        aria-label="Reimprimir ficha concluida"
-                        title="Reimprimir ficha 80 mm"
-                        onClick={() => onReceipt(appt)}
-                        className="shrink-0 rounded-md p-1.5 text-emerald-300 hover:bg-emerald-500/15"
-                      >
-                        <Receipt size={13}/>
-                      </button>
-                    )}
+                    <button
+                      type="button"
+                      aria-label="Imprimir ficha do historico"
+                      title="Imprimir ficha 80 mm"
+                      onClick={() => onReceipt(appt)}
+                      className="shrink-0 rounded-md p-1.5 text-emerald-300 hover:bg-emerald-500/15"
+                    >
+                      <Receipt size={13}/>
+                    </button>
                   </div>
                 )
               })}
@@ -1385,17 +1383,15 @@ function AgendaTimelineView({
                               >
                                 {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
                               </button>
-                              {completed && (
-                                <button
-                                  type="button"
-                                  aria-label="Reimprimir ficha concluida"
-                                  title="Reimprimir ficha 80 mm"
-                                  onClick={() => onReceipt(appt)}
-                                  className="shrink-0 rounded p-1 text-emerald-300 hover:bg-emerald-500/15"
-                                >
-                                  <Receipt size={11}/>
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                aria-label="Imprimir ficha do historico"
+                                title="Imprimir ficha 80 mm"
+                                onClick={() => onReceipt(appt)}
+                                className="shrink-0 rounded p-1 text-emerald-300 hover:bg-emerald-500/15"
+                              >
+                                <Receipt size={11}/>
+                              </button>
                             </div>
                           )
                         })}
