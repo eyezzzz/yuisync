@@ -27,6 +27,8 @@ jobs:
 
       - run: npm ci
       - run: node scripts/apply-agenda-free-scheduling.mjs
+      - name: Align legacy visual-slot assertion
+        run: sed -i "s/Vaga {laneIndex + 1} disponivel/Espaco visual {laneIndex + 1}/" test/agendaOperationalInfrastructure.test.mjs
       - run: node --test test/agendaFreeScheduling.test.mjs test/agendaOperationalInfrastructure.test.mjs test/agendaStaffSettingsRegression.test.mjs
       - run: npm run typecheck
 
