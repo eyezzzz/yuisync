@@ -7,10 +7,10 @@ import { MANUAL_SLOT_CAPACITY } from '../src/modules/petshop/lib/appointmentOper
 test('agenda usa quatro colunas apenas como capacidade visual', async () => {
   const agenda = await readFile(new URL('../src/modules/petshop/pages/AgendaPage.jsx', import.meta.url), 'utf8')
   assert.equal(MANUAL_SLOT_CAPACITY, 4)
-  assert.match(agenda, /colunas visuais · agendamentos livres/)
-  assert.match(agenda, /const visualLaneCount = Math.max\(slotCapacity, laneEnds.length\)/)
-  assert.match(agenda, /const visualLaneCount = Math.max\(slotCapacity, occupying.length\)/)
-  assert.match(agenda, /gridTemplateColumns: `repeat\(\$\{visualLaneCount\}, minmax\(140px, 1fr\)\)`/)
+  assert.match(agenda, /Largura adaptativa · agendamentos livres/)
+  assert.match(agenda, /layoutAgendaOverlapClusters\(blocking, appointmentIntervalBounds\)/)
+  assert.match(agenda, /agendaVisualLaneCount\(occupying.length\)/)
+  assert.match(agenda, /gridTemplateColumns: `repeat\(\$\{visualLaneCount\}, minmax\(0, 1fr\)\)`/)
   assert.doesNotMatch(agenda, /wouldExceedSlotCapacity|sameResponsibleConflict|acima da capacidade configurada/)
 })
 

@@ -30,10 +30,12 @@ import {
 } from '../lib/appointmentServices'
 import {
   MANUAL_SLOT_CAPACITY,
+  agendaVisualLaneCount,
   appointmentOccupiesManualSlot,
   appointmentTransportAddress,
   appointmentTransportLabel,
   isMotodogTransportMode,
+  layoutAgendaOverlapClusters,
 } from '../lib/appointmentOperational'
 import { normalizeTransportOptions } from './agendaOperationalCore'
 import { appointmentCheckoutTotals, appointmentNeedsPayment, queueAppointmentCheckout } from './appointmentCheckoutFlow'
@@ -121,7 +123,7 @@ function MotodogAgendaInfo({ appt, compact = false }) {
   const contactPhone = appt?.pets?.phone || ''
   const contactEmail = appt?.pets?.email || ''
   return (
-    <div className={`${compact ? "mt-1 text-[10px]" : "rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-2 text-[11px]"} ${motodog ? "text-emerald-300" : "text-sky-300"}`}>
+    <div className={`yuisync-card-transport ${compact ? "mt-1 text-[10px]" : "rounded-lg border border-emerald-500/20 bg-emerald-500/8 px-2.5 py-2 text-[11px]"} ${motodog ? "text-emerald-300" : "text-sky-300"}`}>
       <p className="flex items-center gap-1 font-bold">
         <Bike size={compact ? 10 : 12}/> {appointmentTransportLabel(appt.motodog.mode)}
       </p>
@@ -1137,24 +1139,29 @@ function AgendaTimelineView({
     const sb = statusBadge(appt.status)
     const assigned = staffById.get(appt.responsible_staff_key)
     return (
-      <div key={appt.id} className={`relative w-full rounded-lg border p-2 text-left shadow-sm ${agendaCardTone(appt.status)}`}>
-        <button type="button" onClick={() => onEdit(appt)} className="w-full text-left">
-          <div className="min-w-0">
-            <div className="flex min-w-0 flex-wrap items-center gap-1">
-              <p className="shrink-0 whitespace-nowrap text-[10px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
-              <span className={`badge ${sb.cls} max-w-full truncate text-[9px]`}>{sb.label}</span>
+      <div
+        key={appt.id}
+        data-yuisync-native-agenda-card="true"
+        data-yuisync-native-appointment-id={String(appt.id)}
+        className={`yuisync-agenda-card-surface relative w-full rounded-lg border p-2 text-left shadow-sm ${agendaCardTone(appt.status)}`}
+      >
+        <button type="button" onClick={() => onEdit(appt)} className="yuisync-card-content w-full text-left">
+          <div className="yuisync-card-header flex min-w-0 flex-wrap items-start gap-1">
+            <p className="yuisync-card-time shrink-0 whitespace-nowrap text-[10px] font-black leading-tight">{fmtAppointmentInterval(appt)}</p>
+            <span className={`yuisync-card-status badge ${sb.cls} max-w-full truncate text-[9px]`}>{sb.label}</span>
+          </div>
+          <div className="yuisync-card-body min-w-0">
+            <p className="yuisync-card-pet truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
+            <p className="yuisync-card-tutor truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
+            <div className="yuisync-card-service flex items-center justify-between gap-2 text-[10px] text-muted">
+              <span className="truncate">{serviceLabel(appt)}</span>
+              <span className="shrink-0 font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
             </div>
-            <p className="mt-1 truncate text-xs font-bold text-text">{appt.pets?.pet_name || 'Pet'}</p>
-            <p className="truncate text-[11px] font-semibold text-text/90">Tutor: {appt.pets?.owner_name || 'Cliente'}</p>
+            <MotodogAgendaInfo appt={appt} compact/>
+            <p className={`yuisync-card-responsible truncate text-[10px] ${assigned ? "text-muted" : "text-amber-300"}`}>
+              {assigned ? `Resp.: ${assigned.name}` : appt.responsible_staff_name ? `Resp.: ${appt.responsible_staff_name}` : 'Sem responsavel'}
+            </p>
           </div>
-          <div className="mt-2 flex items-center justify-between gap-2 text-[10px] text-muted">
-            <span className="truncate">{serviceLabel(appt)}</span>
-            <span className="font-bold text-emerald-400">{fmtCurrency(appt.price)}</span>
-          </div>
-          <MotodogAgendaInfo appt={appt} compact/>
-          <p className={`mt-1 truncate text-[10px] ${assigned ? "text-muted" : "text-amber-300"}`}>
-            {assigned ? `Resp.: ${assigned.name}` : appt.responsible_staff_name ? `Resp.: ${appt.responsible_staff_name}` : 'Sem responsavel'}
-          </p>
         </button>
         {appt.status === 'concluido' && (
           <button
@@ -1187,19 +1194,7 @@ function AgendaTimelineView({
     const slotCount = Math.max(1, Math.ceil((rangeEnd - rangeStart) / DAILY_SLOT_MINUTES))
     const slots = Array.from({ length: slotCount }, (_, index) => rangeStart + index * DAILY_SLOT_MINUTES)
     const timelineHeight = slots.length * DAILY_ROW_HEIGHT
-    const laneEnds = []
-    const positioned = blocking.map((appt) => {
-      const bounds = appointmentIntervalBounds(appt)
-      const startMs = bounds?.start.getTime() ?? 0
-      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= startMs)
-      if (lane < 0) {
-        lane = laneEnds.length
-        laneEnds.push(Number.NEGATIVE_INFINITY)
-      }
-      laneEnds[lane] = Math.max(laneEnds[lane], bounds?.end.getTime() ?? startMs)
-      return { appt, bounds, lane }
-    })
-    const visualLaneCount = Math.max(slotCapacity, laneEnds.length)
+    const positioned = layoutAgendaOverlapClusters(blocking, appointmentIntervalBounds)
 
     return (
       <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
@@ -1210,7 +1205,7 @@ function AgendaTimelineView({
           </div>
           <div className="flex items-center gap-2 text-xs text-muted">
             <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
-            {slotCapacity} colunas visuais · agendamentos livres
+            Largura adaptativa · agendamentos livres
           </div>
         </div>
 
@@ -1228,7 +1223,7 @@ function AgendaTimelineView({
               ))}
             </div>
 
-            <div className="relative border-l border-[var(--border)]" style={{ height: timelineHeight, width: `${Math.max(100, (visualLaneCount / slotCapacity) * 100)}%` }}>
+            <div className="relative border-l border-[var(--border)]" style={{ height: timelineHeight }}>
               {slots.map((minute, index) => (
                 <button
                   key={`slot-${minute}`}
@@ -1241,13 +1236,13 @@ function AgendaTimelineView({
                 />
               ))}
 
-              {positioned.map(({ appt, bounds, lane }) => {
+              {positioned.map(({ item: appt, bounds, lane, laneCount }) => {
                 if (!bounds) return null
                 const startMinute = minutesOfDay(bounds.start)
                 const endMinute = minutesOfDay(bounds.end)
                 const top = ((startMinute - rangeStart) / DAILY_SLOT_MINUTES) * DAILY_ROW_HEIGHT + 2
                 const height = Math.max(34, ((endMinute - startMinute) / DAILY_SLOT_MINUTES) * DAILY_ROW_HEIGHT - 4)
-                const laneWidth = 100 / Math.max(1, visualLaneCount)
+                const laneWidth = 100 / Math.max(1, laneCount)
                 return (
                   <div
                     key={appt.id}
@@ -1312,7 +1307,7 @@ function AgendaTimelineView({
         </div>
         <div className="flex items-center gap-2 text-xs text-muted">
           <span className="inline-flex h-2.5 w-2.5 rounded-full bg-emerald-400" />
-          {slotCapacity} colunas visuais · agendamentos livres
+          Largura adaptativa · agendamentos livres
         </div>
       </div>
 
@@ -1344,7 +1339,7 @@ function AgendaTimelineView({
                 const slotItems = bySlot.get(`${dayKey}-${hour}`) || []
                 const occupying = slotItems.filter(appointmentOccupiesManualSlot)
                 const nonBlocking = slotItems.filter((item) => !appointmentOccupiesManualSlot(item))
-                const visualLaneCount = Math.max(slotCapacity, occupying.length)
+                const visualLaneCount = agendaVisualLaneCount(occupying.length)
                 const lanes = Array.from({ length: visualLaneCount }, (_, index) => occupying[index] || null)
                 return (
                   <div key={`${dayKey}-${hour}`} className="min-h-[118px] border-l border-[var(--border)] p-2 hover:bg-white/[0.03] transition-colors">
@@ -1352,8 +1347,8 @@ function AgendaTimelineView({
                       <div
                         className="grid gap-2"
                         style={{
-                          gridTemplateColumns: `repeat(${visualLaneCount}, minmax(140px, 1fr))`,
-                          width: `${Math.max(100, (visualLaneCount / slotCapacity) * 100)}%`,
+                          gridTemplateColumns: `repeat(${visualLaneCount}, minmax(0, 1fr))`,
+                          width: '100%',
                         }}
                       >
                       {lanes.map((appt, laneIndex) => appt ? appointmentCard(appt) : (

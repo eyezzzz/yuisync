@@ -2,73 +2,102 @@ import { useEffect } from 'react'
 import AgendaResolvedPage from './AgendaResolvedPage'
 
 const FLUID_AGENDA_STYLES = `
-  .yuisync-resolved-card[data-yuisync-density='compact'] > button.w-full.text-left {
-    padding: 4px 98px 4px 6px !important;
+  .yuisync-agenda-card-surface[data-yuisync-density='compact'],
+  .yuisync-resolved-card[data-yuisync-density='compact'] {
+    padding: 5px !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='compact'] .yuisync-resolved-actions {
+  [data-yuisync-density='compact'] .yuisync-card-header {
+    min-height: 29px;
+    padding-right: 96px;
+  }
+
+  [data-yuisync-density='compact'] .yuisync-resolved-actions,
+  [data-yuisync-width='compact'] .yuisync-resolved-actions {
     right: 4px !important;
     top: 4px !important;
     gap: 3px !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='compact'] .yuisync-resolved-action {
+  [data-yuisync-density='compact'] .yuisync-resolved-action,
+  [data-yuisync-width='compact'] .yuisync-resolved-action {
     width: 28px !important;
     height: 28px !important;
     flex-basis: 28px !important;
     border-radius: 8px !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='compact'] > button.w-full.text-left > .mt-2 {
-    display: none !important;
+  [data-yuisync-density='compact'] .yuisync-card-body {
+    gap: 0;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='compact'] > button.w-full.text-left p,
-  .yuisync-resolved-card[data-yuisync-density='compact'] > button.w-full.text-left span {
-    line-height: 1.08 !important;
-  }
-
-  .yuisync-resolved-card[data-yuisync-density='compact'] > button.w-full.text-left > p.mt-1 {
-    margin-top: 2px !important;
+  [data-yuisync-density='compact'] .yuisync-card-pet,
+  [data-yuisync-density='compact'] .yuisync-card-tutor,
+  [data-yuisync-density='compact'] .yuisync-card-service,
+  [data-yuisync-density='compact'] .yuisync-card-transport,
+  [data-yuisync-density='compact'] .yuisync-card-responsible {
+    margin-top: 0 !important;
     font-size: 9px !important;
+    line-height: 1 !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left {
-    padding: 3px 76px 3px 5px !important;
+  .yuisync-agenda-card-surface[data-yuisync-density='micro'],
+  .yuisync-resolved-card[data-yuisync-density='micro'] {
+    padding: 3px !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='micro'] .yuisync-resolved-actions {
+  [data-yuisync-density='micro'] .yuisync-card-header {
+    min-height: 23px;
+    padding-right: 74px;
+  }
+
+  [data-yuisync-density='micro'] .yuisync-resolved-actions,
+  [data-yuisync-width='narrow'] .yuisync-resolved-actions {
     right: 3px !important;
     top: 3px !important;
     gap: 2px !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='micro'] .yuisync-resolved-action {
+  [data-yuisync-density='micro'] .yuisync-resolved-action,
+  [data-yuisync-width='narrow'] .yuisync-resolved-action {
     width: 22px !important;
     height: 22px !important;
     flex-basis: 22px !important;
     border-radius: 7px !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > .mt-2,
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > .mt-1,
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > p.mt-1,
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > div:first-child > p:nth-of-type(n + 2),
-  .yuisync-resolved-card[data-yuisync-density='micro'] .badge {
+  [data-yuisync-width='compact'] .yuisync-card-header {
+    padding-right: 96px;
+  }
+
+  [data-yuisync-width='narrow'] .yuisync-card-header {
+    padding-right: 74px;
+  }
+
+  [data-yuisync-width='narrow'] .yuisync-card-status,
+  [data-yuisync-density='micro'] .yuisync-card-status,
+  [data-yuisync-density='micro'] .yuisync-card-transport,
+  [data-yuisync-density='micro'] .yuisync-card-responsible {
     display: none !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > div:first-child > p,
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > div:first-child > div > p {
+  [data-yuisync-density='micro'] .yuisync-card-body {
+    gap: 0;
+  }
+
+  [data-yuisync-density='micro'] .yuisync-card-pet {
+    font-size: 9px !important;
+    line-height: 1 !important;
+  }
+
+  [data-yuisync-density='micro'] .yuisync-card-tutor,
+  [data-yuisync-density='micro'] .yuisync-card-service {
     margin-top: 0 !important;
     font-size: 8px !important;
-    line-height: 1.02 !important;
+    line-height: 1 !important;
   }
 
-  .yuisync-resolved-card[data-yuisync-density='micro'] > button.w-full.text-left > div:first-child > p:first-of-type {
-    font-size: 9px !important;
-  }
-
+  .yuisync-agenda-card-surface .yuisync-package-label,
   .yuisync-resolved-card .yuisync-package-label {
     color: #a7f3d0 !important;
     font-size: 10px !important;
@@ -121,7 +150,7 @@ const currencyValue = (value = '') => {
 }
 
 const applyPackageLabels = () => {
-  document.querySelectorAll('.yuisync-resolved-card').forEach((card) => {
+  document.querySelectorAll('.yuisync-agenda-card-surface').forEach((card) => {
     const text = normalizeCardText(card.textContent)
     const price = [...card.querySelectorAll('span')]
       .find((node) => /^r\$\s*/i.test(String(node.textContent || '').trim()))
@@ -147,10 +176,13 @@ function AgendaFluidRefinement() {
 
     const applyDensity = () => {
       densityFrame = 0
-      document.querySelectorAll('.yuisync-resolved-card').forEach((card) => {
+      document.querySelectorAll('.yuisync-agenda-card-surface').forEach((card) => {
         const outer = card.parentElement
-        const height = outer?.getBoundingClientRect?.().height || card.getBoundingClientRect().height
-        card.dataset.yuisyncDensity = height <= 58 ? 'micro' : height <= 100 ? 'compact' : 'regular'
+        const rect = card.getBoundingClientRect()
+        const height = outer?.getBoundingClientRect?.().height || rect.height
+        const width = rect.width
+        card.dataset.yuisyncDensity = height <= 58 ? 'micro' : height <= 104 ? 'compact' : 'regular'
+        card.dataset.yuisyncWidth = width <= 170 ? 'narrow' : width <= 240 ? 'compact' : 'wide'
       })
       applyPackageLabels()
     }
