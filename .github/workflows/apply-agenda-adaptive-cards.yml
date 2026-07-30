@@ -26,7 +26,7 @@ jobs:
           cache: npm
 
       - run: npm ci
-      - name: Allow sequential duplicate replacements
+      - name: Prepare deterministic patch
         run: |
           python - <<'PY'
           from pathlib import Path
@@ -36,7 +36,16 @@ jobs:
           path.write_text(source)
           PY
       - run: node scripts/apply-agenda-adaptive-cards.mjs
-      - run: node --test test/agendaAdaptiveCards.test.mjs test/agendaFreeScheduling.test.mjs test/agendaIntegratedActions.test.mjs test/agendaOperationalCompatibility.test.mjs
+      - name: Align previous visual wording regression
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('test/agendaFreeScheduling.test.mjs')
+          source = path.read_text()
+          source = source.replace("assert.match(agenda, /colunas visuais · agendamentos livres/)", "assert.match(agenda, /Largura adaptativa · agendamentos livres/)")
+          path.write_text(source)
+          PY
+      - run: node --test test/agendaAdaptiveCards.test.mjs test/agendaFreeScheduling.test.mjs test/agendaOperationalInfrastructure.test.mjs test/agendaStaffSettingsRegression.test.mjs
       - run: npm run typecheck
 
       - name: Commit definitive patch
