@@ -63,7 +63,7 @@
 
 .yuisync-card-header {
   min-height: 40px;
-  padding-right: 126px;
+  padding-right: 96px;
   align-content: flex-start;
 }
 
@@ -104,17 +104,29 @@
 
 .yuisync-resolved-action {
   display: inline-flex;
-  width: 36px;
-  height: 36px;
-  flex: 0 0 36px;
+  width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   align-items: center;
   justify-content: center;
   border: 1px solid rgba(167, 243, 208, 0.62);
-  border-radius: 10px;
+  border-radius: 8px;
   background: rgba(6, 78, 59, 0.96);
   color: #ecfdf5;
   box-shadow: 0 6px 18px rgba(2, 44, 34, 0.3);
   transition: transform 120ms ease, background 120ms ease;
+}
+
+/* O tamanho das acoes permanece fixo mesmo quando o conteudo do card compacta. */
+.yuisync-agenda-card-surface[data-yuisync-density] .yuisync-resolved-action {
+  width: 28px !important;
+  height: 28px !important;
+  flex-basis: 28px !important;
+  border-radius: 8px !important;
+}
+
+.yuisync-agenda-card-surface[data-yuisync-density] .yuisync-card-header {
+  padding-right: 96px !important;
 }
 
 .yuisync-resolved-action:hover {
@@ -154,12 +166,12 @@ button[data-yuisync-drop-active='true'] {
 
 @media (max-width: 760px) {
   .yuisync-resolved-action {
-    width: 32px;
-    height: 32px;
-    flex-basis: 32px;
+    width: 28px;
+    height: 28px;
+    flex-basis: 28px;
   }
 
   .yuisync-card-header {
-    padding-right: 108px;
+    padding-right: 96px;
   }
 }
