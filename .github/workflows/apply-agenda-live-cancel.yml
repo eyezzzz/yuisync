@@ -62,10 +62,36 @@ jobs:
           }
           await writeFile(pagePath, page)
 
-          const testPath = 'test/agendaPrintCleanup.test.mjs'
-          let test = await readFile(testPath, 'utf8')
-          test += `\n\ntest('impressao usa largura termica centralizada sem folga lateral', async () => {\n  const resolved = await readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.jsx', import.meta.url), 'utf8')\n  assert.match(resolved, /body \\{ font-family: Arial, Helvetica, sans-serif; padding: 3mm 2mm; \\}/)\n  assert.match(resolved, /\\.receipt \\{ width: 72mm; max-width: 72mm; margin: 0 auto; \\}/)\n  assert.match(resolved, /font-size: 13\\.5px/)\n  assert.match(resolved, /font-size: 11px/)\n  assert.match(resolved, /font-size: 10px; text-transform: uppercase/)\n})\n`
-          await writeFile(testPath, test)
+          const adaptivePath = 'test/agendaAdaptiveCards.test.mjs'
+          let adaptive = await readFile(adaptivePath, 'utf8')
+          adaptive = adaptive.split('\n').map((line) => {
+            if (line.includes('await update\\(appointmentId') && line.includes('refreshAgendaPage')) {
+              return String.raw`  assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)[\s\S]*setNotice/)`
+            }
+            if (line.includes('assert.match(hook, /emitAppointmentSync')) {
+              return `  assert.ok(hook.includes("emitAppointmentSync({ type: 'upsert'"))`
+            }
+            return line
+          }).join('\n')
+          adaptive = adaptive.replace(
+            `  assert.match(resolved, /is-yuisync-pointer-dragging/)\n`,
+            `  assert.match(resolved, /is-yuisync-pointer-dragging/)\n  assert.doesNotMatch(resolved, /refreshAgendaPage/)\n`,
+          )
+          await writeFile(adaptivePath, adaptive)
+
+          const printTestPath = 'test/agendaPrintCleanup.test.mjs'
+          let printTest = await readFile(printTestPath, 'utf8')
+          printTest = printTest.split('\n').map((line) => {
+            if (line.includes('resolvedReceiptShell') && line.includes('font-size: 10\\.5px')) {
+              return String.raw`  assert.match(resolvedReceiptShell, /\.line \{[^}]*font-size: 11px/)`
+            }
+            if (line.includes('resolvedReceiptShell') && line.includes('font-size: 9\\.5px')) {
+              return String.raw`  assert.match(resolvedReceiptShell, /\.line strong \{[^}]*font-size: 10px/)`
+            }
+            return line
+          }).join('\n')
+          printTest += `\n\ntest('impressao usa largura termica centralizada sem folga lateral', () => {\n  assert.ok(resolvedReceiptShell.includes('body { font-family: Arial, Helvetica, sans-serif; padding: 3mm 2mm; }'))\n  assert.ok(resolvedReceiptShell.includes('.receipt { width: 72mm; max-width: 72mm; margin: 0 auto; }'))\n  assert.ok(resolvedReceiptShell.includes('font-size: 13.5px'))\n  assert.ok(resolvedReceiptShell.includes('font-size: 11px'))\n  assert.ok(resolvedReceiptShell.includes('font-size: 10px; text-transform: uppercase'))\n})\n`
+          await writeFile(printTestPath, printTest)
           NODE
           rm -f scripts/apply-agenda-live-cancel-patch.mjs .github/workflows/apply-agenda-live-cancel.yml
       - name: Validate targeted behavior
