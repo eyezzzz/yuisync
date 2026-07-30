@@ -74,7 +74,7 @@ Isso executará:
 
 ## 📂 Estrutura do Projeto
 
-- `src/`: Código fonte do frontend.
+- `src/`: Código fonte do frontend (React).
 - `server/`: Código fonte do backend Node.js.
 - `database/`: Scripts SQL para configuração do banco de dados.
 - `supabase/`: Funções de borda (Edge Functions) do Supabase.
