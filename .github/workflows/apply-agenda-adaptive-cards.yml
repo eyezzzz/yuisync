@@ -36,13 +36,14 @@ jobs:
           path.write_text(source)
           PY
       - run: node scripts/apply-agenda-adaptive-cards.mjs
-      - name: Align previous visual wording regression
+      - name: Align previous visual regressions
         run: |
           python - <<'PY'
           from pathlib import Path
           path = Path('test/agendaFreeScheduling.test.mjs')
           source = path.read_text()
           source = source.replace("assert.match(agenda, /colunas visuais · agendamentos livres/)", "assert.match(agenda, /Largura adaptativa · agendamentos livres/)")
+          source = source.replace("assert.match(agenda, /gridTemplateColumns: `repeat\\(\\$\\{visualLaneCount\\}, minmax\\(140px, 1fr\\)\\)`/)", "assert.match(agenda, /gridTemplateColumns: `repeat\\(\\$\\{visualLaneCount\\}, minmax\\(0, 1fr\\)\\)`/)")
           path.write_text(source)
           PY
       - run: node --test test/agendaAdaptiveCards.test.mjs test/agendaFreeScheduling.test.mjs test/agendaOperationalInfrastructure.test.mjs test/agendaStaffSettingsRegression.test.mjs
