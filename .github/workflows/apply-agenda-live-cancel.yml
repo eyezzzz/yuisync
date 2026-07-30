@@ -68,6 +68,21 @@ jobs:
             if (line.includes('await update\\(appointmentId') && line.includes('refreshAgendaPage')) {
               return String.raw`  assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)[\s\S]*setNotice/)`
             }
+            if (line.includes('assert.match(resolved, /updateStatus')) {
+              return `  assert.ok(resolved.includes("updateStatus(appointmentId, 'cancelado')"))`
+            }
+            if (line.includes('assert.match(resolved, /const action')) {
+              return `  assert.ok(resolved.includes('if (action) return'))`
+            }
+            if (line.includes('assert.doesNotMatch(resolved, /button')) {
+              return `  assert.equal(resolved.includes('button[title="Atualizar"]'), false)`
+            }
+            if (line.includes('assert.match(css, /.yuisync-resolved-action.is-cancel')) {
+              return `  assert.ok(css.includes('.yuisync-resolved-action.is-cancel'))`
+            }
+            if (line.includes('assert.match(hook, /APPOINTMENT_SYNC_EVENT')) {
+              return `  assert.ok(hook.includes('APPOINTMENT_SYNC_EVENT'))`
+            }
             if (line.includes('assert.match(hook, /emitAppointmentSync')) {
               return `  assert.ok(hook.includes("emitAppointmentSync({ type: 'upsert'"))`
             }
