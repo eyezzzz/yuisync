@@ -56,9 +56,17 @@ test('cards estreitos reservam botoes apenas no cabecalho e preservam linhas ute
   assert.match(agenda, /yuisync-card-service/)
   assert.match(agenda, /yuisync-card-responsible/)
   assert.doesNotMatch(css, /padding-right: 132px/)
-  assert.match(css, /\.yuisync-card-header[\s\S]*padding-right: 126px/)
+  assert.match(css, /\.yuisync-card-header[\s\S]*padding-right: 96px/)
   assert.doesNotMatch(integrated, /> button\.w-full\.text-left > \.mt-2[\s\S]*display: none/)
   assert.match(integrated, /data-yuisync-width/)
+})
+
+test('botoes operacionais mantem tamanho intermediario em qualquer densidade', async () => {
+  const css = await readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.css', import.meta.url), 'utf8')
+  assert.match(css, /\.yuisync-resolved-action \{[\s\S]*width: 28px;[\s\S]*height: 28px;[\s\S]*flex: 0 0 28px;/)
+  assert.match(css, /\.yuisync-agenda-card-surface\[data-yuisync-density\] \.yuisync-resolved-action[\s\S]*width: 28px !important;[\s\S]*height: 28px !important;/)
+  assert.match(css, /\.yuisync-agenda-card-surface\[data-yuisync-density\] \.yuisync-card-header[\s\S]*padding-right: 96px !important;/)
+  assert.doesNotMatch(css, /width: 36px|width: 32px/)
 })
 
 test('drag and drop existente permanece inalterado no caminho operacional', async () => {
