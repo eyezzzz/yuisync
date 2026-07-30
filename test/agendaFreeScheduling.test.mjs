@@ -10,6 +10,7 @@ test('agenda usa quatro colunas apenas como capacidade visual', async () => {
   assert.match(agenda, /colunas visuais · agendamentos livres/)
   assert.match(agenda, /const visualLaneCount = Math.max\(slotCapacity, laneEnds.length\)/)
   assert.match(agenda, /const visualLaneCount = Math.max\(slotCapacity, occupying.length\)/)
+  assert.match(agenda, /gridTemplateColumns: `repeat\(\$\{visualLaneCount\}, minmax\(140px, 1fr\)\)`/)
   assert.doesNotMatch(agenda, /wouldExceedSlotCapacity|sameResponsibleConflict|acima da capacidade configurada/)
 })
 
@@ -17,11 +18,15 @@ test('drag and drop operacional permanece conectado ao update transacional', asy
   const resolved = await readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.jsx', import.meta.url), 'utf8')
   const integrated = await readFile(new URL('../src/modules/petshop/pages/AgendaIntegratedPage.jsx', import.meta.url), 'utf8')
   assert.match(resolved, /data-yuisync-action="drag"/)
+  assert.match(resolved, /pageRoot.addEventListener\('pointerdown', onPointerDown\)/)
+  assert.match(resolved, /document.addEventListener\('pointermove', onPointerMove/)
+  assert.match(resolved, /document.addEventListener\('pointerup', onPointerUp/)
   assert.match(resolved, /chooseAgendaSlot\(slots\(\), event.clientX, event.clientY\)/)
   assert.match(resolved, /void moveAppointment\(id, time\)/)
   assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)/)
   assert.match(integrated, /is-yuisync-pointer-dragging/)
   assert.match(integrated, /shiftedInterval/)
+  assert.match(integrated, /pendingMove/)
 })
 
 test('banco permite sobreposicao e mesmo responsavel sem remover o trigger', async () => {
