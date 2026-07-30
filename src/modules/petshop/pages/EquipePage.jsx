@@ -1,12 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
   CheckCircle,
   Download,
+  Eye,
   Percent,
+  Printer,
   RefreshCw,
   Users,
   Wallet,
+  X,
 } from 'lucide-react'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency } from '../../../lib/supabase'
@@ -28,6 +32,99 @@ const emptyRange = () => {
 
 const dateLabel = (value) => value ? new Date(value).toLocaleDateString('pt-BR') : '-'
 const serviceName = (services, code) => services.find((service) => service.code === code)?.name || code || '-'
+const escapeHtml = (value = '') => String(value ?? '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#039;')
+
+function serviceHistoryName(services, appointment = {}) {
+  const itemLabels = (Array.isArray(appointment.service_items) ? appointment.service_items : [])
+    .map((item) => item?.name || item?.label || serviceName(services, item?.service_type || item?.code || item?.value))
+    .filter((label) => label && label !== '-')
+  if (itemLabels.length) return [...new Set(itemLabels)].join(' + ')
+  return serviceName(services, appointment.service_type)
+}
+
+function CommissionHistoryModal({ row, items, services, range, onClose }) {
+  const total = items.reduce((sum, item) => sum + Number(item.price || 0), 0)
+  const responsibleName = row?.collaborator_name || row?.staff_key || 'Responsavel'
+
+  function printHistory() {
+    const printWindow = window.open('', '_blank', 'width=980,height=760')
+    if (!printWindow) return
+    const bodyRows = items.map((item) => `<tr>
+      <td>${escapeHtml(dateLabel(item.scheduled_at))}</td>
+      <td>${escapeHtml(item.client?.owner_name || '-')}</td>
+      <td>${escapeHtml(item.client?.pet_name || '-')}</td>
+      <td>${escapeHtml(serviceHistoryName(services, item))}</td>
+      <td class="money">${escapeHtml(fmtCurrency(item.price || 0))}</td>
+    </tr>`).join('')
+    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Conferencia - ${escapeHtml(responsibleName)}</title><style>
+      @page { size: A4 portrait; margin: 12mm; }
+      * { box-sizing: border-box; }
+      body { font-family: Arial, sans-serif; color: #111; margin: 0; font-size: 11px; }
+      h1 { font-size: 18px; margin: 0 0 4px; }
+      .meta { margin-bottom: 14px; color: #444; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { border: 1px solid #bbb; padding: 6px; text-align: left; vertical-align: top; }
+      th { background: #eee; font-size: 10px; text-transform: uppercase; }
+      .money { text-align: right; white-space: nowrap; }
+      tfoot td { font-weight: 700; }
+    </style></head><body>
+      <h1>Historico de servicos - ${escapeHtml(responsibleName)}</h1>
+      <div class="meta">Periodo: ${escapeHtml(dateLabel(range.startDate))} a ${escapeHtml(dateLabel(range.endDate))} · ${items.length} atendimento(s)</div>
+      <table><thead><tr><th>Data</th><th>Tutor</th><th>Pet</th><th>Servico</th><th>Valor</th></tr></thead>
+      <tbody>${bodyRows || '<tr><td colspan="5">Nenhum atendimento no periodo.</td></tr>'}</tbody>
+      <tfoot><tr><td colspan="4">Total conferido</td><td class="money">${escapeHtml(fmtCurrency(total))}</td></tr></tfoot></table>
+    </body></html>`)
+    printWindow.document.close()
+    setTimeout(() => {
+      printWindow.focus()
+      printWindow.print()
+    }, 180)
+  }
+
+  return createPortal(
+    <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal-box max-w-5xl">
+        <div className="modal-header">
+          <div>
+            <h2 className="font-display text-xl font-bold text-text">Historico de {responsibleName}</h2>
+            <p className="mt-1 text-sm text-muted">{dateLabel(range.startDate)} a {dateLabel(range.endDate)} · {items.length} atendimento(s)</p>
+          </div>
+          <button type="button" aria-label="Fechar historico" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
+        </div>
+        <div className="modal-body space-y-4">
+          <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
+            <table className="tbl min-w-[760px]">
+              <thead><tr><th>Data</th><th>Tutor</th><th>Pet</th><th>Servico</th><th>Valor</th></tr></thead>
+              <tbody>
+                {items.map((item) => (
+                  <tr key={item.id}>
+                    <td>{dateLabel(item.scheduled_at)}</td>
+                    <td>{item.client?.owner_name || '-'}</td>
+                    <td className="font-semibold text-text">{item.client?.pet_name || '-'}</td>
+                    <td>{serviceHistoryName(services, item)}</td>
+                    <td className="font-semibold text-emerald-400">{fmtCurrency(item.price || 0)}</td>
+                  </tr>
+                ))}
+                {!items.length && <tr><td colSpan={5} className="py-10 text-center text-muted">Nenhum atendimento concluido para esta responsavel no periodo.</td></tr>}
+              </tbody>
+              <tfoot><tr><td colSpan={4} className="font-bold text-text">Total conferido</td><td className="font-bold text-emerald-400">{fmtCurrency(total)}</td></tr></tfoot>
+            </table>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button type="button" onClick={onClose} className="btn btn-secondary">Fechar</button>
+            <button type="button" onClick={printHistory} className="btn btn-primary"><Printer size={15}/> Imprimir historico</button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
 
 export default function EquipePage() {
   const {
@@ -41,6 +138,8 @@ export default function EquipePage() {
   const [activeTab, setActiveTab] = useState('fechamento')
   const [rows, setRows] = useState([])
   const [pendingServices, setPendingServices] = useState([])
+  const [serviceHistory, setServiceHistory] = useState([])
+  const [historyRow, setHistoryRow] = useState(null)
   const [services, setServices] = useState([])
   const [range, setRange] = useState(emptyRange)
   const [loading, setLoading] = useState(true)
@@ -89,6 +188,7 @@ export default function EquipePage() {
       ])
       setRows(snapshot.rows || [])
       setPendingServices(snapshot.pendingServices || [])
+      setServiceHistory(snapshot.serviceHistory || [])
       setServices(serviceRows || [])
     } catch (err) {
       setError(err.message)
@@ -117,6 +217,10 @@ export default function EquipePage() {
   useEffect(() => {
     reload()
   }, [])
+
+  const selectedHistoryItems = useMemo(() => historyRow?.staff_key
+    ? serviceHistory.filter((item) => item.responsible_staff_key === historyRow.staff_key)
+    : [], [historyRow, serviceHistory])
 
   const totals = useMemo(() => displayRows.reduce((acc, row) => ({
     serviceCount: acc.serviceCount + Number(row.service_count || 0),
@@ -280,6 +384,7 @@ export default function EquipePage() {
                   <th>Tosa 10%</th>
                   <th>Outros 5%</th>
                   <th>Total</th>
+                  <th>Conferencia</th>
                 </tr>
               </thead>
               <tbody>
@@ -296,15 +401,37 @@ export default function EquipePage() {
                     <td className="text-amber-400 font-semibold">{fmtCurrency(row.grooming_commission || 0)}</td>
                     <td className="text-amber-400 font-semibold">{fmtCurrency(row.other_service_commission || 0)}</td>
                     <td className="text-emerald-400 font-bold">{fmtCurrency(row.total_commission || 0)}</td>
+                    <td>
+                      <button
+                        type="button"
+                        aria-label={`Visualizar historico de ${row.collaborator_name || row.staff_key}`}
+                        title="Visualizar e imprimir historico"
+                        disabled={!row.staff_key}
+                        onClick={() => setHistoryRow(row)}
+                        className="btn btn-secondary btn-sm justify-center"
+                      >
+                        <Eye size={13}/> Conferir
+                      </button>
+                    </td>
                   </tr>
                 ))}
                 {!rows.length && !loading && (
-                  <tr><td colSpan={6} className="text-center text-muted py-10">Sem producao concluida no periodo.</td></tr>
+                  <tr><td colSpan={7} className="text-center text-muted py-10">Sem producao concluida no periodo.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         </div>
+      )}
+
+      {historyRow && (
+        <CommissionHistoryModal
+          row={historyRow}
+          items={selectedHistoryItems}
+          services={services}
+          range={range}
+          onClose={() => setHistoryRow(null)}
+        />
       )}
 
       {activeTab === 'esteticistas' && (

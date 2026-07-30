@@ -769,10 +769,52 @@ export function usePetshopAdvanced() {
       price: Number(appointment.price || 0),
     }))
 
+    let historyRes = await runScoped(async (includeTenant) => {
+      let query = supabase
+        .from('appointments')
+        .select(APPT_SELECT)
+        .eq('module_id', moduleId)
+        .eq('status', 'concluido')
+        .not('responsible_staff_key', 'is', null)
+        .gte('scheduled_at', start)
+        .lte('scheduled_at', end)
+        .order('scheduled_at', { ascending: false })
+      return applyTenantFilter(query, activeTenantId, includeTenant)
+    })
+
+    if (historyRes.error && isAppointmentClientRelationError(historyRes.error)) {
+      historyRes = await runScoped(async (includeTenant) => {
+        let query = supabase
+          .from('appointments')
+          .select(APPT_BASE_SELECT)
+          .eq('module_id', moduleId)
+          .eq('status', 'concluido')
+          .not('responsible_staff_key', 'is', null)
+          .gte('scheduled_at', start)
+          .lte('scheduled_at', end)
+          .order('scheduled_at', { ascending: false })
+        return applyTenantFilter(query, activeTenantId, includeTenant)
+      })
+      if (historyRes.error) throw historyRes.error
+      const clientMap = await loadClientMap((historyRes.data || []).map((appointment) => appointment.client_id))
+      historyRes.data = (historyRes.data || []).map((appointment) => ({
+        ...appointment,
+        clients: clientMap.get(appointment.client_id) || null,
+      }))
+    }
+    if (historyRes.error) throw historyRes.error
+
+    const serviceHistory = (historyRes.data || []).map((appointment) => ({
+      ...appointment,
+      client: formatClient(appointment.clients || {}),
+      price: Number(appointment.price || 0),
+    }))
+
     return {
       profiles,
       rows,
       pendingServices,
+      serviceHistory,
       usingLegacy,
       range: { startDate: startDate || range.startDate, endDate: endDate || range.endDate },
     }
