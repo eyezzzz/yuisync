@@ -27,6 +27,17 @@ test('agrupa pets ativos pelo grupo explícito, CPF ou telefone do tutor', () =>
   assert.equal(tutorIdentityKey({ id: 'a', tutor_group_id: 'family-1' }), 'group:family-1')
 })
 
+test('mantém irmãos legados no grupo explícito criado para o tutor', () => {
+  const groups = groupPetsByTutor([
+    { id: 'pet-1', tutor_group_id: 'family-1', owner_cpf: '111.222.333-44', phone: '31999990000', pet_name: 'Mel' },
+    { id: 'pet-2', owner_cpf: '11122233344', phone: '31999990000', pet_name: 'Thor' },
+    { id: 'pet-3', phone: '31888880000', pet_name: 'Luna' },
+  ])
+
+  assert.equal(groups.length, 2)
+  assert.deepEqual(groups.find((group) => group.key === 'group:family-1')?.pets.map((pet) => pet.pet_name), ['Mel', 'Thor'])
+})
+
 test('ordena pacotes ativos do pet pelo ciclo que vence primeiro', () => {
   const subscriptions = [
     {
