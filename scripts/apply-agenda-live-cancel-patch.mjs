@@ -1,10 +1,6 @@
-import { readFile, writeFile, rm } from 'node:fs/promises'
-import { execSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { readFile, writeFile } from 'node:fs/promises'
 
 const root = process.cwd()
-const selfPath = fileURLToPath(import.meta.url)
-
 const read = (path) => readFile(`${root}/${path}`, 'utf8')
 const write = (path, content) => writeFile(`${root}/${path}`, content)
 
@@ -17,7 +13,6 @@ function replaceOnce(source, before, after, label) {
 
 const hookPath = 'src/shared/hooks/useAppointments.js'
 let hook = await read(hookPath)
-
 hook = replaceOnce(hook, `const SERVICE_TRANSPORT_SELECT = \`
   id, client_id, sale_id, scheduled_for, delivery_address, delivery_neighborhood,
   delivery_city, delivery_reference, transport_mode, transport_label
@@ -46,7 +41,6 @@ function emitAppointmentSync(detail) {
   window.dispatchEvent(new CustomEvent(APPOINTMENT_SYNC_EVENT, { detail }))
 }
 `, 'helpers de sincronizacao')
-
 hook = replaceOnce(hook, `  const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
 
@@ -70,48 +64,41 @@ hook = replaceOnce(hook, `  const { activeModuleId } = useModuleCtx()
   }, [activeModuleId, activeTenantId])
 
   const fetchAppointmentById`, 'listener de sincronizacao')
-
 hook = replaceOnce(hook, `    const created = await fetchAppointmentById(response.data?.appointment_id)
     setAppointments((prev) => [...prev, created].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
     return created`, `    const created = await fetchAppointmentById(response.data?.appointment_id)
     setAppointments((current) => mergeAppointmentState(current, created))
     emitAppointmentSync({ type: 'upsert', appointment: created, moduleId: activeModuleId, tenantId: activeTenantId })
     return created`, 'sincronizacao da criacao')
-
 hook = replaceOnce(hook, `    const updated = await fetchAppointmentById(id)
     setAppointments((prev) => prev.map((appt) => (appt.id === id ? updated : appt)))
     return updated`, `    const updated = await fetchAppointmentById(id)
     setAppointments((current) => mergeAppointmentState(current, updated))
     emitAppointmentSync({ type: 'upsert', appointment: updated, moduleId: activeModuleId, tenantId: activeTenantId })
     return updated`, 'sincronizacao da atualizacao')
-
 hook = replaceOnce(hook, `    if (response.error) throw response.error
     setAppointments((prev) => prev.filter((appt) => appt.id !== id))
   }, [activeModuleId, activeTenantId])`, `    if (response.error) throw response.error
     setAppointments((current) => current.filter((appointment) => String(appointment?.id) !== String(id)))
     emitAppointmentSync({ type: 'remove', id, moduleId: activeModuleId, tenantId: activeTenantId })
   }, [activeModuleId, activeTenantId])`, 'sincronizacao da remocao')
-
 await write(hookPath, hook)
 
 const resolvedPath = 'src/modules/petshop/pages/AgendaResolvedPage.jsx'
 let resolved = await read(resolvedPath)
 resolved = resolved.replace(/^  drag: .*$/m, `  cancel: '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>',`)
 if (!resolved.includes('  cancel:')) throw new Error('Icone de cancelamento nao aplicado')
-
 resolved = replaceOnce(resolved, `  const refreshAgendaPage = useCallback(() => {
     document.querySelector('.page button[title="Atualizar"]')?.click()
   }, [])
 
 `, '', 'remocao do refresh visual')
-
 resolved = replaceOnce(resolved, `      const updated = await updateStatus(appointmentId, 'concluido')
       await load({ date: selectedDate })
       refreshAgendaPage()
       if (!updated) return`, `      const updated = await updateStatus(appointmentId, 'concluido')
       if (!updated) return`, 'conclusao sem carregamento')
 resolved = replaceOnce(resolved, `  }, [load, printAppointment, refreshAgendaPage, selectedDate, setPage, transportOptions, updateStatus])`, `  }, [printAppointment, setPage, transportOptions, updateStatus])`, 'dependencias da conclusao')
-
 resolved = replaceOnce(resolved, `  const moveAppointment = useCallback(async (appointmentId, timeText) => {`, `  const cancelAppointment = useCallback(async (appointmentId) => {
     setNotice('')
     try {
@@ -123,14 +110,12 @@ resolved = replaceOnce(resolved, `  const moveAppointment = useCallback(async (a
   }, [updateStatus])
 
   const moveAppointment = useCallback(async (appointmentId, timeText) => {`, 'acao de cancelamento')
-
 resolved = replaceOnce(resolved, `      await update(appointmentId, { scheduled_at: target.toISOString() })
       await load({ date: selectedDate })
       refreshAgendaPage()
       setNotice`, `      await update(appointmentId, { scheduled_at: target.toISOString() })
       setNotice`, 'arraste sem carregamento')
 resolved = replaceOnce(resolved, `  }, [load, operationalAppointments, refreshAgendaPage, selectedDate, update])`, `  }, [operationalAppointments, selectedDate, update])`, 'dependencias do arraste')
-
 resolved = replaceOnce(resolved, `    const actionMarkup = (movable, canComplete) => \`
       \${movable ? \`<button type="button" data-yuisync-action="drag" class="yuisync-resolved-action yuisync-resolved-drag-handle" aria-label="Mover agendamento" title="Segure e arraste para mudar o horario">\${ICONS.drag}</button>\` : ''}
       <button type="button" data-yuisync-action="print" class="yuisync-resolved-action" aria-label="Imprimir agendamento" title="Imprimir agendamento">\${ICONS.print}</button>
@@ -140,7 +125,6 @@ resolved = replaceOnce(resolved, `    const actionMarkup = (movable, canComplete
       <button type="button" data-yuisync-action="print" class="yuisync-resolved-action" aria-label="Imprimir agendamento" title="Imprimir agendamento">\${ICONS.print}</button>
       \${canComplete ? \`<button type="button" data-yuisync-action="complete" class="yuisync-resolved-action is-complete" aria-label="Concluir agendamento" title="Concluir agendamento">\${ICONS.check}</button>\` : ''}
     \``, 'ordem dos botoes')
-
 resolved = replaceOnce(resolved, `        card.title = movable ? 'Arraste o card ou use a alca para mudar o horario' : card.title`, `        card.title = movable ? 'Arraste o card para mudar o horario' : card.title`, 'titulo do card')
 resolved = replaceOnce(resolved, `      const action = event.target.closest?.('[data-yuisync-action]')
       if (action && action.dataset.yuisyncAction !== 'drag') return`, `      const action = event.target.closest?.('[data-yuisync-action]')
@@ -180,21 +164,15 @@ css = replaceOnce(css, `.yuisync-resolved-action.is-complete {
 `, 'estilo do cancelamento')
 await write(cssPath, css)
 
-const agendaPath = 'src/modules/petshop/pages/AgendaPage.jsx'
-let agenda = await read(agendaPath)
-agenda = replaceOnce(agenda, `      {loading ? (`, `      {loading && appointments.length === 0 ? (`, 'carregamento somente inicial')
-await write(agendaPath, agenda)
-
 const testPath = 'test/agendaAdaptiveCards.test.mjs'
 let testFile = await read(testPath)
 testFile += `
 
-test('acoes ficam cancelar imprimir concluir e sincronizam sem carregamento visual', async () => {
-  const [resolved, css, hook, agenda] = await Promise.all([
+test('acoes ficam cancelar imprimir concluir e sincronizam sem recarregar a tabela', async () => {
+  const [resolved, css, hook] = await Promise.all([
     readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.css', import.meta.url), 'utf8'),
     readFile(new URL('../src/shared/hooks/useAppointments.js', import.meta.url), 'utf8'),
-    readFile(new URL('../src/modules/petshop/pages/AgendaPage.jsx', import.meta.url), 'utf8'),
   ])
   const cancelIndex = resolved.indexOf('data-yuisync-action="cancel"')
   const printIndex = resolved.indexOf('data-yuisync-action="print"')
@@ -203,22 +181,20 @@ test('acoes ficam cancelar imprimir concluir e sincronizam sem carregamento visu
   assert.doesNotMatch(resolved, /data-yuisync-action="drag"/)
   assert.match(resolved, /updateStatus\(appointmentId, 'cancelado'\)/)
   assert.match(resolved, /const action = event\.target\.closest[\s\S]*if \(action\) return/)
+  assert.doesNotMatch(resolved, /button\[title="Atualizar"\]/)
   assert.match(css, /\.yuisync-resolved-action\.is-cancel/)
   assert.match(hook, /APPOINTMENT_SYNC_EVENT/)
   assert.match(hook, /emitAppointmentSync\(\{ type: 'upsert'/)
-  assert.match(agenda, /loading && appointments\.length === 0/)
 })
 `
 await write(testPath, testFile)
 
-const packagePath = 'package.json'
-const packageJson = JSON.parse(await read(packagePath))
-packageJson.scripts['audit:ci'] = 'node scripts/check-npm-audit.mjs'
-await write(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`)
-await rm(selfPath)
-
-execSync('git config user.name "github-actions[bot]"')
-execSync('git config user.email "41898282+github-actions[bot]@users.noreply.github.com"')
-execSync(`git add ${hookPath} ${resolvedPath} ${cssPath} ${agendaPath} ${testPath} ${packagePath} scripts/apply-agenda-live-cancel-patch.mjs`)
-execSync('git commit -m "fix: sincronizar agenda e trocar alca por cancelamento"', { stdio: 'inherit' })
-execSync('git push origin HEAD', { stdio: 'inherit' })
+for (const path of [hookPath, resolvedPath, cssPath, testPath]) {
+  const encoded = Buffer.from(await read(path), 'utf8').toString('base64')
+  const chunkSize = 3000
+  const total = Math.ceil(encoded.length / chunkSize)
+  for (let index = 0; index < total; index += 1) {
+    const chunk = encoded.slice(index * chunkSize, (index + 1) * chunkSize)
+    console.log(`YUISYNC_BLOB|${path}|${index + 1}|${total}|${chunk}`)
+  }
+}
