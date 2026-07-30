@@ -2,7 +2,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 
-test('status do cadastro e recalculado pelos campos atuais sem exigir referencia opcional', async () => {
+test('status do cadastro e recalculado pelos campos atuais sem exigir campos opcionais', async () => {
   const [hook, page] = await Promise.all([
     readFile(new URL('../src/shared/hooks/useClients.js', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/PetsPage.jsx', import.meta.url), 'utf8'),
@@ -15,6 +15,9 @@ test('status do cadastro e recalculado pelos campos atuais sem exigir referencia
   assert.ok(inferBlock.includes('client.city'))
   assert.ok(inferBlock.includes('details.pet_name'))
   assert.ok(inferBlock.includes('details.species'))
+  assert.equal(inferBlock.includes('tutor_birth_date'), false)
+  assert.equal(inferBlock.includes('zip_code'), false)
+  assert.equal(inferBlock.includes('address_number'), false)
   assert.equal(inferBlock.includes('address_reference'), false)
   assert.ok(page.includes("pet.registration_status === 'completo'"))
 })
