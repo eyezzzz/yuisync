@@ -45,9 +45,9 @@ function formatPersonName(value) {
 function getPlanTone(status) { return status === 'active' ? 'badge-green' : status === 'paused' ? 'badge-amber' : 'badge-gray' }
 function getServiceLabel(type) { return ({ banho: 'Banho', tosa: 'Tosa', banho_e_tosa: 'Banho e tosa', consulta: 'Consulta', vacina: 'Vacina', motodog: 'MotoDog' }[type] || type) }
 function getRegistrationBadge(pet = {}) {
+  if (!pet.owner_cpf || pet.registration_status === 'sem_cpf') return { label: 'Sem CPF', cls: 'badge-red' }
+  if (!pet.owner_address || !pet.owner_neighborhood || pet.registration_status === 'sem_endereco') return { label: 'Sem endereco', cls: 'badge-amber' }
   if (pet.registration_status === 'completo') return { label: 'Completo', cls: 'badge-green' }
-  if (pet.registration_status === 'sem_cpf' || !pet.owner_cpf) return { label: 'Sem CPF', cls: 'badge-red' }
-  if (pet.registration_status === 'sem_endereco' || !pet.owner_address || !pet.owner_neighborhood) return { label: 'Sem endereco', cls: 'badge-amber' }
   return { label: 'Pendente cadastro', cls: 'badge-amber' }
 }
 
