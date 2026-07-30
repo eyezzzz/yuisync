@@ -24,6 +24,7 @@ test('novo grupo de horario volta para a primeira coluna', () => {
   ]
   const layout = layoutAgendaOverlapClusters(items, bounds)
   const byId = new Map(layout.map((entry) => [entry.item.id, entry]))
+  assert.deepEqual(layout.map((entry) => entry.item.id), ['a', 'b', 'c', 'd'])
   assert.deepEqual([byId.get('a').lane, byId.get('b').lane, byId.get('c').lane], [0, 1, 2])
   assert.equal(byId.get('a').laneCount, 3)
   assert.equal(byId.get('d').lane, 0)
@@ -42,7 +43,7 @@ test('card nasce verde e sincroniza pelo id sem depender de ctrl f5', async () =
   assert.match(css, /\.yuisync-agenda-card-surface[\s\S]*background: linear-gradient/)
   assert.match(resolved, /scheduleOperationalReload/)
   assert.match(resolved, /data-yuisync-native-appointment-id/)
-  assert.match(integrated, /querySelectorAll\('.yuisync-agenda-card-surface'\)/)
+  assert.match(integrated, /querySelectorAll\('\.yuisync-agenda-card-surface'\)/)
 })
 
 test('cards estreitos reservam botoes apenas no cabecalho e preservam linhas uteis', async () => {
