@@ -1,10 +1,8 @@
 name: Apply agenda live cancel patch
 
-# Applies the already validated patch and removes itself from the final branch.
 on:
-  push:
-    branches:
-      - fix/agenda-live-cancel-actions
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: write
