@@ -1,0 +1,39 @@
+name: Apply history print and team responsible patch
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: ${{ github.actor != 'github-actions[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/history-print-and-team-responsible
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Apply definitive patch
+        run: |
+          node scripts/apply-history-print-team-responsible.mjs
+          rm -f scripts/apply-history-print-team-responsible.mjs .github/workflows/apply-history-print-team-responsible.yml
+      - name: Validate targeted behavior
+        run: |
+          node --test test/agendaHistoryPrintAction.test.mjs test/teamPendingResponsibleAssignment.test.mjs
+          npm run typecheck
+          npm run build
+      - name: Commit definitive files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: imprimir todo historico e atribuir responsavel pendente"
+          git push origin HEAD:fix/history-print-and-team-responsible
