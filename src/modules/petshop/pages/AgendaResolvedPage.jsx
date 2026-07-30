@@ -271,6 +271,10 @@ function ResolvedAgendaOperations({ setPage }) {
     const pageRoot = document.querySelector('.page')
     if (!pageRoot) return undefined
     let syncFrame = 0
+    let reloadTimer = 0
+    let reloadPending = false
+    let lastUnresolvedSignature = ''
+    let unresolvedAttempts = 0
 
     const syncDate = () => {
       const parsed = parseAgendaDate(pageRoot.querySelector('.page-sub')?.textContent || '')
@@ -443,15 +447,17 @@ function ResolvedAgendaOperations({ setPage }) {
       const usedCards = new Set()
 
       operationalAppointments.forEach((appointment) => {
+        const nativeCard = [...pageRoot.querySelectorAll('[data-yuisync-native-appointment-id]')]
+          .find((node) => node.dataset.yuisyncNativeAppointmentId === String(appointment.id))
         const statusLabel = statusBadge(appointment.status).label
-        const trigger = findAgendaCardCandidate(candidates, {
+        const trigger = nativeCard?.querySelector(':scope > button.w-full.text-left') || findAgendaCardCandidate(candidates, {
           interval: appointmentInterval(appointment),
           petName: appointment?.pets?.pet_name || 'pet',
           statusLabel,
         }, usedCards)
         if (!trigger) return
 
-        const card = trigger.parentElement
+        const card = nativeCard || trigger.parentElement
         if (!card || !card.classList.contains('relative')) return
         usedCards.add(trigger)
 
@@ -502,6 +508,37 @@ function ResolvedAgendaOperations({ setPage }) {
     const scheduleSync = () => {
       if (syncFrame) return
       syncFrame = requestAnimationFrame(syncCards)
+    }
+
+    const scheduleOperationalReload = () => {
+      if (!isDailyAgenda() || reloadPending || reloadTimer) return
+      const unresolved = [...pageRoot.querySelectorAll('[data-yuisync-native-agenda-card="true"]:not(.yuisync-resolved-card)')]
+      if (!unresolved.length) {
+        lastUnresolvedSignature = ''
+        unresolvedAttempts = 0
+        return
+      }
+      const signature = unresolved
+        .map((card) => card.dataset.yuisyncNativeAppointmentId || '')
+        .filter(Boolean)
+        .sort()
+        .join('|')
+      if (signature === lastUnresolvedSignature && unresolvedAttempts >= 2) return
+      if (signature !== lastUnresolvedSignature) {
+        lastUnresolvedSignature = signature
+        unresolvedAttempts = 0
+      }
+      unresolvedAttempts += 1
+      reloadTimer = window.setTimeout(async () => {
+        reloadTimer = 0
+        reloadPending = true
+        try {
+          await load({ date: selectedDate })
+        } finally {
+          reloadPending = false
+          scheduleSync()
+        }
+      }, 120)
     }
 
     const onPointerDown = (event) => {
@@ -615,7 +652,11 @@ function ResolvedAgendaOperations({ setPage }) {
     }
 
     syncCards()
-    const observer = new MutationObserver(scheduleSync)
+    scheduleOperationalReload()
+    const observer = new MutationObserver(() => {
+      scheduleSync()
+      scheduleOperationalReload()
+    })
     observer.observe(pageRoot, { childList: true, subtree: true })
     pageRoot.addEventListener('pointerdown', onPointerDown)
     pageRoot.addEventListener('click', onClickCapture, true)
@@ -627,6 +668,7 @@ function ResolvedAgendaOperations({ setPage }) {
 
     return () => {
       if (syncFrame) cancelAnimationFrame(syncFrame)
+      if (reloadTimer) window.clearTimeout(reloadTimer)
       observer.disconnect()
       pageRoot.removeEventListener('pointerdown', onPointerDown)
       pageRoot.removeEventListener('click', onClickCapture, true)
@@ -638,7 +680,7 @@ function ResolvedAgendaOperations({ setPage }) {
       resetDrag()
       pageRoot.querySelectorAll('[data-yuisync-resolved-actions], [data-yuisync-print-day]').forEach((node) => node.remove())
     }
-  }, [completeAppointment, moveAppointment, operationalAppointments, printAppointment, printDay, statusBadge, storeSettings?.petshop_service_durations, transportOptions])
+  }, [completeAppointment, load, moveAppointment, operationalAppointments, printAppointment, printDay, selectedDate, statusBadge, storeSettings?.petshop_service_durations, transportOptions])
 
   return notice ? (
     <button
