@@ -778,6 +778,29 @@ export function usePetshopAdvanced() {
     }
   }, [activeTenantId, loadClientMap, loadCommissionRules, moduleId, runScoped])
 
+  const assignPendingServiceResponsible = useCallback(async (appointmentId, staff = {}) => {
+    assertActiveTenant(activeTenantId, 'atribuir o responsavel do servico')
+    const staffKey = String(staff?.key || '').trim()
+    const staffName = String(staff?.name || '').trim()
+    if (!appointmentId || !staffKey || !staffName) throw new Error('Selecione um responsavel valido.')
+
+    const res = await runScoped(async (includeTenant) => {
+      let query = supabase
+        .from('appointments')
+        .update({ responsible_staff_key: staffKey, responsible_staff_name: staffName })
+        .eq('id', appointmentId)
+        .eq('module_id', moduleId)
+        .eq('status', 'concluido')
+        .is('responsible_staff_key', null)
+      query = applyTenantFilter(query, activeTenantId, includeTenant)
+      return query.select(APPT_BASE_SELECT).maybeSingle()
+    })
+
+    if (res.error) throw res.error
+    if (!res.data) throw new Error('Este atendimento ja possui responsavel ou nao esta mais disponivel para atribuicao.')
+    return res.data
+  }, [activeTenantId, moduleId, runScoped])
+
   const exportCommissionCsv = useCallback((rows, fileName = 'comissoes-petshop.csv') => {
     const operational = (rows || []).some((row) => row.staff_key)
     const lines = operational
@@ -1111,6 +1134,7 @@ export function usePetshopAdvanced() {
     saveCommissionRule,
     deleteCommissionRule,
     loadTeamSnapshot,
+    assignPendingServiceResponsible,
     exportCommissionCsv,
     loadGroomers,
     loadAssignableStaff,

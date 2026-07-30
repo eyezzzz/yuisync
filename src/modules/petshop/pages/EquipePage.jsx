@@ -34,6 +34,7 @@ export default function EquipePage() {
     loadTeamSnapshot,
     exportCommissionCsv,
     loadPetshopServices,
+    assignPendingServiceResponsible,
   } = usePetshopAdvanced()
   const { storeSettings } = useAuthCtx()
 
@@ -44,6 +45,7 @@ export default function EquipePage() {
   const [range, setRange] = useState(emptyRange)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [assigningServiceId, setAssigningServiceId] = useState('')
 
   const configuredStaff = useMemo(
     () => normalizeOperationalStaff(storeSettings?.petshop_operational_staff),
@@ -51,6 +53,10 @@ export default function EquipePage() {
   )
   const configuredStaffByKey = useMemo(
     () => new Map(configuredStaff.map((person) => [person.key, person])),
+    [configuredStaff],
+  )
+  const assignableStaff = useMemo(
+    () => configuredStaff.filter((person) => person.active !== false),
     [configuredStaff],
   )
   const displayRows = useMemo(() => rows.map((row) => ({
@@ -88,6 +94,23 @@ export default function EquipePage() {
       setError(err.message)
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function assignPendingResponsible(appointment, staffKey) {
+    if (!appointment?.id || !staffKey || appointment.responsible_staff_key) return
+    const person = configuredStaffByKey.get(staffKey)
+    if (!person) return
+
+    setAssigningServiceId(appointment.id)
+    setError('')
+    try {
+      await assignPendingServiceResponsible(appointment.id, { key: person.key, name: person.name })
+      await reload(range)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setAssigningServiceId('')
     }
   }
 
@@ -216,7 +239,7 @@ export default function EquipePage() {
                 <AlertTriangle size={18} className="text-amber-400 mt-0.5" />
                 <div>
                   <p className="font-semibold text-text">Servicos concluidos sem responsavel</p>
-                  <p className="text-sm text-muted mt-1">Escolha o responsavel na Agenda para incluir estes atendimentos no fechamento.</p>
+                  <p className="text-sm text-muted mt-1">Escolha abaixo o responsavel para incluir estes atendimentos no fechamento.</p>
                 </div>
               </div>
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
@@ -226,6 +249,21 @@ export default function EquipePage() {
                       {appt.client?.pet_name || appt.client?.owner_name || 'Pet'} - {serviceName(services, appt.service_type)}
                     </p>
                     <p className="text-xs text-muted mt-1">{dateLabel(appt.scheduled_at)} • {fmtCurrency(appt.price || 0)}</p>
+                    <select
+                      aria-label={`Responsavel manual do servico ${appt.id}`}
+                      className="inp mt-3 text-xs"
+                      defaultValue=""
+                      disabled={assigningServiceId === appt.id || assignableStaff.length === 0}
+                      onChange={(event) => {
+                        const staffKey = event.target.value
+                        if (staffKey) void assignPendingResponsible(appt, staffKey)
+                      }}
+                    >
+                      <option value="">{assigningServiceId === appt.id ? 'Salvando...' : 'Selecionar responsavel'}</option>
+                      {assignableStaff.map((person) => (
+                        <option key={person.key} value={person.key}>{person.name}</option>
+                      ))}
+                    </select>
                   </div>
                 ))}
               </div>
