@@ -1,0 +1,49 @@
+name: Apply Agenda Adaptive Cards
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.head_ref == 'fix/agenda-adaptive-card-layout' || github.ref_name == 'fix/agenda-adaptive-card-layout'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/agenda-adaptive-card-layout
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+      - run: node scripts/apply-agenda-adaptive-cards.mjs
+      - run: node --test test/agendaAdaptiveCards.test.mjs test/agendaFreeScheduling.test.mjs test/agendaIntegratedActions.test.mjs test/agendaOperationalCompatibility.test.mjs
+      - run: npm run typecheck
+
+      - name: Commit definitive patch
+        run: |
+          rm scripts/apply-agenda-adaptive-cards.mjs
+          rm .github/workflows/apply-agenda-adaptive-cards.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src/modules/petshop/lib/appointmentOperational.js \
+                  src/modules/petshop/pages/AgendaPage.jsx \
+                  src/modules/petshop/pages/AgendaResolvedPage.jsx \
+                  src/modules/petshop/pages/AgendaResolvedPage.css \
+                  src/modules/petshop/pages/AgendaIntegratedPage.jsx \
+                  test/agendaFreeScheduling.test.mjs \
+                  test/agendaAdaptiveCards.test.mjs \
+                  scripts/apply-agenda-adaptive-cards.mjs \
+                  .github/workflows/apply-agenda-adaptive-cards.yml
+          git commit -m "fix: adaptar largura e conteudo dos cards da agenda"
+          git push origin HEAD:fix/agenda-adaptive-card-layout
