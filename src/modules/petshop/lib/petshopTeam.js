@@ -68,6 +68,7 @@ export function normalizeService(row = {}) {
   const code = normalizeCode(row.code || row.service_type || row.name)
   const fallback = DEFAULT_PETSHOP_SERVICES.find((item) => item.code === code)
   return {
+    ...row,
     id: row.id || code,
     code,
     name: row.name || fallback?.name || code || 'Servico',
