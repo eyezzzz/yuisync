@@ -18,6 +18,25 @@ const SERVICE_TRANSPORT_SELECT = `
   delivery_city, delivery_reference, transport_mode, transport_label
 `
 
+const APPOINTMENT_SYNC_EVENT = 'yuisync:appointments-sync'
+
+function sortAppointmentState(items = []) {
+  return [...items].sort((left, right) => new Date(left?.scheduled_at || 0) - new Date(right?.scheduled_at || 0))
+}
+
+function mergeAppointmentState(items = [], appointment) {
+  if (!appointment?.id) return items
+  const exists = items.some((item) => String(item?.id) === String(appointment.id))
+  return sortAppointmentState(exists
+    ? items.map((item) => String(item?.id) === String(appointment.id) ? appointment : item)
+    : [...items, appointment])
+}
+
+function emitAppointmentSync(detail) {
+  if (typeof window === 'undefined' || typeof window.dispatchEvent !== 'function') return
+  window.dispatchEvent(new CustomEvent(APPOINTMENT_SYNC_EVENT, { detail }))
+}
+
 function transportScheduleKey(clientId, value) {
   if (!clientId || !value) return ''
   const date = new Date(value)
@@ -290,6 +309,22 @@ export function useAppointments() {
   const { activeModuleId } = useModuleCtx()
   const { activeTenantId } = useAuthCtx()
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined
+    const syncAppointmentState = (event) => {
+      const detail = event?.detail || {}
+      if (detail.moduleId && detail.moduleId !== activeModuleId) return
+      if (detail.tenantId && activeTenantId && detail.tenantId !== activeTenantId) return
+      if (detail.type === 'remove') {
+        setAppointments((current) => current.filter((item) => String(item?.id) !== String(detail.id)))
+        return
+      }
+      if (detail.appointment) setAppointments((current) => mergeAppointmentState(current, detail.appointment))
+    }
+    window.addEventListener(APPOINTMENT_SYNC_EVENT, syncAppointmentState)
+    return () => window.removeEventListener(APPOINTMENT_SYNC_EVENT, syncAppointmentState)
+  }, [activeModuleId, activeTenantId])
+
   const fetchAppointmentById = useCallback(async (appointmentId) => {
     if (!activeModuleId || !appointmentId) return null
 
@@ -451,7 +486,8 @@ export function useAppointments() {
     if (response.error) throw response.error
 
     const created = await fetchAppointmentById(response.data?.appointment_id)
-    setAppointments((prev) => [...prev, created].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
+    setAppointments((current) => mergeAppointmentState(current, created))
+    emitAppointmentSync({ type: 'upsert', appointment: created, moduleId: activeModuleId, tenantId: activeTenantId })
     return created
   }, [activeModuleId, activeTenantId, fetchAppointmentById])
 
@@ -503,7 +539,8 @@ export function useAppointments() {
     }
 
     const updated = await fetchAppointmentById(id)
-    setAppointments((prev) => prev.map((appt) => (appt.id === id ? updated : appt)))
+    setAppointments((current) => mergeAppointmentState(current, updated))
+    emitAppointmentSync({ type: 'upsert', appointment: updated, moduleId: activeModuleId, tenantId: activeTenantId })
     return updated
   }, [activeModuleId, activeTenantId, fetchAppointmentById])
 
@@ -522,7 +559,8 @@ export function useAppointments() {
     })
 
     if (response.error) throw response.error
-    setAppointments((prev) => prev.filter((appt) => appt.id !== id))
+    setAppointments((current) => current.filter((appointment) => String(appointment?.id) !== String(id)))
+    emitAppointmentSync({ type: 'remove', id, moduleId: activeModuleId, tenantId: activeTenantId })
   }, [activeModuleId, activeTenantId])
 
   const todayStats = () => {

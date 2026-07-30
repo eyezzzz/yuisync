@@ -47,8 +47,8 @@ test('todos os caminhos restauram e aguardam a logo', () => {
 })
 
 test('tipografia foi ampliada nos dois modelos', () => {
-  assert.match(resolvedReceiptShell, /\.line \{[^}]*font-size: 10\.5px/)
-  assert.match(resolvedReceiptShell, /\.line strong \{[^}]*font-size: 9\.5px/)
+  assert.match(resolvedReceiptShell, /\.line \{[^}]*font-size: 11px/)
+  assert.match(resolvedReceiptShell, /\.line strong \{[^}]*font-size: 10px/)
   assert.match(nativeReceiptBlock, /\.row \{[^}]*font-size: 10\.5px/)
   assert.match(nativeReceiptBlock, /\.label \{[^}]*font-size: 9\.5px/)
 })
@@ -73,4 +73,13 @@ test('rotulos termicos permanecem curtos e sem quebra desnecessaria', () => {
   assert.match(nativeReceiptBlock, /row\('Raca'/)
   assert.match(nativeReceiptBlock, /row\('Resp\.'/)
   assert.match(nativeReceiptBlock, /row\('Obs\.'/)
+})
+
+
+test('impressao usa largura termica centralizada sem folga lateral', () => {
+  assert.ok(resolvedReceiptShell.includes('body { font-family: Arial, Helvetica, sans-serif; padding: 3mm 2mm; }'))
+  assert.ok(resolvedReceiptShell.includes('.receipt { width: 72mm; max-width: 72mm; margin: 0 auto; }'))
+  assert.ok(resolvedReceiptShell.includes('font-size: 13.5px'))
+  assert.ok(resolvedReceiptShell.includes('font-size: 11px'))
+  assert.ok(resolvedReceiptShell.includes('font-size: 10px; text-transform: uppercase'))
 })
