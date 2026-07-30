@@ -37,6 +37,7 @@ const mapClientToPet = (c) => ({
   address_complement: c.details?.address_complement || '',
   address_reference: c.details?.address_reference || '',
   registration_status: inferRegistrationStatus(c),
+  tutor_group_id: c.details?.tutor_group_id || '',
   pet_name: c.details?.pet_name || '',
   species: c.details?.species || 'other',
   breed: c.details?.breed || '',
@@ -57,6 +58,7 @@ const mapPetToClient = (p, moduleId) => ({
   city: p.owner_city || null,
   notes: p.notes || null,
   details: {
+    tutor_group_id: p.tutor_group_id || null,
     pet_name: p.pet_name || null,
     species: p.species || null,
     breed: p.breed || null,

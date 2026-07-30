@@ -13,7 +13,11 @@ import { fmtCurrency, fmtTime, todayISO } from '../../../lib/supabase'
 import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { useCatalogPlans } from '../hooks/useCatalogPlans'
-import { activeSubscriptionForClient, buildCatalogUsageSummary } from '../lib/catalogPlanServices'
+import {
+  activeSubscriptionsForClient,
+  buildCombinedCatalogUsageSummary,
+} from '../lib/catalogPlanServices'
+import { groupPetsByTutor } from '../../../shared/lib/petTutorGroups'
 import { serviceIcon } from '../lib/petshopTeam'
 import {
   normalizeOperationalStaff,
@@ -366,7 +370,7 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, services = SERVICES, subscriptions = [], staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubscriptions, pets, services = SERVICES, subscriptions = [], staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -414,6 +418,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
   const [clientPickerOpen, setClientPickerOpen] = useState(() => !form.pet_id)
   const [selectedClient, setSelectedClient] = useState(() => appt?.pets || null)
   const [remotePets, setRemotePets] = useState([])
+  const [pendingTutorPets, setPendingTutorPets] = useState([])
   const [searchingClients, setSearchingClients] = useState(false)
   const [serviceSearch, setServiceSearch] = useState('')
   const [servicePickerOpen, setServicePickerOpen] = useState(false)
@@ -427,13 +432,13 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const petSearch = form.pet_search || ''
   const deferredPetSearch = useDeferredValue(petSearch)
-  const activeSubscription = useMemo(
-    () => activeSubscriptionForClient(subscriptions, form.pet_id),
+  const activeSubscriptions = useMemo(
+    () => activeSubscriptionsForClient(subscriptions, form.pet_id),
     [subscriptions, form.pet_id],
   )
   const packageUsage = useMemo(
-    () => activeSubscription ? buildCatalogUsageSummary(activeSubscription, services) : [],
-    [activeSubscription, services],
+    () => buildCombinedCatalogUsageSummary(activeSubscriptions, services),
+    [activeSubscriptions, services],
   )
   const packageServiceEntries = useMemo(() => packageUsage.filter((item) => (
     item.service_kind === 'catalog'
@@ -449,7 +454,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
     () => packageUsage.find((item) => item.service_kind === 'transport' || item.service_type === 'motodog') || null,
     [packageUsage],
   )
-  const packageName = activeSubscription?.subscription_plans?.name || 'Pacote ativo'
+  const packageNames = useMemo(() => [...new Set(activeSubscriptions
+    .map((subscription) => subscription.subscription_plans?.name)
+    .filter(Boolean))], [activeSubscriptions])
+  const packageName = activeSubscriptions.length > 1
+    ? `${activeSubscriptions.length} pacotes ativos`
+    : packageNames[0] || 'Pacote ativo'
   const serviceTotals = useMemo(() => {
     const totals = calculateAppointmentServiceTotals(form.service_codes, serviceOptions)
     const packageAdjustedPrice = totals.services.reduce((sum, service) => (
@@ -482,28 +492,21 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
         return String(left.label || '').localeCompare(String(right.label || ''), 'pt-BR')
       })
   }, [serviceOptions, form.service_codes, serviceSearch, packageServiceCodes])
-  const searchablePets = useMemo(() => (pets || []).map((pet) => ({
-    pet,
-    searchText: safeLower([
-      pet.pet_name,
-      pet.owner_name,
-      pet.phone,
-      pet.email,
-      pet.breed,
-      pet.species,
-    ].filter(Boolean).join(' ')),
-  })), [pets])
-  const localFilteredPets = useMemo(() => {
+  const filteredTutorGroups = useMemo(() => {
     const query = safeLower(deferredPetSearch)
-    return searchablePets
-      .filter(({ searchText }) => !query || searchText.includes(query))
-      .map(({ pet }) => pet)
-  }, [searchablePets, deferredPetSearch])
-  const filteredPets = useMemo(() => {
     const unique = new Map()
-    ;[...localFilteredPets, ...remotePets].forEach((pet) => unique.set(pet.id, pet))
-    return [...unique.values()].slice(0, 8)
-  }, [localFilteredPets, remotePets])
+    ;[...(pets || []), ...remotePets].forEach((pet) => unique.set(pet.id, pet))
+    return groupPetsByTutor([...unique.values()])
+      .filter((group) => !query || group.pets.some((pet) => safeLower([
+        pet.pet_name,
+        pet.owner_name,
+        pet.phone,
+        pet.email,
+        pet.breed,
+        pet.species,
+      ].filter(Boolean).join(' ')).includes(query)))
+      .slice(0, 8)
+  }, [pets, remotePets, deferredPetSearch])
   const selectedPet = useMemo(() => (
     (selectedClient?.id === form.pet_id ? selectedClient : null)
     || (pets || []).find((pet) => pet.id === form.pet_id)
@@ -550,6 +553,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
   }, [clientPickerOpen, servicePickerOpen])
 
   const openClientPicker = () => {
+    setPendingTutorPets([])
     setClientPickerOpen(true)
     requestAnimationFrame(() => clientSearchRef.current?.focus())
   }
@@ -564,8 +568,19 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
         : {}),
     }))
     setSelectedClient(pet)
+    setPendingTutorPets([])
     setErr('')
     setClientPickerOpen(false)
+  }
+
+  const selectTutor = (group) => {
+    const tutorPets = Array.isArray(group?.pets) ? group.pets : []
+    if (tutorPets.length === 1) {
+      selectClient(tutorPets[0])
+      return
+    }
+    setPendingTutorPets(tutorPets)
+    set('pet_search', '')
   }
 
   const openServicePicker = () => {
@@ -640,6 +655,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
       }
       if (isEdit) await onUpdate(appt.id, payload)
       else await onCreate(payload)
+      await onRefreshSubscriptions?.()
       onClose()
     } catch (error) {
       setErr(error.message)
@@ -661,7 +677,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
         <div className="modal-body">
           <div className="space-y-6">
             <div ref={clientPickerRef} className="bg-card border border-[var(--border)] rounded-2xl p-5 space-y-4">
-              <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar cliente</label>
+              <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar cliente e pet</label>
               {!clientPickerOpen && selectedPet ? (
                 <button
                   type="button"
@@ -695,31 +711,61 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
                     />
                   </div>
                   <div role="listbox" aria-label="Resultados de clientes" className="max-h-64 rounded-xl border border-[var(--border2)] bg-surface/60 overflow-y-auto">
-                    {filteredPets.map((pet) => {
-                      const active = form.pet_id === pet.id
-                      return (
-                        <button
-                          type="button"
-                          role="option"
-                          aria-selected={active}
-                          key={pet.id}
-                          onClick={() => selectClient(pet)}
-                          className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 border-b border-[var(--border2)] last:border-b-0 transition-colors ${
-                            active ? 'bg-amber-500/15 text-text' : 'hover:bg-white/5 text-muted'
-                          }`}
-                        >
-                          <span className="min-w-0">
-                            <span className="block text-xs font-bold text-text truncate">{pet.owner_name || 'Cliente sem nome'}</span>
-                            <span className="block text-[11px] truncate">
-                              {[pet.pet_name, pet.breed || pet.species, pet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
-                            </span>
-                          </span>
-                          {active && <Check size={14} className="text-amber-400 flex-shrink-0"/>}
-                        </button>
-                      )
-                    })}
-                    {filteredPets.length === 0 && (
-                      <p className="px-3 py-3 text-xs text-muted">Nenhum cliente encontrado com essa busca.</p>
+                    {pendingTutorPets.length > 1 ? (
+                      <div className="p-3 space-y-2">
+                        <div className="flex items-center justify-between gap-3">
+                          <div>
+                            <p className="text-xs font-bold text-text">Escolha o pet para este agendamento</p>
+                            <p className="text-[11px] text-muted">{pendingTutorPets[0]?.owner_name || 'Cliente'} possui {pendingTutorPets.length} pets ativos.</p>
+                          </div>
+                          <button type="button" onClick={() => setPendingTutorPets([])} className="btn btn-ghost btn-sm">Voltar</button>
+                        </div>
+                        {pendingTutorPets.map((pet) => (
+                          <button
+                            type="button"
+                            key={pet.id}
+                            onClick={() => selectClient(pet)}
+                            className="w-full rounded-xl border border-[var(--border2)] px-3 py-2 text-left hover:bg-amber-500/10"
+                          >
+                            <span className="block text-sm font-bold text-text">{pet.pet_name || 'Pet sem nome'}</span>
+                            <span className="block text-[11px] text-muted">{[pet.breed || pet.species, pet.weight_kg ? `${pet.weight_kg} kg` : ''].filter(Boolean).join(' - ')}</span>
+                          </button>
+                        ))}
+                      </div>
+                    ) : (
+                      <>
+                        {filteredTutorGroups.map((group) => {
+                          const active = group.pets.some((pet) => form.pet_id === pet.id)
+                          const petNames = group.pets.map((pet) => pet.pet_name || 'Pet sem nome').join(', ')
+                          return (
+                            <button
+                              type="button"
+                              role="option"
+                              aria-selected={active}
+                              key={group.key}
+                              onClick={() => selectTutor(group)}
+                              className={`w-full px-3 py-2 text-left flex items-center justify-between gap-3 border-b border-[var(--border2)] last:border-b-0 transition-colors ${
+                                active ? 'bg-amber-500/15 text-text' : 'hover:bg-white/5 text-muted'
+                              }`}
+                            >
+                              <span className="min-w-0">
+                                <span className="block text-xs font-bold text-text truncate">{group.owner_name || 'Cliente sem nome'}</span>
+                                <span className="block text-[11px] truncate">
+                                  {group.pets.length === 1
+                                    ? [petNames, group.pets[0]?.breed || group.pets[0]?.species, group.phone].filter(Boolean).join(' - ')
+                                    : `${group.pets.length} pets: ${petNames}`}
+                                </span>
+                              </span>
+                              {group.pets.length > 1
+                                ? <span className="text-[10px] font-bold text-amber-400">Escolher pet</span>
+                                : active && <Check size={14} className="text-amber-400 flex-shrink-0"/>}
+                            </button>
+                          )
+                        })}
+                        {filteredTutorGroups.length === 0 && (
+                          <p className="px-3 py-3 text-xs text-muted">Nenhum cliente encontrado com essa busca.</p>
+                        )}
+                      </>
                     )}
                   </div>
                   <p className="text-[11px] text-muted">
@@ -735,12 +781,15 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, pets, service
 
             <div ref={servicePickerRef}>
               <label className="inp-label">{serviceGroupLabel}</label>
-              {serviceGroup === 'banho_tosa' && activeSubscription && (
+              {serviceGroup === 'banho_tosa' && activeSubscriptions.length > 0 && (
                 <section data-yuisync-native-package-panel className="mb-3 rounded-2xl border border-emerald-400/35 bg-emerald-500/10 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
                     <div>
                       <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-300">Pacote ativo · prioridade</p>
                       <p className="mt-1 text-base font-black text-text">{packageName}</p>
+                      {packageNames.length > 1 && (
+                        <p className="mt-1 text-xs text-emerald-200">{packageNames.join(' + ')}</p>
+                      )}
                       <p className="mt-1 text-xs text-muted">{selectedPet?.pet_name || 'Pet'} · Tutor: {selectedPet?.owner_name || 'Cliente'}</p>
                     </div>
                     <span className="badge badge-green">Agenda nativa v1</span>
@@ -1800,6 +1849,7 @@ export default function AgendaPage({ setPage }) {
           onClose={() => setModal(null)}
           onCreate={create}
           onUpdate={update}
+          onRefreshSubscriptions={() => loadSubscriptions().then((items) => setSubscriptions(items || []))}
           onReceipt={setReceipt}
         />
       )}

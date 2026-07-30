@@ -124,7 +124,7 @@ export function useCatalogPlans() {
 
   const saveSubscription = useCallback(async (payload = {}) => {
     if (!activeTenantId) throw new Error('Selecione uma empresa ativa antes de salvar a assinatura.')
-    if (!payload.plan_id || !payload.client_id) throw new Error('Selecione o plano e o cliente.')
+    if (!payload.plan_id || !payload.client_id) throw new Error('Selecione o plano e o pet.')
 
     const isNewSubscription = !payload.id
     const requestedStatus = payload.status || 'active'
