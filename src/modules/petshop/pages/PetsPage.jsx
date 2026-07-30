@@ -53,6 +53,7 @@ function getRegistrationBadge(pet = {}) {
 }
 
 function PetModal({ pet, plans, subscription, onClose, onSave }) {
+  const addingPetForTutor = Boolean(pet?.adding_pet_for_tutor)
   const [form, setForm] = useState({
     ...(pet ? { ...EMPTY_FORM, ...pet } : EMPTY_FORM),
     plan_id: subscription?.status === 'cancelled' ? '' : (subscription?.plan_id || ''),
@@ -64,6 +65,7 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
   async function submit() {
     if (!form.owner_name.trim()) return setError('Informe o nome do tutor.')
     if (!form.phone.trim()) return setError('Informe o telefone.')
+    if (!form.pet_name.trim()) return setError('Informe o nome do pet.')
     setSaving(true)
     setError('')
     try {
@@ -94,14 +96,19 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
       <div className="modal-box max-w-3xl">
         <div className="modal-header">
           <div>
-            <h2 className="font-display font-bold text-xl text-text">{pet?.adding_pet_for_tutor ? 'Adicionar pet ao cliente' : pet?.id ? 'Editar cliente e pet' : 'Novo cliente e pet'}</h2>
-            <p className="text-sm text-muted mt-1">{pet?.adding_pet_for_tutor ? 'Os dados do tutor foram mantidos; complete apenas o novo pet.' : 'Essa tela conversa direto com a aba de planos.'}</p>
+            <h2 className="font-display font-bold text-xl text-text">{addingPetForTutor ? 'Adicionar pet ao cliente' : pet?.id ? 'Editar cliente e pet' : 'Novo cliente e pet'}</h2>
+            <p className="text-sm text-muted mt-1">{addingPetForTutor ? 'Os dados do tutor foram mantidos; complete apenas o novo pet.' : 'Essa tela conversa direto com a aba de planos.'}</p>
           </div>
           <button onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button>
         </div>
         <div className="modal-body space-y-5">
+          {addingPetForTutor && (
+            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-100">
+              Novo pet para <strong>{form.owner_name}</strong>. Os dados do tutor ficam bloqueados para evitar cadastros divergentes.
+            </div>
+          )}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
-            <div className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
+            <fieldset disabled={addingPetForTutor} className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-1 md:grid-cols-2 gap-3 disabled:opacity-70">
               <div className="md:col-span-2"><label className="inp-label">Tutor</label><input className="inp" value={form.owner_name} onChange={(e) => setField('owner_name', e.target.value)} /></div>
               <div><label className="inp-label">Telefone</label><input className="inp" value={form.phone} onChange={(e) => setField('phone', e.target.value)} /></div>
               <div><label className="inp-label">CPF</label><input className="inp" value={form.owner_cpf} onChange={(e) => setField('owner_cpf', e.target.value)} /></div>
@@ -114,7 +121,7 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
               <div><label className="inp-label">Bairro</label><input className="inp" value={form.owner_neighborhood} onChange={(e) => setField('owner_neighborhood', e.target.value)} /></div>
               <div><label className="inp-label">Cidade</label><input className="inp" value={form.owner_city} onChange={(e) => setField('owner_city', e.target.value)} /></div>
               <div><label className="inp-label">Referencia</label><input className="inp" value={form.address_reference || ''} onChange={(e) => setField('address_reference', e.target.value)} /></div>
-            </div>
+            </fieldset>
             <div className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-1 md:grid-cols-2 gap-3">
               <div className="md:col-span-2"><label className="inp-label">Pet</label><input className="inp" value={form.pet_name} onChange={(e) => setField('pet_name', e.target.value)} /></div>
               <div><label className="inp-label">Especie</label><select className="inp" value={form.species} onChange={(e) => setField('species', e.target.value)}>{SPECIES.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}</select></div>
@@ -128,7 +135,7 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
             </div>
           </div>
           {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400 flex items-center gap-2"><AlertCircle size={14} /> {error}</div>}
-          <div className="flex gap-3"><button onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button><button onClick={submit} disabled={saving} className="btn btn-primary flex-1 justify-center">{saving ? 'Salvando...' : 'Salvar cadastro'}</button></div>
+          <div className="flex gap-3"><button onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button><button onClick={submit} disabled={saving} className="btn btn-primary flex-1 justify-center">{saving ? 'Salvando...' : addingPetForTutor ? 'Salvar novo pet' : 'Salvar cadastro'}</button></div>
         </div>
       </div>
     </div>,
@@ -136,13 +143,31 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
   )
 }
 
-function PetDrawer({ pet, subscription, onClose, onEdit, onAddPet, speciesIcon, serviceLabel, statusBadge }) {
+function PetDrawer({ pet, subscriptions = [], onClose, onEdit, onAddPet, speciesIcon, serviceLabel, statusBadge }) {
   const { appointments, load } = useAppointments()
   useEffect(() => { if (pet?.id) load({ date: '' }) }, [pet?.id])
   if (!pet) return null
   const Icon = speciesIcon(pet.species)
   const recentAppointments = appointments.filter((item) => item.pets?.id === pet.id).slice(0, 8)
   const registrationBadge = getRegistrationBadge(pet)
+  const packageSubscriptions = (subscriptions || []).filter((item) => ['active', 'paused'].includes(item.status))
+  const activePackageSubscriptions = packageSubscriptions.filter((item) => item.status === 'active')
+  const combinedUsageMap = new Map()
+  packageSubscriptions.forEach((item) => {
+    ;(item.usage_summary || []).forEach((usage) => {
+      const key = usage.service_type || usage.service_code || usage.label
+      if (!key) return
+      const current = combinedUsageMap.get(key) || { ...usage, used: 0, total: 0, remaining: 0 }
+      combinedUsageMap.set(key, {
+        ...current,
+        used: Number(current.used || 0) + Number(usage.used || 0),
+        total: Number(current.total || 0) + Number(usage.total || 0),
+        remaining: Number(current.remaining || 0) + Number(usage.remaining || 0),
+      })
+    })
+  })
+  const combinedUsage = [...combinedUsageMap.values()]
+  const nextBilling = activePackageSubscriptions.map((item) => item.next_billing_date).filter(Boolean).sort()[0] || '-'
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex theme-petshop-modal">
@@ -177,14 +202,14 @@ function PetDrawer({ pet, subscription, onClose, onEdit, onAddPet, speciesIcon, 
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Referencia</p><p className="text-text font-semibold mt-1 leading-relaxed">{pet.address_reference || '-'}</p></div>
           </div>
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3"><p className="text-xs uppercase tracking-widest text-muted font-bold">Plano vinculado</p>{subscription && <span className={`badge ${getPlanTone(subscription.status)}`}>{PLAN_LABELS[subscription.status] || 'Plano'}</span>}</div>
-            {subscription ? (
+            <div className="flex items-center justify-between gap-3"><p className="text-xs uppercase tracking-widest text-muted font-bold">Pacotes vinculados</p>{packageSubscriptions.length > 0 && <span className={`badge ${activePackageSubscriptions.length ? 'badge-green' : 'badge-amber'}`}>{activePackageSubscriptions.length ? `${activePackageSubscriptions.length} ativo(s)` : 'Pausado'}</span>}</div>
+            {packageSubscriptions.length > 0 ? (
               <>
-                <div className="flex items-center justify-between text-sm"><span className="text-muted">Plano</span><span className="font-semibold text-text">{subscription.subscription_plans?.name || '-'}</span></div>
-                <div className="flex items-center justify-between text-sm"><span className="text-muted">Proxima cobranca</span><span className="font-semibold text-text">{subscription.next_billing_date || '-'}</span></div>
-                <div className="space-y-2 pt-2">{(subscription.usage_summary || []).map((usage) => <div key={`${subscription.id}-${usage.service_type}`} className="rounded-xl border border-[var(--border)] bg-surface/70 px-4 py-3"><div className="flex items-center justify-between gap-3 text-sm"><span className="text-text">{getServiceLabel(usage.service_type)}</span><span className="text-emerald-500 font-semibold">{usage.remaining} restantes</span></div><p className="text-xs text-muted mt-1">{usage.used}/{usage.total} usados neste ciclo</p></div>)}</div>
+                <div className="flex items-start justify-between gap-4 text-sm"><span className="text-muted">Compras</span><span className="text-right font-semibold text-text">{packageSubscriptions.map((item) => item.subscription_plans?.name || 'Pacote').join(' + ')}</span></div>
+                <div className="flex items-center justify-between text-sm"><span className="text-muted">Proxima cobranca</span><span className="font-semibold text-text">{nextBilling}</span></div>
+                <div className="space-y-2 pt-2">{combinedUsage.map((usage) => <div key={usage.service_type || usage.service_code || usage.label} className="rounded-xl border border-[var(--border)] bg-surface/70 px-4 py-3"><div className="flex items-center justify-between gap-3 text-sm"><span className="text-text">{usage.label || getServiceLabel(usage.service_type)}</span><span className="text-emerald-500 font-semibold">{usage.remaining} restantes</span></div><p className="text-xs text-muted mt-1">{usage.used}/{usage.total} usados somando os pacotes</p></div>)}</div>
               </>
-            ) : <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-5 text-sm text-muted">Este cliente ainda nao tem plano ativo.</div>}
+            ) : <div className="rounded-xl border border-dashed border-[var(--border)] px-4 py-5 text-sm text-muted">Este pet ainda nao tem pacote ativo ou pausado.</div>}
           </div>
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 space-y-3">
             <p className="text-xs uppercase tracking-widest text-muted font-bold">Ultimos atendimentos</p>
@@ -292,18 +317,29 @@ export default function PetsPage() {
 
   useEffect(() => { reloadAll() }, [])
 
+  const subscriptionsByClient = useMemo(() => {
+    const map = new Map()
+    ;[...(subscriptions || [])].sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0)).forEach((item) => {
+      const rows = map.get(item.client_id) || []
+      rows.push(item)
+      map.set(item.client_id, rows)
+    })
+    return map
+  }, [subscriptions])
+
   const latestSubscriptionByClient = useMemo(() => {
     const map = new Map()
     ;[...(subscriptions || [])].sort((a, b) => new Date(b.started_at || 0) - new Date(a.started_at || 0)).forEach((item) => { if (!map.has(item.client_id)) map.set(item.client_id, item) })
     return map
   }, [subscriptions])
 
-  const activePlanCount = useMemo(() => [...latestSubscriptionByClient.values()].filter((item) => item.status === 'active').length, [latestSubscriptionByClient])
+  const activePlanCount = useMemo(() => [...subscriptionsByClient.values()].filter((items) => items.some((item) => item.status === 'active')).length, [subscriptionsByClient])
 
   const filteredPets = useMemo(() => {
     const query = normalize(search)
     const queryDigits = digits(search)
     return (pets || []).filter((pet) => {
+      const clientSubscriptions = subscriptionsByClient.get(pet.id) || []
       const subscription = latestSubscriptionByClient.get(pet.id)
       const matchesText = Boolean(query) && matchesSearchTerms(search, [
         pet.owner_name,
@@ -312,15 +348,15 @@ export default function PetsPage() {
         pet.owner_address,
         pet.owner_neighborhood,
         pet.owner_city,
-        subscription?.subscription_plans?.name,
+        ...clientSubscriptions.map((item) => item.subscription_plans?.name),
       ])
       const matchesDigits = Boolean(queryDigits) && [pet.phone, pet.owner_cpf].some((field) => digits(field).includes(queryDigits))
       const matchesSearch = (!query && !queryDigits) || matchesText || matchesDigits
       const matchesSpecies = !speciesFilter || pet.species === speciesFilter
-      const matchesPlan = !planFilter || subscription?.status === planFilter
+      const matchesPlan = !planFilter || clientSubscriptions.some((item) => item.status === planFilter)
       return matchesSearch && matchesSpecies && matchesPlan
     })
-  }, [latestSubscriptionByClient, pets, planFilter, search, speciesFilter])
+  }, [latestSubscriptionByClient, pets, planFilter, search, speciesFilter, subscriptionsByClient])
 
   useEffect(() => {
     setPage(1)
@@ -469,7 +505,8 @@ export default function PetsPage() {
                     <div className="flex min-w-0 items-center gap-2 text-muted"><Weight size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{pet.weight_kg ? `${pet.weight_kg} kg` : 'Peso nao informado'}</span></div>
                     {ageLabel && <div className="flex min-w-0 items-center gap-2 text-muted"><CalendarIcon size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{ageLabel}</span></div>}
                   </div>
-                  <div className="mt-4 flex items-center justify-end gap-2">
+                  <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+                    <button onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button>
                     <button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar</button>
                     <button type="button" aria-label={`Excluir ${pet.pet_name || pet.owner_name}`} title="Excluir" onClick={() => handleDelete(pet.id)} className="btn btn-ghost btn-sm text-red-400"><Trash2 size={13} /></button>
                   </div>
@@ -480,11 +517,11 @@ export default function PetsPage() {
           {filteredPets.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-[var(--border)] px-6 py-12 text-center"><p className="text-text font-semibold">Nenhum cadastro encontrado</p><p className="text-muted text-sm mt-2">Tente remover filtros ou criar um novo cliente.</p></div>}
         </div>
       ) : (
-        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pet</th><th>Telefone</th><th>Plano</th><th className="text-right">Acoes</th></tr></thead><tbody>{visiblePets.map((pet) => { const subscription = latestSubscriptionByClient.get(pet.id); return <tr key={pet.id} className="cursor-pointer" onClick={() => setDrawerPet(pet)}><td className="font-semibold text-text">{formatPersonName(pet.owner_name)}</td><td>{pet.pet_name || '-'}</td><td>{formatPhone(pet.phone)}</td><td>{subscription ? <span className={`badge ${getPlanTone(subscription.status)}`}>{subscription.subscription_plans?.name || 'Plano'}</span> : <span className="text-muted">Sem plano</span>}</td><td className="text-right"><div className="flex justify-end gap-2"><button onClick={(e) => { e.stopPropagation(); setModalPet(pet) }} className="btn btn-secondary btn-sm">Editar</button><button onClick={(e) => { e.stopPropagation(); handleDelete(pet.id) }} className="btn btn-danger btn-sm">Excluir</button></div></td></tr> })}{filteredPets.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
+        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pet</th><th>Telefone</th><th>Plano</th><th className="text-right">Acoes</th></tr></thead><tbody>{visiblePets.map((pet) => { const subscription = latestSubscriptionByClient.get(pet.id); return <tr key={pet.id} className="cursor-pointer" onClick={() => setDrawerPet(pet)}><td className="font-semibold text-text">{formatPersonName(pet.owner_name)}</td><td>{pet.pet_name || '-'}</td><td>{formatPhone(pet.phone)}</td><td>{subscription ? <span className={`badge ${getPlanTone(subscription.status)}`}>{subscription.subscription_plans?.name || 'Plano'}</span> : <span className="text-muted">Sem plano</span>}</td><td className="text-right"><div className="flex justify-end gap-2"><button onClick={(e) => { e.stopPropagation(); openAddPetForTutor(pet) }} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={(e) => { e.stopPropagation(); setModalPet(pet) }} className="btn btn-secondary btn-sm">Editar</button><button onClick={(e) => { e.stopPropagation(); handleDelete(pet.id) }} className="btn btn-danger btn-sm">Excluir</button></div></td></tr> })}{filteredPets.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
       )}
 
       {modalPet !== null && <PetModal pet={modalPet} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onClose={() => setModalPet(null)} onSave={handleSave} />}
-      {drawerPet && <PetDrawer pet={drawerPet} subscription={latestSubscriptionByClient.get(drawerPet.id)} onClose={() => setDrawerPet(null)} onAddPet={openAddPetForTutor} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
+      {drawerPet && <PetDrawer pet={drawerPet} subscriptions={subscriptionsByClient.get(drawerPet.id) || []} onClose={() => setDrawerPet(null)} onAddPet={openAddPetForTutor} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
       {legacyImportModal && <LegacyClientsImportModal moduleId={activeModuleId} tenantId={auth?.activeTenantId} onClose={() => setLegacyImportModal(false)} onDone={reloadAll} />}
     </div>
   )
