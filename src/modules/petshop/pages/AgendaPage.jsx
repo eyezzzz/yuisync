@@ -1267,15 +1267,20 @@ function AgendaTimelineView({
             <p className="mb-2 text-[10px] font-black uppercase tracking-widest text-muted">Historico do dia</p>
             <div className="grid gap-2 md:grid-cols-2">
               {history.map((appt) => {
-                const paymentPending = appt.status === 'concluido' && needsPayment(appt)
                 return (
                   <div key={appt.id} className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-muted">
                     <button type="button" onClick={() => onEdit(appt)} className="min-w-0 flex-1 truncate text-left hover:text-text">
                       {fmtAppointmentInterval(appt)} · {appt.pets?.pet_name || 'Pet'} · {statusBadge(appt.status).label}
                     </button>
                     {appt.status === 'concluido' && (
-                      <button type="button" onClick={() => onCompletedAction(appt)} className={`shrink-0 rounded-md px-2 py-1 font-bold ${paymentPending ? 'bg-amber-500/15 text-amber-300' : 'bg-emerald-500/12 text-emerald-300'}`}>
-                        {paymentPending ? 'Receber' : 'Imprimir'}
+                      <button
+                        type="button"
+                        aria-label="Reimprimir ficha concluida"
+                        title="Reimprimir ficha 80 mm"
+                        onClick={() => onReceipt(appt)}
+                        className="shrink-0 rounded-md p-1.5 text-emerald-300 hover:bg-emerald-500/15"
+                      >
+                        <Receipt size={13}/>
                       </button>
                     )}
                   </div>
@@ -1383,12 +1388,12 @@ function AgendaTimelineView({
                               {completed && (
                                 <button
                                   type="button"
-                                  aria-label={needsPayment(appt) ? 'Receber atendimento concluido' : 'Imprimir ficha concluida'}
-                                  title={needsPayment(appt) ? 'Receber e lancar no caixa' : 'Imprimir ficha 80 mm'}
-                                  onClick={() => onCompletedAction(appt)}
-                                  className={`shrink-0 rounded p-1 ${needsPayment(appt) ? 'text-amber-300 hover:bg-amber-500/15' : 'text-emerald-300 hover:bg-emerald-500/15'}`}
+                                  aria-label="Reimprimir ficha concluida"
+                                  title="Reimprimir ficha 80 mm"
+                                  onClick={() => onReceipt(appt)}
+                                  className="shrink-0 rounded p-1 text-emerald-300 hover:bg-emerald-500/15"
                                 >
-                                  {needsPayment(appt) ? <Wallet size={11}/> : <Receipt size={11}/>}
+                                  <Receipt size={11}/>
                                 </button>
                               )}
                             </div>
