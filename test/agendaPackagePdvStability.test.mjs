@@ -40,7 +40,7 @@ test('assinatura aguardando pagamento nao aparece como pacote ativo na agenda', 
   assert.equal(matched, null)
 })
 
-test('servicos de tosa cadastrados sao reconhecidos para o atalho da agenda', () => {
+test('servicos de tosa cadastrados sao reconhecidos pela agenda', () => {
   assert.equal(isTosaCatalogService({ name: 'TOSA HIGIENICA PORTE PEQUENO' }), true)
   assert.equal(isTosaCatalogService({ name: 'BANHO PET PORTE PEQUENO' }), false)
 })
@@ -62,25 +62,21 @@ test('pacote prioriza somente servicos reais do grupo atual', () => {
   assert.deepEqual(entries.map((entry) => entry.service_type), ['banho-real'])
 })
 
-test('agenda aplica cards verdes desde a primeira renderizacao e botoes fixos', async () => {
-  const enhancement = await read('src/modules/petshop/pages/AgendaBookingEnhancements.jsx')
-  assert.match(enhancement, /relative\.w-full\.rounded-lg\.border\.p-2\.text-left\.shadow-sm/)
-  assert.match(enhancement, /width: 28px !important/)
-  assert.match(enhancement, /white-space: normal !important/)
-  assert.match(enhancement, /data-yuisync-action="print"/)
-  assert.match(enhancement, /INSTRUCOES PARA O PROFISSIONAL/)
+test('agenda nao monta mais observador ou portal para completar o seletor', async () => {
+  const agenda = await read('src/modules/petshop/pages/AgendaPage.jsx')
+  const integration = await read('src/modules/petshop/pages/AgendaPackageIntegratedPage.jsx')
+  assert.match(agenda, /serviceOptionsForAppointmentGroup/)
+  assert.match(agenda, /role="listbox" aria-label="Servicos encontrados"/)
+  assert.doesNotMatch(agenda, /\.slice\(0, 12\)/)
+  assert.doesNotMatch(integration, /AgendaBookingEnhancements|AgendaPackageNativePanel|createPortal|MutationObserver/)
 })
 
-test('painel da agenda mostra pacote prioritario e todas as tosas sem limite de 12 itens', async () => {
-  const panel = await read('src/modules/petshop/pages/AgendaPackageNativePanel.jsx')
-  const integration = await read('src/modules/petshop/pages/AgendaPackageIntegratedPage.jsx')
-
-  assert.match(panel, /Pacote ativo · prioridade/)
-  assert.match(panel, /Usar \$\{packageName\(activeSubscription\)\}/)
-  assert.match(panel, /Tosas cadastradas/)
-  assert.match(panel, /sem limite de 12 itens/)
-  assert.match(panel, /subscriptionMatchesSearch/)
-  assert.match(integration, /AgendaPackageNativePanel/)
+test('modal nativo mostra pacote prioritario e todos os servicos reais', async () => {
+  const agenda = await read('src/modules/petshop/pages/AgendaPage.jsx')
+  assert.match(agenda, /Pacote ativo · prioridade/)
+  assert.match(agenda, /availableServiceOptions/)
+  assert.match(agenda, /Buscar e adicionar servico|Buscar servico para adicionar/i)
+  assert.doesNotMatch(agenda, /\.slice\(0, 12\)/)
 })
 
 test('ordens possui aba Banho & Tosa e fechamento transacional idempotente', async () => {

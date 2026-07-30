@@ -96,7 +96,7 @@ export function activeServices(rows = []) {
 export function getServiceGroupFromCode(type = '') {
   const service = normalizeCode(type)
   if (/vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|curativo|hemograma|radiograf|raio_x|odontolog/.test(service)) return 'veterinaria'
-  if (/banho|tosa|desembolo|escovac|hidrat|higien|groom|unha|ouvido|orelha/.test(service)) return 'banho_tosa'
+  if (/banho|tosa|tosagem|tosar|trim|trimming|stripping|acabamento|penteado|desembolo|desembarac|escovac|hidrat|higien|groom|unha|ouvido|orelha/.test(service)) return 'banho_tosa'
   if (/moto|entrega|transporte|retirada|busca/.test(service)) return 'motoboy'
   return 'outro'
 }
@@ -116,6 +116,19 @@ export function serviceLabel(services = [], code = '') {
 }
 
 export function serviceIcon(serviceOrIcon) {
+  if (serviceOrIcon && typeof serviceOrIcon === 'object') {
+    const text = normalizeCode([
+      serviceOrIcon.name,
+      serviceOrIcon.label,
+      serviceOrIcon.code,
+      serviceOrIcon.value,
+      serviceOrIcon.category,
+      serviceOrIcon.description,
+    ].filter(Boolean).join(' '))
+    if (/tosa|tosagem|tosar|trim|trimming|stripping|acabamento|penteado/.test(text)) return Scissors
+    if (/banho|lavagem|secagem/.test(text)) return Droplets
+    if (/vet|veterin|consulta|vacina|clinica|medico|exame|cirurg/.test(text)) return Stethoscope
+  }
   const key = typeof serviceOrIcon === 'string' ? serviceOrIcon : serviceOrIcon?.icon
   return ICONS[key] || PawPrint
 }
