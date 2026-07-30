@@ -1,21 +1,30 @@
 name: Apply multi-pet package allocation
 
 on:
-  push:
-    branches:
-      - feat/multi-pet-package-allocation
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/patches/multi-pet.part00'
+      - '.github/patches/multi-pet.xz00'
+      - '.github/patches/multi-pet.xz01'
+      - '.github/patches/multi-pet.xz02'
+      - '.github/patches/multi-pet.xz03'
+      - '.github/patches/multi-pet.xz04'
+      - '.github/workflows/apply-multi-pet-package.yml'
+  workflow_dispatch:
 
 permissions:
   contents: write
 
 jobs:
   apply-and-validate:
-    if: github.actor != 'github-actions[bot]'
+    if: github.head_ref == 'feat/multi-pet-package-allocation'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout branch
         uses: actions/checkout@v4
         with:
+          ref: feat/multi-pet-package-allocation
           fetch-depth: 0
 
       - name: Use Node 22
