@@ -4,6 +4,7 @@ import { useModuleCtx } from '../../../context/ModuleContext'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
 import { normalizeCode, normalizeServices } from '../lib/petshopTeam'
+import { fetchAllServiceCatalogPages } from '../lib/serviceCatalogPagination'
 import { usePetshopAdvanced as usePetshopAdvancedCore } from './usePetshopAdvancedCore'
 
 export {
@@ -91,22 +92,24 @@ export function usePetshopAdvanced() {
 
   const loadPetshopServices = useCallback(async () => {
     const [productsRes, servicesRes] = await Promise.all([
-      runScoped(async (includeTenant) => {
+      runScoped(async (includeTenant) => fetchAllServiceCatalogPages(() => {
         let query = supabase
           .from('products')
           .select('id,name,category,description,price,active,bot_metadata')
           .eq('module_id', moduleId)
           .eq('active', true)
           .order('name', { ascending: true })
+          .order('id', { ascending: true })
         return applyTenantFilter(query, activeTenantId, includeTenant)
-      }),
-      runScoped(async (includeTenant) => {
+      })),
+      runScoped(async (includeTenant) => fetchAllServiceCatalogPages(() => {
         let query = supabase
           .from('petshop_services')
           .select('*')
           .eq('module_id', moduleId)
+          .order('id', { ascending: true })
         return applyTenantFilter(query, activeTenantId, includeTenant)
-      }),
+      })),
     ])
 
     if (productsRes.error) throw productsRes.error
