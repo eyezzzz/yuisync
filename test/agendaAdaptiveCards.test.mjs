@@ -69,14 +69,16 @@ test('botoes operacionais mantem tamanho intermediario em qualquer densidade', a
   assert.doesNotMatch(css, /width: 36px|width: 32px/)
 })
 
-test('drag and drop existente permanece inalterado no caminho operacional', async () => {
+test('arraste confirma no banco e deixa o jsx nativo recalcular top coluna e largura', async () => {
   const [resolved, integrated] = await Promise.all([
     readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.jsx', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/AgendaIntegratedPage.jsx', import.meta.url), 'utf8'),
   ])
   assert.match(resolved, /chooseAgendaSlot\(slots\(\), event.clientX, event.clientY\)/)
   assert.match(resolved, /void moveAppointment\(id, time\)/)
-  assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)/)
-  assert.match(integrated, /shiftedInterval/)
-  assert.match(integrated, /is-yuisync-pointer-dragging/)
+  assert.match(resolved, /await update\(appointmentId, \{ scheduled_at: target.toISOString\(\) \}\)[\s\S]*await load\(\{ date: selectedDate \}\)[\s\S]*refreshAgendaPage\(\)/)
+  assert.match(resolved, /is-yuisync-pointer-dragging/)
+  assert.doesNotMatch(integrated, /shiftedInterval|pendingMove|suppressRefreshUntil/)
+  assert.doesNotMatch(integrated, /outer\.style\.top|intervalNode\.textContent/)
+  assert.doesNotMatch(integrated, /button\[title="Atualizar"\][\s\S]*preventDefault/)
 })
