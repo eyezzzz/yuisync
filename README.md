@@ -10,8 +10,8 @@ Siga os passos abaixo para configurar o projeto localmente a partir do GitHub.
 
 Certifique-se de ter instalado em sua máquina:
 - [Node.js](https://nodejs.org/) (Recomendado v18+)
-- [npm](https://www.npmjs.com/) ou [yarn](https://www.npmjs.com/) 
-- Uma conta no [Supabase](https://www.supabase.com/)
+- [npm](https://www.npmjs.com/) ou [yarn](https://yarnpkg.com/)
+- Uma conta no [Supabase](https://supabase.com/)
 
 ### 2. Clonar o Repositório
 
