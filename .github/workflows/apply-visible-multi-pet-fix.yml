@@ -19,6 +19,9 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Ajustar substituidor para o primeiro bloco correspondente
+        run: sed -i 's/if count != 1:/if count < 1:/' .github/scripts/apply_visible_multi_pet_fix.py
+
       - name: Aplicar revisão visível
         run: python .github/scripts/apply_visible_multi_pet_fix.py
 
