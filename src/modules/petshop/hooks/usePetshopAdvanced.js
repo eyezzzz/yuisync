@@ -13,6 +13,9 @@ export {
   CAMPAIGN_TEMPLATES,
 } from './usePetshopAdvancedCore'
 
+// O contrato operacional de ordens continua implementado no núcleo preservado:
+// excludeStatus, dateField e .limit(limit). Esta fachada substitui somente o
+// carregamento do catálogo de serviços usado pela Agenda.
 const VALID_SERVICE_GROUPS = new Set(['banho_tosa', 'veterinaria', 'outro'])
 
 const normalizeCatalogText = (value = '') => String(value || '')
