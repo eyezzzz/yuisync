@@ -115,8 +115,11 @@ test('fluxos manuais exigem pet apenas quando o tutor possui mais de um', async 
 
   assert.match(agenda, /groupPetsByTutor/)
   assert.match(agenda, /Escolha o pet para este agendamento/)
+  assert.match(agenda, /Gerenciar clientes e pets/)
   assert.match(plans, /Escolha qual pet receberá o pacote/)
-  assert.match(pets, /Adicionar pet/)
+  assert.match(plans, /Cada venda fica vinculada ao pet escolhido/)
+  assert.match(pets, /openAddPetForTutor\(pet\)/)
+  assert.match(pets, /Pacotes vinculados/)
   assert.match(migration, /reserve_petshop_client_subscription_benefit/)
   assert.match(migration, /next_billing_date asc nulls last/)
 })

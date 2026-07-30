@@ -370,7 +370,7 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubscriptions, pets, services = SERVICES, subscriptions = [], staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubscriptions, onManagePets, pets, services = SERVICES, subscriptions = [], staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -512,6 +512,13 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     || (pets || []).find((pet) => pet.id === form.pet_id)
     || (appt?.pets?.id === form.pet_id ? appt.pets : null)
   ), [selectedClient, pets, form.pet_id, appt?.pets])
+  const selectedTutorPets = useMemo(() => {
+    if (!form.pet_id) return []
+    const unique = new Map()
+    ;[...(pets || []), ...remotePets, selectedClient].filter(Boolean).forEach((pet) => unique.set(pet.id, pet))
+    const group = groupPetsByTutor([...unique.values()]).find((item) => item.pets.some((pet) => pet.id === form.pet_id))
+    return group?.pets || []
+  }, [pets, remotePets, selectedClient, form.pet_id])
 
   useEffect(() => {
     const query = petSearch.trim()
@@ -677,7 +684,10 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
         <div className="modal-body">
           <div className="space-y-6">
             <div ref={clientPickerRef} className="bg-card border border-[var(--border)] rounded-2xl p-5 space-y-4">
-              <label className="inp-label flex items-center gap-2"><Plus size={14}/> Selecionar cliente e pet</label>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="inp-label mb-0 flex items-center gap-2"><Plus size={14}/> Selecionar cliente e pet</label>
+                {onManagePets && <button type="button" onClick={onManagePets} className="btn btn-ghost btn-sm"><PawPrint size={13}/> Gerenciar clientes e pets</button>}
+              </div>
               {!clientPickerOpen && selectedPet ? (
                 <button
                   type="button"
@@ -687,7 +697,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                   <span className="min-w-0">
                     <span className="block text-sm font-bold text-text truncate">{selectedPet.owner_name || 'Cliente sem nome'}</span>
                     <span className="block text-xs text-muted truncate">
-                      {[selectedPet.pet_name, selectedPet.breed || selectedPet.species, selectedPet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
+                      {selectedTutorPets.length > 1
+                        ? `Pet selecionado: ${selectedPet.pet_name || 'sem nome'} · ${selectedTutorPets.length} pets no cadastro`
+                        : [selectedPet.pet_name, selectedPet.breed || selectedPet.species, selectedPet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
                     </span>
                   </span>
                   <span className="text-[11px] font-bold text-amber-400 flex-shrink-0">Alterar</span>
@@ -831,6 +843,11 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                     <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">O pacote está ativo, mas não possui serviço de banho/tosa disponível neste ciclo.</p>
                   )}
                 </section>
+              )}
+              {serviceGroup === 'banho_tosa' && selectedPet && activeSubscriptions.length === 0 && (
+                <div className="mb-3 rounded-xl border border-[var(--border2)] bg-white/[0.03] px-4 py-3 text-xs text-muted">
+                  <strong className="text-text">{selectedPet.pet_name || 'Este pet'}</strong> não possui pacote ativo. Os serviços selecionados serão cobrados como atendimento avulso.
+                </div>
               )}
               {serviceOptions.length === 0 ? (
                 <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
@@ -1577,9 +1594,12 @@ export default function AgendaPage({ setPage }) {
             {isToday && <span className="ml-2 badge badge-amber text-[10px]">Hoje</span>}
           </p>
         </div>
-        <button onClick={() => setModal({ serviceGroup: activeAgendaTab })} className="btn btn-primary">
-          <Plus size={16}/> Novo Agendamento
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" onClick={() => setPage?.('pets')} className="btn btn-secondary"><PawPrint size={15}/> Clientes & Pets</button>
+          <button onClick={() => setModal({ serviceGroup: activeAgendaTab })} className="btn btn-primary">
+            <Plus size={16}/> Novo Agendamento
+          </button>
+        </div>
       </div>
 
       {/* Stats do dia */}
@@ -1850,6 +1870,7 @@ export default function AgendaPage({ setPage }) {
           onCreate={create}
           onUpdate={update}
           onRefreshSubscriptions={() => loadSubscriptions().then((items) => setSubscriptions(items || []))}
+          onManagePets={() => { setModal(null); setPage?.('pets') }}
           onReceipt={setReceipt}
         />
       )}

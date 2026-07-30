@@ -253,7 +253,7 @@ function PlanModal({ plan, catalogServices, onClose, onSave }) {
   )
 }
 
-function ClientPicker({ clients, selectedId, onSelect }) {
+function ClientPicker({ clients, selectedId, onSelect, onManagePets }) {
   const [open, setOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [pendingTutorPets, setPendingTutorPets] = useState([])
@@ -275,7 +275,11 @@ function ClientPicker({ clients, selectedId, onSelect }) {
 
   return (
     <div className="relative">
-      <label className="inp-label">Pet que receberá o pacote</label>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="inp-label mb-0">Pet que receberá o pacote</label>
+        {onManagePets && <button type="button" onClick={onManagePets} className="btn btn-ghost btn-sm"><PawPrint size={13}/> Gerenciar clientes e pets</button>}
+      </div>
+      <p className="mb-2 mt-1 text-xs text-muted">Cada venda fica vinculada ao pet escolhido, mesmo quando o tutor possui vários pets.</p>
       {!open && selected ? (
         <button type="button" onClick={() => { setPendingTutorPets([]); setOpen(true) }} className="w-full rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3 text-left">
           <span className="block font-bold text-text">{selected.pet_name || 'Pet não informado'}</span>
@@ -328,7 +332,7 @@ function ClientPicker({ clients, selectedId, onSelect }) {
   )
 }
 
-function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave }) {
+function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave, onManagePets }) {
   const [form, setForm] = useState({
     plan_id: plans[0]?.id || '',
     client_id: '',
@@ -374,7 +378,7 @@ function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave })
               {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {fmtCurrency(plan.price)}</option>)}
             </select>
           </div>
-          <ClientPicker clients={clients} selectedId={form.client_id} onSelect={(clientId) => setForm((current) => ({ ...current, client_id: clientId }))}/>
+          <ClientPicker clients={clients} selectedId={form.client_id} onSelect={(clientId) => setForm((current) => ({ ...current, client_id: clientId }))} onManagePets={onManagePets}/>
           <div>
             <label className="inp-label">Início previsto do ciclo</label>
             <input className="inp" type="date" value={form.started_at} onChange={(event) => setForm((current) => ({ ...current, started_at: event.target.value }))}/>
@@ -617,7 +621,8 @@ export default function PlanosNativePage({ setPage }) {
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={reload} className="btn btn-secondary"><RefreshCw size={15}/> Atualizar</button>
-          <button type="button" onClick={() => setSubscriptionModal(true)} className="btn btn-secondary"><Repeat2 size={15}/> Nova assinatura</button>
+          <button type="button" onClick={() => setPage?.('pets')} className="btn btn-secondary"><PawPrint size={15}/> Clientes & Pets</button>
+          <button type="button" onClick={() => setSubscriptionModal(true)} className="btn btn-secondary"><Repeat2 size={15}/> Vender pacote</button>
           <button type="button" onClick={() => setPlanModal({})} className="btn btn-primary"><Plus size={15}/> Novo pacote</button>
         </div>
       </div>
@@ -700,7 +705,7 @@ export default function PlanosNativePage({ setPage }) {
       </section>
 
       {planModal !== null && <PlanModal plan={planModal.id ? planModal : null} catalogServices={catalogServices} onClose={() => setPlanModal(null)} onSave={handleSavePlan}/>} 
-      {subscriptionModal && <SubscriptionModal plans={plans.filter((plan) => plan.active)} clients={clients} catalogServices={catalogServices} onClose={() => setSubscriptionModal(false)} onSave={handleSaveSubscription}/>} 
+      {subscriptionModal && <SubscriptionModal plans={plans.filter((plan) => plan.active)} clients={clients} catalogServices={catalogServices} onClose={() => setSubscriptionModal(false)} onSave={handleSaveSubscription} onManagePets={() => { setSubscriptionModal(false); setPage?.('pets') }}/>} 
       {editingUsage && <UsageEditModal subscription={editingUsage} onClose={() => setEditingUsage(null)} onSave={saveUsage}/>} 
       {cancelling && <CancelSubscriptionModal subscription={cancelling} onClose={() => setCancelling(null)} onConfirm={cancelSubscription}/>} 
     </div>
