@@ -84,7 +84,6 @@ test('arraste confirma no banco e deixa o jsx nativo recalcular top coluna e lar
   assert.doesNotMatch(integrated, /button\[title="Atualizar"\][\s\S]*preventDefault/)
 })
 
-
 test('acoes ficam cancelar imprimir concluir e sincronizam sem recarregar a tabela', async () => {
   const [resolved, css, hook] = await Promise.all([
     readFile(new URL('../src/modules/petshop/pages/AgendaResolvedPage.jsx', import.meta.url), 'utf8'),
@@ -95,6 +94,7 @@ test('acoes ficam cancelar imprimir concluir e sincronizam sem recarregar a tabe
   const printIndex = resolved.indexOf('data-yuisync-action="print"')
   const completeIndex = resolved.indexOf('data-yuisync-action="complete"')
   assert.ok(cancelIndex >= 0 && cancelIndex < printIndex && printIndex < completeIndex)
+  assert.ok(resolved.includes('actions.innerHTML = actionMarkup(movable, canComplete)'))
   assert.doesNotMatch(resolved, /data-yuisync-action="drag"/)
   assert.ok(resolved.includes("updateStatus(appointmentId, 'cancelado')"))
   assert.ok(resolved.includes('if (action) return'))
