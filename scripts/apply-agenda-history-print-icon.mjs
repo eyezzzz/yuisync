@@ -26,17 +26,15 @@ const dailyAfter = `                    {appt.status === 'concluido' && (
 if (!source.includes(dailyBefore)) throw new Error('Acao antiga do historico diario nao encontrada')
 source = source.replace(dailyBefore, dailyAfter)
 
-const weeklyBefore = `                              {completed && (
+const weeklyStartMarker = `                              {completed && (
                                 <button
                                   type="button"
-                                  aria-label={needsPayment(appt) ? 'Receber atendimento concluido' : 'Imprimir ficha concluida'}
-                                  title={needsPayment(appt) ? 'Receber e lancar no caixa' : 'Imprimir ficha 80 mm'}
-                                  onClick={() => onCompletedAction(appt)}
-                                  className={\`shrink-0 rounded p-1 \${needsPayment(appt) ? 'text-amber-300 hover:bg-amber-500/15' : 'text-emerald-300 hover:bg-emerald-500/15'}\`}
-                                >
-                                  {needsPayment(appt) ? <Wallet size={11}/> : <Receipt size={11}/>} 
-                                </button>
-                              )}`
+                                  aria-label={needsPayment(appt) ? 'Receber atendimento concluido' : 'Imprimir ficha concluida'}`
+const weeklyEndMarker = `                              )}`
+const weeklyStart = source.indexOf(weeklyStartMarker)
+const weeklyEndStart = weeklyStart >= 0 ? source.indexOf(weeklyEndMarker, weeklyStart) : -1
+if (weeklyStart < 0 || weeklyEndStart < 0) throw new Error('Acao antiga do historico semanal nao encontrada')
+
 const weeklyAfter = `                              {completed && (
                                 <button
                                   type="button"
@@ -48,14 +46,7 @@ const weeklyAfter = `                              {completed && (
                                   <Receipt size={11}/>
                                 </button>
                               )}`
-
-if (!source.includes(weeklyBefore)) {
-  const weeklyFallbackBefore = weeklyBefore.replace(' />} \n', '/>}\n')
-  if (!source.includes(weeklyFallbackBefore)) throw new Error('Acao antiga do historico semanal nao encontrada')
-  source = source.replace(weeklyFallbackBefore, weeklyAfter)
-} else {
-  source = source.replace(weeklyBefore, weeklyAfter)
-}
+source = `${source.slice(0, weeklyStart)}${weeklyAfter}${source.slice(weeklyEndStart + weeklyEndMarker.length)}`
 
 await writeFile(pagePath, source)
 
