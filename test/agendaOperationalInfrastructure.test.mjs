@@ -10,8 +10,8 @@ import {
   operationalCommissionRate,
 } from '../src/modules/petshop/lib/appointmentOperational.js'
 
-test('agenda manual expoe exatamente duas vagas operacionais', () => {
-  assert.equal(MANUAL_SLOT_CAPACITY, 2)
+test('agenda manual expoe quatro colunas visuais sem limitar operacao', () => {
+  assert.equal(MANUAL_SLOT_CAPACITY, 4)
   assert.equal(appointmentOccupiesManualSlot({ status: 'agendado' }), true)
   assert.equal(appointmentOccupiesManualSlot({ status: 'concluido' }), false)
   assert.equal(appointmentOccupiesManualSlot({ status: 'cancelado' }), false)
@@ -31,8 +31,9 @@ test('comissao operacional usa 10 por cento para tosa e 5 para outros esteticos'
 })
 
 test('infraestrutura conecta capacidade, transporte e responsible_staff_key', async () => {
-  const [migration, staffMigration, catalogMigration, agenda, appointments, advanced, commissions, settings, authContext] = await Promise.all([
+  const [migration, freeSchedulingMigration, staffMigration, catalogMigration, agenda, appointments, advanced, commissions, settings, authContext] = await Promise.all([
     readFile(new URL('../supabase/migrations/20260727001000_agenda_capacity_operational_commissions.sql', import.meta.url), 'utf8'),
+    readFile(new URL('../supabase/migrations/20260730095500_agenda_free_overlap_visual_lanes.sql', import.meta.url), 'utf8'),
     readFile(new URL('../supabase/migrations/20260727003000_petshop_operational_staff_persistence.sql', import.meta.url), 'utf8'),
     readFile(new URL('../supabase/migrations/20260727004000_reconcile_agenda_service_catalog.sql', import.meta.url), 'utf8'),
     readFile(new URL('../src/modules/petshop/pages/AgendaPage.jsx', import.meta.url), 'utf8'),
@@ -55,19 +56,22 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
   assert.match(migration, /create or replace function public\.update_petshop_appointment_transaction[\s\S]*?as \$\$/)
   assert.ok(migration.includes('revenue * 0.10'))
   assert.ok(migration.includes('revenue * 0.05'))
-  assert.ok(agenda.includes('Vaga {laneIndex + 1} disponivel'))
+  assert.match(freeSchedulingMigration, /create or replace function public\.prevent_appointment_overlap/)
+  assert.match(freeSchedulingMigration, /begin\s+return new;\s+end;/)
+  assert.doesNotMatch(freeSchedulingMigration, /raise exception|v_overlap_count|responsible_staff_key/)
+  assert.ok(agenda.includes('Espaco visual {laneIndex + 1}'))
   assert.match(agenda, /agendaPeriod/)
   assert.match(agenda, /DAILY_SLOT_MINUTES = 10/)
   assert.match(agenda, /motodogDefaultsFromClient/)
   assert.match(agenda, /fillMotodogFromClient/)
   assert.match(agenda, /Duracao total do agendamento/)
   assert.match(agenda, /effectiveDuration/)
-  assert.match(agenda, /wouldExceedSlotCapacity/)
+  assert.doesNotMatch(agenda, /wouldExceedSlotCapacity|sameResponsibleConflict/)
   assert.match(agenda, /Agenda diaria em intervalos de 10 minutos/)
   assert.match(agenda, /label: String\(service.name/)
   assert.doesNotMatch(agenda, /friendlyPetshopServiceLabel/)
   assert.match(agenda, /days=\{agendaDays\}/)
-  assert.match(agenda, /activeAgendaTab === 'banho_tosa' \? MANUAL_SLOT_CAPACITY : 1/)
+  assert.match(agenda, /slotCapacity=\{MANUAL_SLOT_CAPACITY\}/)
   assert.match(staffMigration, /add column if not exists petshop_operational_staff/)
   assert.match(catalogMigration, /update public\.products product/)
   assert.match(catalogMigration, /set bot_metadata = coalesce/)
