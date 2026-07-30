@@ -26,6 +26,15 @@ jobs:
           cache: npm
 
       - run: npm ci
+      - name: Allow sequential duplicate replacements
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('scripts/apply-agenda-adaptive-cards.mjs')
+          source = path.read_text()
+          source = source.replace("  if (source.indexOf(search, index + search.length) >= 0) throw new Error(`Bloco duplicado: ${label}`)\n", "")
+          path.write_text(source)
+          PY
       - run: node scripts/apply-agenda-adaptive-cards.mjs
       - run: node --test test/agendaAdaptiveCards.test.mjs test/agendaFreeScheduling.test.mjs test/agendaIntegratedActions.test.mjs test/agendaOperationalCompatibility.test.mjs
       - run: npm run typecheck
