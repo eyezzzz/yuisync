@@ -10,8 +10,8 @@ Siga os passos abaixo para configurar o projeto localmente a partir do GitHub.
 
 Certifique-se de ter instalado em sua máquina:
 - [Node.js](https://nodejs.org/) (Recomendado v18+)
-- [npm](https://www.npmjs.com/) ou [yarn](https://yarnpkg.com/)
-- Uma conta no [Supabase](https://supabase.com/)
+- [npm](https://www.npmjs.com/) ou [yarn](https://www.npmjs.com/) 
+- Uma conta no [Supabase](https://www.supabase.com/)
 
 ### 2. Clonar o Repositório
 
@@ -74,7 +74,7 @@ Isso executará:
 
 ## 📂 Estrutura do Projeto
 
-- `src/`: Código fonte do frontend React.
+- `src/`: Código fonte do frontend (React).
 - `server/`: Código fonte do backend Node.js.
 - `database/`: Scripts SQL para configuração do banco de dados.
 - `supabase/`: Funções de borda (Edge Functions) do Supabase.
@@ -86,4 +86,4 @@ Isso executará:
 
 Este projeto está sob a licença ISC.
 
-<!-- production-deploy-retry: 2026-07-30T16:10:00-03:00 -->
+<!-- production-deploy-retry: 2026-07-29T15:15:00-03:00 -->
