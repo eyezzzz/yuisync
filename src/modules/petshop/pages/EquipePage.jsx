@@ -39,6 +39,7 @@ import {
   loadDeliveryTeamSnapshot,
 } from '../lib/deliveryOperations'
 import { persistPetshopTeamSettings } from '../lib/teamSettingsOperations'
+import { enrichPackageCommissionAppointments } from '../lib/packageCommissionOperations'
 
 const TABS = [
   { id: 'fechamento', label: 'Comissoes', icon: Wallet },
@@ -243,8 +244,16 @@ export default function EquipePage() {
           settings: storeSettings,
         }),
       ])
-      setPendingServices(snapshot.pendingServices || [])
-      setServiceHistory(snapshot.serviceHistory || [])
+      const pendingCount = (snapshot.pendingServices || []).length
+      const enrichedAppointments = await enrichPackageCommissionAppointments({
+        appointments: [...(snapshot.pendingServices || []), ...(snapshot.serviceHistory || [])],
+        moduleId: activeModuleId || 'petshop',
+        tenantId: activeTenantId,
+        settings: storeSettings,
+        catalogServices: serviceRows || [],
+      })
+      setPendingServices(enrichedAppointments.slice(0, pendingCount))
+      setServiceHistory(enrichedAppointments.slice(pendingCount))
       setServices(serviceRows || [])
       setDeliveryRows(deliveries || [])
     } catch (err) {
@@ -317,9 +326,11 @@ export default function EquipePage() {
 
   const totals = useMemo(() => displayRows.reduce((acc, row) => ({
     serviceCount: acc.serviceCount + Number(row.service_count || 0),
+    packageCount: acc.packageCount + Number(row.package_count || 0),
+    packageRevenue: acc.packageRevenue + Number(row.package_revenue || 0),
     serviceRevenue: acc.serviceRevenue + Number(row.service_revenue || 0),
     commission: acc.commission + Number(row.total_commission || 0),
-  }), { serviceCount: 0, serviceRevenue: 0, commission: 0 }), [displayRows])
+  }), { serviceCount: 0, packageCount: 0, packageRevenue: 0, serviceRevenue: 0, commission: 0 }), [displayRows])
 
   const deliverySummary = useMemo(() => {
     const map = new Map(configuredDeliveryStaff.map((person) => [person.key, {
@@ -464,6 +475,7 @@ export default function EquipePage() {
       <td>${row.bath_count}</td>
       <td>${row.machine_grooming_count}</td>
       <td>${row.scissor_grooming_count}</td>
+      <td>${row.package_count}</td>
       <td>${row.other_service_count}</td>
       <td class="money">${escapeHtml(fmtCurrency(row.service_revenue))}</td>
       <td class="money">${escapeHtml(fmtCurrency(row.total_commission))}</td>
@@ -471,9 +483,9 @@ export default function EquipePage() {
     openPrintDocument('Resumo geral de comissoes', `
       <h1>Resumo geral de comissoes</h1>
       <div class="meta">Periodo: ${escapeHtml(dateLabel(range.startDate))} a ${escapeHtml(dateLabel(range.endDate))}</div>
-      <table><thead><tr><th>Esteticista</th><th>Banhos</th><th>Tosa maquina/total</th><th>Tosa tesoura</th><th>Outros</th><th>Receita</th><th>Total a pagar</th></tr></thead>
-      <tbody>${bodyRows || '<tr><td colspan="7">Sem producao no periodo.</td></tr>'}</tbody>
-      <tfoot><tr class="total"><td colspan="5">Totais do periodo</td><td class="money">${escapeHtml(fmtCurrency(totals.serviceRevenue))}</td><td class="money">${escapeHtml(fmtCurrency(totals.commission))}</td></tr></tfoot></table>
+      <table><thead><tr><th>Esteticista</th><th>Banhos</th><th>Tosa maquina/total</th><th>Tosa tesoura</th><th>Pacote</th><th>Outros</th><th>Receita</th><th>Total a pagar</th></tr></thead>
+      <tbody>${bodyRows || '<tr><td colspan="8">Sem producao no periodo.</td></tr>'}</tbody>
+      <tfoot><tr class="total"><td colspan="6">Totais do periodo</td><td class="money">${escapeHtml(fmtCurrency(totals.serviceRevenue))}</td><td class="money">${escapeHtml(fmtCurrency(totals.commission))}</td></tr></tfoot></table>
     `)
   }
 
@@ -498,12 +510,13 @@ export default function EquipePage() {
 
   function exportCsv() {
     const lines = [
-      ['Esteticista', 'Banhos', 'Tosa maquina/total', 'Tosa tesoura', 'Outros', 'Receita', 'Comissao'].join(','),
+      ['Esteticista', 'Banhos', 'Tosa maquina/total', 'Tosa tesoura', 'Pacote', 'Outros', 'Receita', 'Comissao'].join(','),
       ...displayRows.map((row) => [
         `"${String(row.collaborator_name || '').replace(/"/g, '""')}"`,
         row.bath_count,
         row.machine_grooming_count,
         row.scissor_grooming_count,
+        row.package_count,
         row.other_service_count,
         Number(row.service_revenue || 0).toFixed(2),
         Number(row.total_commission || 0).toFixed(2),
@@ -582,13 +595,14 @@ export default function EquipePage() {
               <CheckCircle size={18} className="mt-0.5 text-emerald-400" />
               <div>
                 <p className="font-semibold text-text">Somente servicos de estetica entram na comissao</p>
-                <p className="mt-1 text-sm text-muted">Tosa 10%: maquina, total ou tesoura. Banho 5%. Outros 5%. MotoDog, transporte e entrega ficam fora deste calculo.</p>
+                <p className="mt-1 text-sm text-muted">Tosa 10%. Banho e demais servicos 5%. Pacotes usam o valor liquido por unidade; o valor integral do MotoDog e retirado antes da divisao. Transporte e entrega nao entram na comissao da esteticista.</p>
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
             <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Servicos concluidos</p><p className="font-display font-bold text-3xl text-text">{totals.serviceCount}</p></div>
+            <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Pacotes executados</p><p className="font-display font-bold text-3xl text-amber-400">{totals.packageCount}</p><p className="mt-1 text-xs text-muted">{fmtCurrency(totals.packageRevenue)} em servicos</p></div>
             <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Receita estetica</p><p className="font-display font-bold text-3xl text-emerald-400">{fmtCurrency(totals.serviceRevenue)}</p></div>
             <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Total a pagar</p><p className="font-display font-bold text-3xl text-amber-400">{fmtCurrency(totals.commission)}</p></div>
           </div>
@@ -600,28 +614,31 @@ export default function EquipePage() {
                 <div><p className="font-semibold text-text">Servicos esteticos concluidos sem responsavel</p><p className="text-sm text-muted mt-1">Escolha a esteticista para incluir estes atendimentos no fechamento.</p></div>
               </div>
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                {commissionPendingServices.slice(0, 12).map((appt) => (
-                  <div key={appt.id} className="rounded-xl border border-[var(--border)] bg-card px-4 py-3 text-sm">
-                    <p className="font-semibold text-text">{appt.client?.pet_name || appt.client?.owner_name || 'Pet'} - {commissionHistoryLabel(appt)}</p>
-                    <p className="text-xs text-muted mt-1">{dateLabel(appt.scheduled_at)} • {fmtCurrency(appt.price || 0)}</p>
-                    <select
-                      className="inp mt-3 text-xs"
-                      defaultValue=""
-                      disabled={assigningServiceId === appt.id || assignableStaff.length === 0}
-                      onChange={(event) => event.target.value && void assignPendingResponsible(appt, event.target.value)}
-                    >
-                      <option value="">{assigningServiceId === appt.id ? 'Salvando...' : 'Selecionar responsavel'}</option>
-                      {assignableStaff.map((person) => <option key={person.key} value={person.key}>{person.name}</option>)}
-                    </select>
-                  </div>
-                ))}
+                {commissionPendingServices.slice(0, 12).map((appt) => {
+                  const commissionValue = appointmentCommissionLines(appt).reduce((sum, line) => sum + Number(line.revenue || 0), 0)
+                  return (
+                    <div key={appt.id} className="rounded-xl border border-[var(--border)] bg-card px-4 py-3 text-sm">
+                      <p className="font-semibold text-text">{appt.client?.pet_name || appt.client?.owner_name || 'Pet'} - {commissionHistoryLabel(appt)}</p>
+                      <p className="text-xs text-muted mt-1">{dateLabel(appt.scheduled_at)} • base {fmtCurrency(commissionValue)}</p>
+                      <select
+                        className="inp mt-3 text-xs"
+                        defaultValue=""
+                        disabled={assigningServiceId === appt.id || assignableStaff.length === 0}
+                        onChange={(event) => event.target.value && void assignPendingResponsible(appt, event.target.value)}
+                      >
+                        <option value="">{assigningServiceId === appt.id ? 'Salvando...' : 'Selecionar responsavel'}</option>
+                        {assignableStaff.map((person) => <option key={person.key} value={person.key}>{person.name}</option>)}
+                      </select>
+                    </div>
+                  )
+                })}
               </div>
             </div>
           )}
 
           <div className="tbl-wrapper overflow-hidden">
-            <table className="tbl min-w-[1050px]">
-              <thead><tr><th>Esteticista</th><th>Banhos</th><th>Tosa maquina/total</th><th>Tosa tesoura</th><th>Outros</th><th>Receita</th><th>Total</th><th>Conferencia</th></tr></thead>
+            <table className="tbl min-w-[1130px]">
+              <thead><tr><th>Esteticista</th><th>Banhos</th><th>Tosa maquina/total</th><th>Tosa tesoura</th><th>Pacote</th><th>Outros</th><th>Receita</th><th>Total</th><th>Conferencia</th></tr></thead>
               <tbody>
                 {displayRows.map((row) => (
                   <tr key={row.staff_key}>
@@ -629,13 +646,14 @@ export default function EquipePage() {
                     <td>{row.bath_count}</td>
                     <td>{row.machine_grooming_count}</td>
                     <td>{row.scissor_grooming_count}</td>
+                    <td className="font-bold text-amber-400">{row.package_count}</td>
                     <td>{row.other_service_count}</td>
                     <td>{fmtCurrency(row.service_revenue)}</td>
                     <td className="text-emerald-400 font-bold">{fmtCurrency(row.total_commission)}</td>
                     <td><button type="button" title="Visualizar e imprimir historico" aria-label="Visualizar e imprimir historico" onClick={() => setHistoryRow(row)} className="btn btn-secondary btn-sm"><Eye size={13}/> Conferir</button></td>
                   </tr>
                 ))}
-                {!displayRows.length && !loading && <tr><td colSpan={8} className="text-center text-muted py-10">Sem producao concluida no periodo.</td></tr>}
+                {!displayRows.length && !loading && <tr><td colSpan={9} className="text-center text-muted py-10">Sem producao concluida no periodo.</td></tr>}
               </tbody>
             </table>
           </div>
@@ -659,9 +677,10 @@ export default function EquipePage() {
                     <div>{renderEditableStaffName(person)}<p className="mt-1 text-xs text-muted">{row?.service_count || 0} servico(s) no periodo</p></div>
                     <span className={`badge ${person.active === false ? 'badge-gray' : 'badge-green'}`}>{person.active === false ? 'Inativa' : 'Ativa'}</span>
                   </div>
-                  <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                  <div className="mt-5 grid grid-cols-4 gap-2 text-center">
                     <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Banhos</p><p className="font-bold text-emerald-400">{row?.bath_count || 0}</p></div>
-                    <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Tosas</p><p className="font-bold text-amber-400">{row?.grooming_count || 0}</p></div>
+                    <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Tosas</p><p className="font-bold text-blue-400">{row?.grooming_count || 0}</p></div>
+                    <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Pacotes</p><p className="font-bold text-amber-400">{row?.package_count || 0}</p></div>
                     <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Outros</p><p className="font-bold text-text">{row?.other_service_count || 0}</p></div>
                   </div>
                 </div>
