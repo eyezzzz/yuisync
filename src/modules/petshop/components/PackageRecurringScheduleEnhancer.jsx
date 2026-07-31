@@ -49,10 +49,61 @@ function preview(firstAt) {
   }).join(' · ')
 }
 
+function parseCheckoutDate(value = '') {
+  const match = String(value).match(/(\d{2})\/(\d{2})\/(\d{4}),\s*(\d{2}):(\d{2})/)
+  if (!match) return null
+  const date = new Date(
+    Number(match[3]),
+    Number(match[2]) - 1,
+    Number(match[1]),
+    Number(match[4]),
+    Number(match[5]),
+    0,
+    0,
+  )
+  return Number.isNaN(date.getTime()) ? null : date
+}
+
 function saleModal() {
   return [...document.querySelectorAll('.modal-overlay')].find((modal) => (
     normalize(modal.querySelector('h2')?.textContent).includes('vender pacote ao cliente')
   )) || null
+}
+
+function enhanceCheckoutScheduleCards() {
+  document.querySelectorAll('[data-yuisync-subscription-checkout-id]').forEach((card) => {
+    const paragraphs = [...card.querySelectorAll('p')]
+    const scheduleHeading = paragraphs.find((node) => (
+      normalize(node.textContent).includes('agenda semanal do pacote')
+    ))
+    const scheduleBox = scheduleHeading?.parentElement
+    if (!scheduleBox) return
+
+    paragraphs
+      .filter((node) => node !== scheduleHeading && /^\s*\d+\.\s+\d{2}\/\d{2}\/\d{4}/.test(node.textContent || ''))
+      .forEach((node) => {
+        const date = parseCheckoutDate(node.textContent)
+        if (!date) return
+        const legacy = date.getTime() < Date.now()
+        let status = node.querySelector('[data-yuisync-package-date-status]')
+        if (!status) {
+          status = document.createElement('span')
+          status.dataset.yuisyncPackageDateStatus = 'true'
+          status.className = 'mt-1 block text-[9px] font-black uppercase tracking-wide'
+          node.appendChild(status)
+        }
+        status.textContent = legacy ? 'Consumido como legado' : 'Reserva futura'
+        status.classList.toggle('text-amber-300', legacy)
+        status.classList.toggle('text-emerald-300', !legacy)
+        node.dataset.yuisyncPackageDateKind = legacy ? 'legacy' : 'future'
+      })
+  })
+
+  document.querySelectorAll('[data-yuisync-plans-checkout-section] p').forEach((node) => {
+    if (normalize(node.textContent).includes('ao confirmar, o saldo e liberado e as quatro semanas sao reservadas')) {
+      node.textContent = 'Ao confirmar, datas passadas serão consumidas como legado e somente as semanas futuras serão reservadas na Agenda.'
+    }
+  })
 }
 
 function enhanceSaleModal() {
@@ -60,8 +111,8 @@ function enhanceSaleModal() {
   const dateInput = modal?.querySelector('input[type="date"]')
   if (!modal || !dateInput) return
 
-  // O cadastro legado pode começar no passado. O banco consumirá as semanas
-  // vencidas e reservará somente as próximas.
+  // Cadastros legados podem começar no passado. As semanas vencidas serão
+  // consumidas e apenas as futuras serão criadas na Agenda.
   dateInput.removeAttribute('min')
 
   const dateBox = dateInput.closest('div')
@@ -140,6 +191,7 @@ export function PackageRecurringScheduleEnhancer() {
       frame = window.requestAnimationFrame(() => {
         frame = 0
         enhanceSaleModal()
+        enhanceCheckoutScheduleCards()
       })
     }
     schedule()
