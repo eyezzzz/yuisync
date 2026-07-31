@@ -36,13 +36,10 @@ begin
   if new.module_id <> 'petshop'
     or new.status <> 'active'
     or old.status = 'active'
+    or new.first_appointment_at is null
     or new.recurring_appointments_created_at is not null
   then
     return new;
-  end if;
-
-  if new.first_appointment_at is null then
-    raise exception 'Informe a primeira data e o horario do pacote antes de confirmar o pagamento.';
   end if;
 
   if new.first_appointment_at < now() - interval '5 minutes' then
