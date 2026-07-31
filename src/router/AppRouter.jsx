@@ -12,6 +12,7 @@ import { SystemSupportPriorityAlert } from '../components/SystemSupportPriorityA
 import { RouteErrorBoundary } from '../components/RouteErrorBoundary'
 import { LoadingState } from '../components/PageState'
 import { PerformanceModeButton } from '../components/PerformanceModeButton'
+import { PetshopOperationsEnhancer } from '../modules/petshop/components/PetshopOperationsEnhancer'
 
 const LoginPage = lazy(() => import('../shared/pages/LoginPage'))
 const LauncherPage = lazy(() => import('../shared/pages/LauncherPage'))
@@ -173,6 +174,7 @@ function AppLayout() {
           </RouteErrorBoundary>
         </main>
       </div>
+      {activeModuleId === 'petshop' && <PetshopOperationsEnhancer />}
       {activeModuleId === 'system' && <SystemSupportPriorityAlert />}
       {activeModuleId !== 'system' && !focusMode && <SupportWidget />}
     </div>
