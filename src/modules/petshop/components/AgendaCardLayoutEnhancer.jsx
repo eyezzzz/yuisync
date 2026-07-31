@@ -1,0 +1,64 @@
+const STYLES = `
+  .yuisync-agenda-card-surface .yuisync-card-content {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) !important;
+    align-content: start !important;
+  }
+
+  .yuisync-agenda-card-surface .yuisync-card-header {
+    order: 1 !important;
+    min-height: 20px !important;
+    margin-bottom: 0 !important;
+  }
+
+  .yuisync-agenda-card-surface .yuisync-card-body {
+    display: contents !important;
+  }
+
+  .yuisync-agenda-card-surface .yuisync-card-transport,
+  .yuisync-agenda-card-surface[data-yuisync-motodog='false'] .yuisync-card-transport {
+    order: 2 !important;
+    display: block !important;
+    min-width: 0 !important;
+    margin: 0 0 2px !important;
+    font-size: 8.5px !important;
+    line-height: 1.05 !important;
+    font-weight: 800 !important;
+  }
+
+  .yuisync-agenda-card-surface .yuisync-card-transport > p:first-child {
+    display: flex !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .yuisync-agenda-card-surface .yuisync-card-transport > p:not(:first-child) {
+    display: none !important;
+  }
+
+  .yuisync-agenda-card-surface .yuisync-card-pet { order: 3 !important; }
+  .yuisync-agenda-card-surface .yuisync-card-tutor { order: 4 !important; }
+  .yuisync-agenda-card-surface .yuisync-card-service { order: 5 !important; }
+  .yuisync-agenda-card-surface .yuisync-card-responsible { order: 6 !important; }
+
+  .yuisync-agenda-card-surface .yuisync-card-pet,
+  .yuisync-agenda-card-surface .yuisync-card-tutor,
+  .yuisync-agenda-card-surface .yuisync-card-service > span:first-child {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+  }
+
+  .yuisync-agenda-card-surface[data-yuisync-density='comfortable'] .yuisync-card-pet,
+  .yuisync-agenda-card-surface[data-yuisync-density='comfortable'] .yuisync-card-tutor,
+  .yuisync-agenda-card-surface[data-yuisync-density='compact'] .yuisync-card-pet,
+  .yuisync-agenda-card-surface[data-yuisync-density='compact'] .yuisync-card-tutor {
+    -webkit-line-clamp: 2 !important;
+  }
+`
+
+export function AgendaCardLayoutEnhancer() {
+  return <style>{STYLES}</style>
+}
