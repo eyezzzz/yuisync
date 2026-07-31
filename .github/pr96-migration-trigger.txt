@@ -1,1 +1,0 @@
-Aplicar a migration 20260731174500 apos dry-run e verificacao de backup.
