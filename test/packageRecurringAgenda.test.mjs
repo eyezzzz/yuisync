@@ -12,10 +12,12 @@ test('transporte aparece logo apos o cabecalho e antes dos nomes', async () => {
   assert.match(source, /data-yuisync-motodog='false'[\s\S]*display:\s*block\s*!important/)
 })
 
-test('card de pacote preserva selo e remove o valor zero do visual', async () => {
+test('card de pacote preserva selo na coluna do valor e remove o valor zero', async () => {
   const source = await read('src/modules/petshop/components/AgendaCardLayoutEnhancer.jsx')
   assert.match(source, /data-yuisync-card-kind='package'[\s\S]*\.yuisync-card-tutor[\s\S]*text-overflow:\s*ellipsis/)
+  assert.match(source, /data-yuisync-card-kind='package'[\s\S]*\.yuisync-card-service\s*\{[\s\S]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s*auto/)
   assert.match(source, /data-yuisync-card-kind='package'[\s\S]*\.yuisync-card-service > span:first-child[\s\S]*-webkit-line-clamp:\s*2/)
+  assert.match(source, /\.yuisync-package-label\s*\{[\s\S]*grid-column:\s*2\s*!important/)
   assert.match(source, /\.yuisync-package-label::before[\s\S]*content:\s*'PACOTE'/)
   assert.doesNotMatch(source, /content:\s*'R\$ 0,00'/)
 })
