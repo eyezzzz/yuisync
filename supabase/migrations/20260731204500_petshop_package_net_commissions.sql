@@ -44,6 +44,10 @@ begin
 
   if not found then return 0; end if;
 
+  if not public.has_tenant_access(v_tenant_id) then
+    raise exception 'Assinatura fora do tenant ativo.';
+  end if;
+
   select to_jsonb(settings)
   into v_settings
   from public.settings settings
@@ -52,7 +56,7 @@ begin
   limit 1;
 
   select case
-    when coalesce(option->>'fee', '') ~ '^\d+(\.\d+)?$' then (option->>'fee')::numeric
+    when coalesce(option->>'fee', '') ~ '^[0-9]+(\.[0-9]+)?$' then (option->>'fee')::numeric
     else null
   end
   into v_transport_fee
@@ -68,7 +72,7 @@ begin
 
   if v_transport_fee is null then
     v_transport_fee := case
-      when coalesce(v_settings->>'pet_transport_fee', '') ~ '^\d+(\.\d+)?$'
+      when coalesce(v_settings->>'pet_transport_fee', '') ~ '^[0-9]+(\.[0-9]+)?$'
         then (v_settings->>'pet_transport_fee')::numeric
       else 20
     end;
@@ -78,7 +82,7 @@ begin
     select
       item,
       coalesce(nullif(item->>'service_code', ''), nullif(item->>'service_type', '')) as code,
-      case when coalesce(item->>'qty_per_cycle', '') ~ '^\d+$'
+      case when coalesce(item->>'qty_per_cycle', '') ~ '^[0-9]+$'
         then greatest(0, (item->>'qty_per_cycle')::integer)
         else 0
       end as qty,
