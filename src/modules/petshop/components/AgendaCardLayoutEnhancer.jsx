@@ -58,7 +58,7 @@ const STYLES = `
     -webkit-line-clamp: 2 !important;
   }
 
-  /* Microajuste final: pacote ganha uma linha exclusiva para selo e valor. */
+  /* Pacote preserva o selo e elimina o valor R$ 0,00, que nao agrega informacao. */
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-tutor {
     display: block !important;
     overflow: hidden !important;
@@ -79,35 +79,23 @@ const STYLES = `
 
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-package-label {
     grid-column: 1 !important;
-    display: grid !important;
-    width: 100% !important;
-    grid-template-columns: minmax(0, 1fr) auto !important;
-    align-items: center !important;
-    gap: 6px !important;
+    display: block !important;
+    width: fit-content !important;
+    max-width: 100% !important;
     overflow: hidden !important;
     color: transparent !important;
     font-size: 0 !important;
     line-height: 1 !important;
-    white-space: normal !important;
+    white-space: nowrap !important;
   }
 
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-package-label::before {
     content: 'PACOTE';
-    min-width: 0;
     color: #fef3c7;
     font-size: 9px;
     line-height: 1.1;
     font-weight: 900;
     letter-spacing: .03em;
-  }
-
-  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-package-label::after {
-    content: 'R$ 0,00';
-    color: #fef3c7;
-    font-size: 9px;
-    line-height: 1.1;
-    font-weight: 900;
-    white-space: nowrap;
   }
 `
 
