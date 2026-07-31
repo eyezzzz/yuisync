@@ -1,12 +1,6 @@
 name: Apply pet team delivery improvements
 
 on:
-  push:
-    branches:
-      - agent/pet-cards-commissions-motoboy
-    paths:
-      - scripts/apply-pet-team-delivery-improvements.py
-      - .github/workflows/apply-pet-team-delivery-improvements.yml
   pull_request:
     branches:
       - main
@@ -33,6 +27,32 @@ jobs:
 
       - name: Apply implementation
         run: python3 scripts/apply-pet-team-delivery-improvements.py
+
+      - name: Preserve commission compatibility labels
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path('src/modules/petshop/pages/EquipePage.jsx')
+          content = path.read_text()
+
+          old_rate = 'Tosa na maquina, total ou tesoura recebe 10%.'
+          new_rate = 'Tosa 10%: maquina, total ou tesoura. Banho e outros servicos esteticos recebem 5%.'
+          if old_rate not in content:
+              raise SystemExit('Texto da taxa de tosa nao encontrado.')
+          content = content.replace(
+              'Tosa na maquina, total ou tesoura recebe 10%. Banho e outros servicos esteticos recebem 5%.',
+              new_rate,
+              1,
+          )
+
+          old_button = '<button type="button" onClick={() => setHistoryRow(row)} className="btn btn-secondary btn-sm"><Eye size={13}/> Conferir</button>'
+          new_button = '<button type="button" title="Visualizar e imprimir historico" aria-label="Visualizar e imprimir historico" onClick={() => setHistoryRow(row)} className="btn btn-secondary btn-sm"><Eye size={13}/> Conferir</button>'
+          if old_button not in content:
+              raise SystemExit('Botao de conferencia nao encontrado.')
+          content = content.replace(old_button, new_button, 1)
+          path.write_text(content)
+          PY
 
       - name: Install dependencies
         run: npm ci
