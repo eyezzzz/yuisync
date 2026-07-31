@@ -15,6 +15,7 @@ import { PerformanceModeButton } from '../components/PerformanceModeButton'
 import { PetshopOperationsEnhancer } from '../modules/petshop/components/PetshopOperationsEnhancer'
 import { AgendaCardLayoutEnhancer } from '../modules/petshop/components/AgendaCardLayoutEnhancer'
 import { PackageRecurringScheduleEnhancer } from '../modules/petshop/components/PackageRecurringScheduleEnhancer'
+import { DashboardAgendaLabelsEnhancer } from '../modules/petshop/components/DashboardAgendaLabelsEnhancer'
 
 const LoginPage = lazy(() => import('../shared/pages/LoginPage'))
 const LauncherPage = lazy(() => import('../shared/pages/LauncherPage'))
@@ -181,6 +182,7 @@ function AppLayout() {
           <PetshopOperationsEnhancer />
           <AgendaCardLayoutEnhancer />
           <PackageRecurringScheduleEnhancer />
+          <DashboardAgendaLabelsEnhancer />
         </>
       )}
       {activeModuleId === 'system' && <SystemSupportPriorityAlert />}
