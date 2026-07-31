@@ -17,6 +17,12 @@ export const DEFAULT_PETSHOP_OPERATIONAL_STAFF = [
   { key: 'esteticista-2', name: 'Esteticista 2', active: true },
 ]
 
+export const PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY = '__petshop_delivery_staff'
+
+export const DEFAULT_PETSHOP_DELIVERY_STAFF = [
+  { key: 'motoboy-1', name: 'Motoboy 1', active: true },
+]
+
 export const DEFAULT_PETSHOP_SERVICE_DURATIONS = {
   small: {
     min_weight_kg: 0,
@@ -51,6 +57,29 @@ export function normalizeOperationalStaff(value = DEFAULT_PETSHOP_OPERATIONAL_ST
       return {
         key,
         name: clean(item?.name || item?.full_name || fallback?.name || `Esteticista ${index + 1}`),
+        active: item?.active !== false,
+      }
+    })
+    .filter((item) => item.name && !seen.has(item.key) && seen.add(item.key))
+}
+
+export function normalizeDeliveryStaff(value = DEFAULT_PETSHOP_DELIVERY_STAFF) {
+  const rows = Array.isArray(value) && value.length ? value : DEFAULT_PETSHOP_DELIVERY_STAFF
+  const seen = new Set()
+  return rows
+    .slice(0, 4)
+    .map((item, index) => {
+      const fallback = DEFAULT_PETSHOP_DELIVERY_STAFF[index]
+      const rawKey = clean(item?.key || item?.id || fallback?.key || `motoboy-${index + 1}`)
+      const key = rawKey
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || `motoboy-${index + 1}`
+      return {
+        key,
+        name: clean(item?.name || item?.full_name || fallback?.name || `Motoboy ${index + 1}`),
         active: item?.active !== false,
       }
     })

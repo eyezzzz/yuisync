@@ -2,12 +2,15 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   AlertTriangle,
+  Bike,
   CheckCircle,
   Download,
   Eye,
   Percent,
   Printer,
   RefreshCw,
+  RotateCcw,
+  Truck,
   Users,
   Wallet,
   X,
@@ -15,11 +18,25 @@ import {
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency } from '../../../lib/supabase'
 import { useAuthCtx } from '../../../context/AuthContext'
+import { useModuleCtx } from '../../../context/ModuleContext'
 import { normalizeOperationalStaff } from '../../../../shared/petshopOperations'
+import {
+  appointmentCommissionLines,
+  appointmentHasCommissionServices,
+  buildCommissionRows,
+  commissionHistoryLabel,
+} from '../lib/teamCommissionSummary'
+import {
+  assignAppointmentDeliveryStaff,
+  assignSaleDeliveryStaff,
+  deliveryStaffFromSettings,
+  loadDeliveryTeamSnapshot,
+} from '../lib/deliveryOperations'
 
 const TABS = [
   { id: 'fechamento', label: 'Comissoes', icon: Wallet },
   { id: 'esteticistas', label: 'Esteticistas', icon: Users },
+  { id: 'motoboy', label: 'Motoboy', icon: Bike },
 ]
 
 const emptyRange = () => {
@@ -31,7 +48,6 @@ const emptyRange = () => {
 }
 
 const dateLabel = (value) => value ? new Date(value).toLocaleDateString('pt-BR') : '-'
-const serviceName = (services, code) => services.find((service) => service.code === code)?.name || code || '-'
 const escapeHtml = (value = '') => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -39,51 +55,54 @@ const escapeHtml = (value = '') => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;')
 
-function serviceHistoryName(services, appointment = {}) {
-  const itemLabels = (Array.isArray(appointment.service_items) ? appointment.service_items : [])
-    .map((item) => item?.name || item?.label || serviceName(services, item?.service_type || item?.code || item?.value))
-    .filter((label) => label && label !== '-')
-  if (itemLabels.length) return [...new Set(itemLabels)].join(' + ')
-  return serviceName(services, appointment.service_type)
+function openPrintDocument(title, body) {
+  const printWindow = window.open('', '_blank', 'width=1080,height=780')
+  if (!printWindow) return
+  printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title><style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; color: #111; margin: 0; font-size: 10px; }
+    h1 { font-size: 18px; margin: 0 0 5px; }
+    .meta { margin-bottom: 12px; color: #444; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #aaa; padding: 6px; text-align: left; vertical-align: top; }
+    th { background: #eee; font-size: 9px; text-transform: uppercase; }
+    .money { text-align: right; white-space: nowrap; }
+    .total { font-weight: 800; }
+  </style></head><body>${body}</body></html>`)
+  printWindow.document.close()
+  setTimeout(() => {
+    printWindow.focus()
+    printWindow.print()
+  }, 180)
 }
 
-function CommissionHistoryModal({ row, items, services, range, onClose }) {
-  const total = items.reduce((sum, item) => sum + Number(item.price || 0), 0)
+function CommissionHistoryModal({ row, items, range, onClose }) {
   const responsibleName = row?.collaborator_name || row?.staff_key || 'Responsavel'
+  const lineRows = items.flatMap((appointment) => appointmentCommissionLines(appointment).map((line, index) => ({
+    id: `${appointment.id}:${index}`,
+    appointment,
+    line,
+  })))
+  const revenue = lineRows.reduce((sum, item) => sum + Number(item.line.revenue || 0), 0)
+  const commission = lineRows.reduce((sum, item) => sum + Number(item.line.commission || 0), 0)
 
   function printHistory() {
-    const printWindow = window.open('', '_blank', 'width=980,height=760')
-    if (!printWindow) return
-    const bodyRows = items.map((item) => `<tr>
-      <td>${escapeHtml(dateLabel(item.scheduled_at))}</td>
-      <td>${escapeHtml(item.client?.owner_name || '-')}</td>
-      <td>${escapeHtml(item.client?.pet_name || '-')}</td>
-      <td>${escapeHtml(serviceHistoryName(services, item))}</td>
-      <td class="money">${escapeHtml(fmtCurrency(item.price || 0))}</td>
+    const rows = lineRows.map(({ appointment, line }) => `<tr>
+      <td>${escapeHtml(dateLabel(appointment.scheduled_at))}</td>
+      <td>${escapeHtml(appointment.client?.owner_name || '-')}</td>
+      <td>${escapeHtml(appointment.client?.pet_name || '-')}</td>
+      <td>${escapeHtml(line.label)}</td>
+      <td class="money">${escapeHtml(fmtCurrency(line.revenue))}</td>
+      <td class="money">${escapeHtml(fmtCurrency(line.commission))}</td>
     </tr>`).join('')
-    printWindow.document.write(`<!doctype html><html><head><meta charset="utf-8"><title>Conferencia - ${escapeHtml(responsibleName)}</title><style>
-      @page { size: A4 portrait; margin: 12mm; }
-      * { box-sizing: border-box; }
-      body { font-family: Arial, sans-serif; color: #111; margin: 0; font-size: 11px; }
-      h1 { font-size: 18px; margin: 0 0 4px; }
-      .meta { margin-bottom: 14px; color: #444; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { border: 1px solid #bbb; padding: 6px; text-align: left; vertical-align: top; }
-      th { background: #eee; font-size: 10px; text-transform: uppercase; }
-      .money { text-align: right; white-space: nowrap; }
-      tfoot td { font-weight: 700; }
-    </style></head><body>
+    openPrintDocument(`Conferencia - ${responsibleName}`, `
       <h1>Historico de servicos - ${escapeHtml(responsibleName)}</h1>
-      <div class="meta">Periodo: ${escapeHtml(dateLabel(range.startDate))} a ${escapeHtml(dateLabel(range.endDate))} · ${items.length} atendimento(s)</div>
-      <table><thead><tr><th>Data</th><th>Tutor</th><th>Pet</th><th>Servico</th><th>Valor</th></tr></thead>
-      <tbody>${bodyRows || '<tr><td colspan="5">Nenhum atendimento no periodo.</td></tr>'}</tbody>
-      <tfoot><tr><td colspan="4">Total conferido</td><td class="money">${escapeHtml(fmtCurrency(total))}</td></tr></tfoot></table>
-    </body></html>`)
-    printWindow.document.close()
-    setTimeout(() => {
-      printWindow.focus()
-      printWindow.print()
-    }, 180)
+      <div class="meta">Periodo: ${escapeHtml(dateLabel(range.startDate))} a ${escapeHtml(dateLabel(range.endDate))}</div>
+      <table><thead><tr><th>Data</th><th>Tutor</th><th>Pet</th><th>Servico</th><th>Valor</th><th>Comissao</th></tr></thead>
+      <tbody>${rows || '<tr><td colspan="6">Nenhum atendimento no periodo.</td></tr>'}</tbody>
+      <tfoot><tr class="total"><td colspan="4">Totais</td><td class="money">${escapeHtml(fmtCurrency(revenue))}</td><td class="money">${escapeHtml(fmtCurrency(commission))}</td></tr></tfoot></table>
+    `)
   }
 
   return createPortal(
@@ -92,27 +111,28 @@ function CommissionHistoryModal({ row, items, services, range, onClose }) {
         <div className="modal-header">
           <div>
             <h2 className="font-display text-xl font-bold text-text">Historico de {responsibleName}</h2>
-            <p className="mt-1 text-sm text-muted">{dateLabel(range.startDate)} a {dateLabel(range.endDate)} · {items.length} atendimento(s)</p>
+            <p className="mt-1 text-sm text-muted">{dateLabel(range.startDate)} a {dateLabel(range.endDate)} · {lineRows.length} servico(s)</p>
           </div>
           <button type="button" aria-label="Fechar historico" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
         <div className="modal-body space-y-4">
           <div className="overflow-x-auto rounded-xl border border-[var(--border)]">
-            <table className="tbl min-w-[760px]">
-              <thead><tr><th>Data</th><th>Tutor</th><th>Pet</th><th>Servico</th><th>Valor</th></tr></thead>
+            <table className="tbl min-w-[820px]">
+              <thead><tr><th>Data</th><th>Tutor</th><th>Pet</th><th>Servico</th><th>Valor</th><th>Comissao</th></tr></thead>
               <tbody>
-                {items.map((item) => (
-                  <tr key={item.id}>
-                    <td>{dateLabel(item.scheduled_at)}</td>
-                    <td>{item.client?.owner_name || '-'}</td>
-                    <td className="font-semibold text-text">{item.client?.pet_name || '-'}</td>
-                    <td>{serviceHistoryName(services, item)}</td>
-                    <td className="font-semibold text-emerald-400">{fmtCurrency(item.price || 0)}</td>
+                {lineRows.map(({ id, appointment, line }) => (
+                  <tr key={id}>
+                    <td>{dateLabel(appointment.scheduled_at)}</td>
+                    <td>{appointment.client?.owner_name || '-'}</td>
+                    <td className="font-semibold text-text">{appointment.client?.pet_name || '-'}</td>
+                    <td>{line.label}</td>
+                    <td>{fmtCurrency(line.revenue)}</td>
+                    <td className="font-semibold text-emerald-400">{fmtCurrency(line.commission)}</td>
                   </tr>
                 ))}
-                {!items.length && <tr><td colSpan={5} className="py-10 text-center text-muted">Nenhum atendimento concluido para esta responsavel no periodo.</td></tr>}
+                {!lineRows.length && <tr><td colSpan={6} className="py-10 text-center text-muted">Nenhum servico comissionavel no periodo.</td></tr>}
               </tbody>
-              <tfoot><tr><td colSpan={4} className="font-bold text-text">Total conferido</td><td className="font-bold text-emerald-400">{fmtCurrency(total)}</td></tr></tfoot>
+              <tfoot><tr><td colSpan={4} className="font-bold text-text">Total conferido</td><td className="font-bold">{fmtCurrency(revenue)}</td><td className="font-bold text-emerald-400">{fmtCurrency(commission)}</td></tr></tfoot>
             </table>
           </div>
           <div className="flex justify-end gap-3">
@@ -129,26 +149,32 @@ function CommissionHistoryModal({ row, items, services, range, onClose }) {
 export default function EquipePage() {
   const {
     loadTeamSnapshot,
-    exportCommissionCsv,
     loadPetshopServices,
     assignPendingServiceResponsible,
   } = usePetshopAdvanced()
-  const { storeSettings } = useAuthCtx()
+  const auth = useAuthCtx()
+  const { activeModuleId } = useModuleCtx()
+  const { storeSettings, activeTenantId } = auth
 
   const [activeTab, setActiveTab] = useState('fechamento')
-  const [rows, setRows] = useState([])
   const [pendingServices, setPendingServices] = useState([])
   const [serviceHistory, setServiceHistory] = useState([])
   const [historyRow, setHistoryRow] = useState(null)
   const [services, setServices] = useState([])
+  const [deliveryRows, setDeliveryRows] = useState([])
   const [range, setRange] = useState(emptyRange)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [assigningServiceId, setAssigningServiceId] = useState('')
+  const [assigningDeliveryId, setAssigningDeliveryId] = useState('')
 
   const configuredStaff = useMemo(
     () => normalizeOperationalStaff(storeSettings?.petshop_operational_staff),
     [storeSettings?.petshop_operational_staff],
+  )
+  const configuredDeliveryStaff = useMemo(
+    () => deliveryStaffFromSettings(storeSettings),
+    [storeSettings],
   )
   const configuredStaffByKey = useMemo(
     () => new Map(configuredStaff.map((person) => [person.key, person])),
@@ -158,40 +184,40 @@ export default function EquipePage() {
     () => configuredStaff.filter((person) => person.active !== false),
     [configuredStaff],
   )
-  const displayRows = useMemo(() => rows.map((row) => ({
-    ...row,
-    collaborator_name: configuredStaffByKey.get(row.staff_key)?.name
-      || row.collaborator_name
-      || row.staff_key,
-  })), [configuredStaffByKey, rows])
-
-  const staffCards = useMemo(() => {
-    const map = new Map(configuredStaff.map((person) => [person.key, person]))
-    rows.forEach((row) => {
-      if (!row.staff_key || map.has(row.staff_key)) return
-      map.set(row.staff_key, {
-        key: row.staff_key,
-        name: row.collaborator_name || row.staff_key,
-        active: row.detail?.active !== false,
-      })
-    })
-    return [...map.values()]
-  }, [configuredStaff, rows])
+  const assignableDeliveryStaff = useMemo(
+    () => configuredDeliveryStaff.filter((person) => person.active !== false),
+    [configuredDeliveryStaff],
+  )
+  const displayRows = useMemo(
+    () => buildCommissionRows(serviceHistory, configuredStaff),
+    [configuredStaff, serviceHistory],
+  )
+  const commissionPendingServices = useMemo(
+    () => pendingServices.filter(appointmentHasCommissionServices),
+    [pendingServices],
+  )
 
   async function reload(nextRange = range) {
     setLoading(true)
     setError('')
     try {
-      const [snapshot, serviceRows] = await Promise.all([
+      const [snapshot, serviceRows, deliveries] = await Promise.all([
         loadTeamSnapshot(nextRange),
         loadPetshopServices(),
+        loadDeliveryTeamSnapshot({
+          moduleId: activeModuleId || 'petshop',
+          tenantId: activeTenantId,
+          startDate: nextRange.startDate,
+          endDate: nextRange.endDate,
+          settings: storeSettings,
+        }),
       ])
-      setRows(snapshot.rows || [])
       setPendingServices(snapshot.pendingServices || [])
       setServiceHistory(snapshot.serviceHistory || [])
       setServices(serviceRows || [])
+      setDeliveryRows(deliveries || [])
     } catch (err) {
-      setError(err.message)
+      setError(err.message || 'Nao foi possivel carregar a equipe.')
     } finally {
       setLoading(false)
     }
@@ -201,7 +227,6 @@ export default function EquipePage() {
     if (!appointment?.id || !staffKey || appointment.responsible_staff_key) return
     const person = configuredStaffByKey.get(staffKey)
     if (!person) return
-
     setAssigningServiceId(appointment.id)
     setError('')
     try {
@@ -214,27 +239,144 @@ export default function EquipePage() {
     }
   }
 
+  async function assignDelivery(row, staffKey) {
+    const person = configuredDeliveryStaff.find((item) => item.key === staffKey)
+    if (!row || !person) return
+    setAssigningDeliveryId(row.id)
+    setError('')
+    try {
+      if (row.record_type === 'appointment') {
+        await assignAppointmentDeliveryStaff({
+          moduleId: activeModuleId || 'petshop',
+          tenantId: activeTenantId,
+          appointmentId: row.appointment_id,
+          staff: person,
+        })
+      } else {
+        await assignSaleDeliveryStaff({
+          moduleId: activeModuleId || 'petshop',
+          tenantId: activeTenantId,
+          saleId: row.sale_id,
+          staff: person,
+          deliveryValue: row.delivery_value,
+        })
+      }
+      await reload(range)
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setAssigningDeliveryId('')
+    }
+  }
+
   useEffect(() => {
     reload()
   }, [])
 
   const selectedHistoryItems = useMemo(() => historyRow?.staff_key
-    ? serviceHistory.filter((item) => item.responsible_staff_key === historyRow.staff_key)
+    ? serviceHistory.filter((item) => (
+      item.responsible_staff_key === historyRow.staff_key
+      && appointmentHasCommissionServices(item)
+    ))
     : [], [historyRow, serviceHistory])
 
   const totals = useMemo(() => displayRows.reduce((acc, row) => ({
     serviceCount: acc.serviceCount + Number(row.service_count || 0),
     serviceRevenue: acc.serviceRevenue + Number(row.service_revenue || 0),
-    groomingCommission: acc.groomingCommission + Number(row.grooming_commission || 0),
-    otherCommission: acc.otherCommission + Number(row.other_service_commission || 0),
     commission: acc.commission + Number(row.total_commission || 0),
-  }), {
-    serviceCount: 0,
-    serviceRevenue: 0,
-    groomingCommission: 0,
-    otherCommission: 0,
-    commission: 0,
-  }), [displayRows])
+  }), { serviceCount: 0, serviceRevenue: 0, commission: 0 }), [displayRows])
+
+  const deliverySummary = useMemo(() => {
+    const map = new Map(configuredDeliveryStaff.map((person) => [person.key, {
+      staff_key: person.key,
+      staff_name: person.name,
+      active: person.active !== false,
+      count: 0,
+      total: 0,
+    }]))
+    deliveryRows.forEach((row) => {
+      const key = row.staff_key || 'sem-responsavel'
+      if (!map.has(key)) {
+        map.set(key, {
+          staff_key: key,
+          staff_name: row.staff_name || 'Sem motoboy',
+          active: true,
+          count: 0,
+          total: 0,
+        })
+      }
+      const item = map.get(key)
+      item.count += 1
+      item.total += Number(row.delivery_value || 0)
+    })
+    return [...map.values()]
+  }, [configuredDeliveryStaff, deliveryRows])
+
+  function resetRange() {
+    const next = emptyRange()
+    setRange(next)
+    void reload(next)
+  }
+
+  function printCommissionSummary() {
+    const bodyRows = displayRows.map((row) => `<tr>
+      <td>${escapeHtml(row.collaborator_name)}</td>
+      <td>${row.bath_count}</td>
+      <td>${row.machine_grooming_count}</td>
+      <td>${row.scissor_grooming_count}</td>
+      <td>${row.other_service_count}</td>
+      <td class="money">${escapeHtml(fmtCurrency(row.service_revenue))}</td>
+      <td class="money">${escapeHtml(fmtCurrency(row.total_commission))}</td>
+    </tr>`).join('')
+    openPrintDocument('Resumo geral de comissoes', `
+      <h1>Resumo geral de comissoes</h1>
+      <div class="meta">Periodo: ${escapeHtml(dateLabel(range.startDate))} a ${escapeHtml(dateLabel(range.endDate))}</div>
+      <table><thead><tr><th>Esteticista</th><th>Banhos</th><th>Tosa maquina/total</th><th>Tosa tesoura</th><th>Outros</th><th>Receita</th><th>Total a pagar</th></tr></thead>
+      <tbody>${bodyRows || '<tr><td colspan="7">Sem producao no periodo.</td></tr>'}</tbody>
+      <tfoot><tr class="total"><td colspan="5">Totais do periodo</td><td class="money">${escapeHtml(fmtCurrency(totals.serviceRevenue))}</td><td class="money">${escapeHtml(fmtCurrency(totals.commission))}</td></tr></tfoot></table>
+    `)
+  }
+
+  function printDeliverySummary() {
+    const total = deliveryRows.reduce((sum, row) => sum + Number(row.delivery_value || 0), 0)
+    const bodyRows = deliveryRows.map((row) => `<tr>
+      <td>${escapeHtml(dateLabel(row.occurred_at))}</td>
+      <td>${escapeHtml(row.staff_name || 'Sem motoboy')}</td>
+      <td>${escapeHtml(row.client_name)}</td>
+      <td>${escapeHtml(row.pet_name || '-')}</td>
+      <td>${escapeHtml(row.source_label)}</td>
+      <td class="money">${escapeHtml(fmtCurrency(row.delivery_value))}</td>
+    </tr>`).join('')
+    openPrintDocument('Resumo de entregas', `
+      <h1>Resumo de entregas e MotoDog</h1>
+      <div class="meta">Periodo: ${escapeHtml(dateLabel(range.startDate))} a ${escapeHtml(dateLabel(range.endDate))}</div>
+      <table><thead><tr><th>Data</th><th>Motoboy</th><th>Cliente</th><th>Pet</th><th>Origem</th><th>Valor integral</th></tr></thead>
+      <tbody>${bodyRows || '<tr><td colspan="6">Sem entregas concluidas no periodo.</td></tr>'}</tbody>
+      <tfoot><tr class="total"><td colspan="5">Total das entregas</td><td class="money">${escapeHtml(fmtCurrency(total))}</td></tr></tfoot></table>
+    `)
+  }
+
+  function exportCsv() {
+    const lines = [
+      ['Esteticista', 'Banhos', 'Tosa maquina/total', 'Tosa tesoura', 'Outros', 'Receita', 'Comissao'].join(','),
+      ...displayRows.map((row) => [
+        `"${String(row.collaborator_name || '').replace(/"/g, '""')}"`,
+        row.bath_count,
+        row.machine_grooming_count,
+        row.scissor_grooming_count,
+        row.other_service_count,
+        Number(row.service_revenue || 0).toFixed(2),
+        Number(row.total_commission || 0).toFixed(2),
+      ].join(',')),
+    ]
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `comissoes-${range.startDate}-${range.endDate}.csv`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
 
   return (
     <div className="page animate-fade-up space-y-6">
@@ -242,19 +384,17 @@ export default function EquipePage() {
         <div>
           <h1 className="page-title flex items-center gap-2">
             <Percent size={22} className="text-emerald-400" />
-            Comissoes
+            Equipe & Comissoes
           </h1>
-          <p className="page-sub">Fechamento automatico dos responsaveis escolhidos na Agenda.</p>
+          <p className="page-sub">Estetica e entregas operacionais sem criar usuarios ou logins.</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <button onClick={() => reload()} className="btn btn-secondary">
             <RefreshCw size={15} className={loading ? 'animate-spin' : ''} /> Atualizar
           </button>
-          {activeTab === 'fechamento' && (
-            <button onClick={() => exportCommissionCsv(displayRows)} className="btn btn-secondary">
-              <Download size={15} /> Exportar CSV
-            </button>
-          )}
+          {activeTab === 'fechamento' && <button onClick={exportCsv} className="btn btn-secondary"><Download size={15}/> Exportar CSV</button>}
+          {activeTab === 'fechamento' && <button onClick={printCommissionSummary} className="btn btn-primary"><Printer size={15}/> Imprimir resumo geral</button>}
+          {activeTab === 'motoboy' && <button onClick={printDeliverySummary} className="btn btn-primary"><Printer size={15}/> Imprimir total</button>}
         </div>
       </div>
 
@@ -276,10 +416,15 @@ export default function EquipePage() {
         })}
       </div>
 
-      {error && (
-        <p className="text-sm rounded-xl px-4 py-3 bg-red-500/10 text-red-400 border border-red-500/20">
-          {error}
-        </p>
+      {error && <p className="text-sm rounded-xl px-4 py-3 bg-red-500/10 text-red-400 border border-red-500/20">{error}</p>}
+
+      {(activeTab === 'fechamento' || activeTab === 'motoboy') && (
+        <div className="flex items-end gap-3 flex-wrap">
+          <div><label className="inp-label">Inicio</label><input className="inp" type="date" value={range.startDate} onChange={(event) => setRange((prev) => ({ ...prev, startDate: event.target.value }))}/></div>
+          <div><label className="inp-label">Fim</label><input className="inp" type="date" value={range.endDate} onChange={(event) => setRange((prev) => ({ ...prev, endDate: event.target.value }))}/></div>
+          <button onClick={() => reload(range)} className="btn btn-primary"><RefreshCw size={15}/> Recalcular</button>
+          <button onClick={resetRange} className="btn btn-secondary"><RotateCcw size={15}/> Resetar periodo</button>
+        </div>
       )}
 
       {activeTab === 'fechamento' && (
@@ -288,85 +433,37 @@ export default function EquipePage() {
             <div className="flex items-start gap-3">
               <CheckCircle size={18} className="mt-0.5 text-emerald-400" />
               <div>
-                <p className="font-semibold text-text">Calculo automatico por servico concluido</p>
-                <p className="mt-1 text-sm text-muted">
-                  Tosa recebe 10%. Banho e qualquer outro servico estetico recebem 5%. O responsavel vem diretamente da Agenda.
-                </p>
+                <p className="font-semibold text-text">Somente servicos de estetica entram na comissao</p>
+                <p className="mt-1 text-sm text-muted">Tosa 10%: maquina, total ou tesoura. Banho 5%. Outros 5%. MotoDog, transporte e entrega ficam fora deste calculo. MotoDog, transporte e entrega ficam fora deste calculo.</p>
               </div>
             </div>
-          </div>
-
-          <div className="flex items-end gap-3 flex-wrap">
-            <div>
-              <label className="inp-label">Inicio</label>
-              <input
-                aria-label="Data inicial das comissoes"
-                className="inp"
-                type="date"
-                value={range.startDate}
-                onChange={(event) => setRange((prev) => ({ ...prev, startDate: event.target.value }))}
-              />
-            </div>
-            <div>
-              <label className="inp-label">Fim</label>
-              <input
-                aria-label="Data final das comissoes"
-                className="inp"
-                type="date"
-                value={range.endDate}
-                onChange={(event) => setRange((prev) => ({ ...prev, endDate: event.target.value }))}
-              />
-            </div>
-            <button onClick={() => reload(range)} className="btn btn-primary">
-              <RefreshCw size={15} /> Recalcular
-            </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="bg-card border border-[var(--border)] rounded-xl p-5">
-              <p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Servicos concluidos</p>
-              <p className="font-display font-bold text-3xl text-text">{totals.serviceCount}</p>
-            </div>
-            <div className="bg-card border border-[var(--border)] rounded-xl p-5">
-              <p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Receita estetica</p>
-              <p className="font-display font-bold text-3xl text-emerald-400">{fmtCurrency(totals.serviceRevenue)}</p>
-            </div>
-            <div className="bg-card border border-[var(--border)] rounded-xl p-5">
-              <p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Total a pagar</p>
-              <p className="font-display font-bold text-3xl text-amber-400">{fmtCurrency(totals.commission)}</p>
-            </div>
+            <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Servicos concluidos</p><p className="font-display font-bold text-3xl text-text">{totals.serviceCount}</p></div>
+            <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Receita estetica</p><p className="font-display font-bold text-3xl text-emerald-400">{fmtCurrency(totals.serviceRevenue)}</p></div>
+            <div className="bg-card border border-[var(--border)] rounded-xl p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold mb-2">Total a pagar</p><p className="font-display font-bold text-3xl text-amber-400">{fmtCurrency(totals.commission)}</p></div>
           </div>
 
-          {pendingServices.length > 0 && (
+          {commissionPendingServices.length > 0 && (
             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-5">
               <div className="flex items-start gap-3">
                 <AlertTriangle size={18} className="text-amber-400 mt-0.5" />
-                <div>
-                  <p className="font-semibold text-text">Servicos concluidos sem responsavel</p>
-                  <p className="text-sm text-muted mt-1">Escolha abaixo o responsavel para incluir estes atendimentos no fechamento.</p>
-                </div>
+                <div><p className="font-semibold text-text">Servicos esteticos concluidos sem responsavel</p><p className="text-sm text-muted mt-1">Escolha a esteticista para incluir estes atendimentos no fechamento.</p></div>
               </div>
               <div className="mt-4 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
-                {pendingServices.slice(0, 9).map((appt) => (
+                {commissionPendingServices.slice(0, 12).map((appt) => (
                   <div key={appt.id} className="rounded-xl border border-[var(--border)] bg-card px-4 py-3 text-sm">
-                    <p className="font-semibold text-text">
-                      {appt.client?.pet_name || appt.client?.owner_name || 'Pet'} - {serviceName(services, appt.service_type)}
-                    </p>
+                    <p className="font-semibold text-text">{appt.client?.pet_name || appt.client?.owner_name || 'Pet'} - {commissionHistoryLabel(appt)}</p>
                     <p className="text-xs text-muted mt-1">{dateLabel(appt.scheduled_at)} • {fmtCurrency(appt.price || 0)}</p>
                     <select
-                      aria-label={`Responsavel manual do servico ${appt.id}`}
                       className="inp mt-3 text-xs"
                       defaultValue=""
                       disabled={assigningServiceId === appt.id || assignableStaff.length === 0}
-                      onChange={(event) => {
-                        const staffKey = event.target.value
-                        if (staffKey) void assignPendingResponsible(appt, staffKey)
-                      }}
+                      onChange={(event) => event.target.value && void assignPendingResponsible(appt, event.target.value)}
                     >
                       <option value="">{assigningServiceId === appt.id ? 'Salvando...' : 'Selecionar responsavel'}</option>
-                      {assignableStaff.map((person) => (
-                        <option key={person.key} value={person.key}>{person.name}</option>
-                      ))}
+                      {assignableStaff.map((person) => <option key={person.key} value={person.key}>{person.name}</option>)}
                     </select>
                   </div>
                 ))}
@@ -375,103 +472,105 @@ export default function EquipePage() {
           )}
 
           <div className="tbl-wrapper overflow-hidden">
-            <table className="tbl">
-              <thead>
-                <tr>
-                  <th>Esteticista</th>
-                  <th>Servicos</th>
-                  <th>Receita</th>
-                  <th>Tosa 10%</th>
-                  <th>Outros 5%</th>
-                  <th>Total</th>
-                  <th>Conferencia</th>
-                </tr>
-              </thead>
+            <table className="tbl min-w-[1050px]">
+              <thead><tr><th>Esteticista</th><th>Banhos</th><th>Tosa maquina/total</th><th>Tosa tesoura</th><th>Outros</th><th>Receita</th><th>Total</th><th>Conferencia</th></tr></thead>
               <tbody>
                 {displayRows.map((row) => (
-                  <tr key={row.staff_key || row.profile_id}>
-                    <td className="font-semibold text-text">{row.collaborator_name || row.staff_key}</td>
-                    <td>
-                      <span className="font-semibold">{row.service_count || 0}</span>
-                      <span className="ml-2 text-xs text-muted">
-                        ({row.grooming_count || 0} tosa · {row.other_service_count || 0} outros)
-                      </span>
-                    </td>
-                    <td>{fmtCurrency(row.service_revenue || 0)}</td>
-                    <td className="text-amber-400 font-semibold">{fmtCurrency(row.grooming_commission || 0)}</td>
-                    <td className="text-amber-400 font-semibold">{fmtCurrency(row.other_service_commission || 0)}</td>
-                    <td className="text-emerald-400 font-bold">{fmtCurrency(row.total_commission || 0)}</td>
-                    <td>
-                      <button
-                        type="button"
-                        aria-label={`Visualizar historico de ${row.collaborator_name || row.staff_key}`}
-                        title="Visualizar e imprimir historico"
-                        disabled={!row.staff_key}
-                        onClick={() => setHistoryRow(row)}
-                        className="btn btn-secondary btn-sm justify-center"
-                      >
-                        <Eye size={13}/> Conferir
-                      </button>
-                    </td>
+                  <tr key={row.staff_key}>
+                    <td className="font-semibold text-text">{row.collaborator_name}</td>
+                    <td>{row.bath_count}</td>
+                    <td>{row.machine_grooming_count}</td>
+                    <td>{row.scissor_grooming_count}</td>
+                    <td>{row.other_service_count}</td>
+                    <td>{fmtCurrency(row.service_revenue)}</td>
+                    <td className="text-emerald-400 font-bold">{fmtCurrency(row.total_commission)}</td>
+                    <td><button type="button" title="Visualizar e imprimir historico" aria-label="Visualizar e imprimir historico" onClick={() => setHistoryRow(row)} className="btn btn-secondary btn-sm"><Eye size={13}/> Conferir</button></td>
                   </tr>
                 ))}
-                {!rows.length && !loading && (
-                  <tr><td colSpan={7} className="text-center text-muted py-10">Sem producao concluida no periodo.</td></tr>
-                )}
+                {!displayRows.length && !loading && <tr><td colSpan={8} className="text-center text-muted py-10">Sem producao concluida no periodo.</td></tr>}
               </tbody>
             </table>
           </div>
         </div>
       )}
 
-      {historyRow && (
-        <CommissionHistoryModal
-          row={historyRow}
-          items={selectedHistoryItems}
-          services={services}
-          range={range}
-          onClose={() => setHistoryRow(null)}
-        />
-      )}
+      {historyRow && <CommissionHistoryModal row={historyRow} items={selectedHistoryItems} range={range} onClose={() => setHistoryRow(null)}/>}
 
       {activeTab === 'esteticistas' && (
         <div className="space-y-4">
           <div className="rounded-2xl border border-[var(--border)] bg-card px-5 py-4">
-            <p className="font-semibold text-text">Mesmos responsaveis da Agenda</p>
-            <p className="mt-1 text-sm text-muted">
-              Estes cadastros sao operacionais e nao criam login, email ou usuario no YuiSync. O nome selecionado no campo Responsavel da Agenda e o usado no fechamento.
-            </p>
+            <p className="font-semibold text-text">Mesmas profissionais da Agenda</p>
+            <p className="mt-1 text-sm text-muted">Cadastros operacionais definidos em Configuracoes, sem login, e-mail ou usuario no YuiSync.</p>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {configuredStaff.map((person) => {
+              const row = displayRows.find((item) => item.staff_key === person.key)
+              return (
+                <div key={person.key} className="rounded-2xl border border-[var(--border)] bg-card p-5">
+                  <div className="flex items-start justify-between gap-3">
+                    <div><p className="font-display text-lg font-bold text-text">{person.name}</p><p className="mt-1 text-xs text-muted">{row?.service_count || 0} servico(s) no periodo</p></div>
+                    <span className={`badge ${person.active === false ? 'badge-gray' : 'badge-green'}`}>{person.active === false ? 'Inativa' : 'Ativa'}</span>
+                  </div>
+                  <div className="mt-5 grid grid-cols-3 gap-2 text-center">
+                    <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Banhos</p><p className="font-bold text-emerald-400">{row?.bath_count || 0}</p></div>
+                    <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Tosas</p><p className="font-bold text-amber-400">{row?.grooming_count || 0}</p></div>
+                    <div className="rounded-xl border border-[var(--border2)] p-3"><p className="text-[10px] text-muted uppercase">Outros</p><p className="font-bold text-text">{row?.other_service_count || 0}</p></div>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'motoboy' && (
+        <div className="space-y-5">
+          <div className="rounded-2xl border border-sky-500/25 bg-sky-500/8 px-5 py-4">
+            <div className="flex items-start gap-3">
+              <Truck size={18} className="mt-0.5 text-sky-400"/>
+              <div><p className="font-semibold text-text">Entregas concluidas por agendamento e venda</p><p className="mt-1 text-sm text-muted">O valor exibido e integral: taxa do MotoDog no agendamento ou taxa de entrega da venda. Motoboys sao configurados manualmente, sem acesso ao sistema.</p></div>
+            </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-            {staffCards.map((person) => (
-              <div key={person.key} className="rounded-2xl border border-[var(--border)] bg-card p-5">
-                <div className="flex items-start justify-between gap-3">
-                  <div>
-                    <p className="font-display text-lg font-bold text-text">{person.name}</p>
-                    <p className="mt-1 text-xs text-muted">Identificador: {person.key}</p>
-                  </div>
-                  <span className={`badge ${person.active === false ? 'badge-gray' : 'badge-green'}`}>
-                    {person.active === false ? 'Inativo' : 'Ativo'}
-                  </span>
-                </div>
-                <div className="mt-5 grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-[var(--border2)] bg-white/[0.03] px-3 py-3">
-                    <p className="text-[10px] uppercase tracking-widest text-muted font-bold">Tosa</p>
-                    <p className="mt-1 text-xl font-black text-amber-400">10%</p>
-                  </div>
-                  <div className="rounded-xl border border-[var(--border2)] bg-white/[0.03] px-3 py-3">
-                    <p className="text-[10px] uppercase tracking-widest text-muted font-bold">Outros</p>
-                    <p className="mt-1 text-xl font-black text-amber-400">5%</p>
-                  </div>
-                </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+            {deliverySummary.map((item) => (
+              <div key={item.staff_key} className="rounded-2xl border border-[var(--border)] bg-card p-5">
+                <p className="font-display text-lg font-bold text-text">{item.staff_name}</p>
+                <p className="mt-2 text-sm text-muted">{item.count} entrega(s)</p>
+                <p className="mt-3 text-2xl font-black text-sky-400">{fmtCurrency(item.total)}</p>
               </div>
             ))}
-            {!staffCards.length && (
-              <div className="rounded-2xl border border-dashed border-[var(--border)] p-8 text-center text-sm text-muted">
-                Nenhum esteticista operacional configurado.
-              </div>
-            )}
+          </div>
+
+          <div className="tbl-wrapper overflow-hidden">
+            <table className="tbl min-w-[930px]">
+              <thead><tr><th>Data</th><th>Motoboy</th><th>Cliente</th><th>Pet</th><th>Origem</th><th>Valor integral</th></tr></thead>
+              <tbody>
+                {deliveryRows.map((row) => (
+                  <tr key={row.id}>
+                    <td>{dateLabel(row.occurred_at)}</td>
+                    <td>
+                      {row.staff_key ? <span className="font-semibold text-text">{row.staff_name || row.staff_key}</span> : (
+                        <select
+                          className="inp min-w-[170px] text-xs"
+                          defaultValue=""
+                          disabled={assigningDeliveryId === row.id || assignableDeliveryStaff.length === 0}
+                          onChange={(event) => event.target.value && void assignDelivery(row, event.target.value)}
+                        >
+                          <option value="">{assigningDeliveryId === row.id ? 'Salvando...' : 'Selecionar motoboy'}</option>
+                          {assignableDeliveryStaff.map((person) => <option key={person.key} value={person.key}>{person.name}</option>)}
+                        </select>
+                      )}
+                    </td>
+                    <td className="font-semibold text-text">{row.client_name}</td>
+                    <td>{row.pet_name || '-'}</td>
+                    <td>{row.source_label}</td>
+                    <td className="font-bold text-sky-400">{fmtCurrency(row.delivery_value)}</td>
+                  </tr>
+                ))}
+                {!deliveryRows.length && !loading && <tr><td colSpan={6} className="text-center text-muted py-10">Sem entregas concluidas no periodo.</td></tr>}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

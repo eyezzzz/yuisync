@@ -12,12 +12,15 @@ import { MODULES } from '../../config/modules'
 import { buildTenantPayload, isTenantSchemaError, runWithTenantFallback } from '../../lib/tenant'
 import { DEFAULT_PETBOT_PROMPT } from '../../../shared/petbotPrompt'
 import {
+  DEFAULT_PETSHOP_DELIVERY_STAFF,
   DEFAULT_PETSHOP_OPERATIONAL_STAFF,
   DEFAULT_PETSHOP_SERVICE_DURATIONS,
   DEFAULT_VETERINARY_BUSINESS_HOURS,
   DEFAULT_VETERINARY_NAME,
+  normalizeDeliveryStaff,
   normalizeOperationalStaff,
   normalizeServiceDurations,
+  PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY,
 } from '../../../shared/petshopOperations'
 
 const DEFAULT_STORE_BUSINESS_HOURS = {
@@ -102,6 +105,7 @@ const INITIAL_FORM = {
   veterinary_name: DEFAULT_VETERINARY_NAME,
   veterinary_business_hours: DEFAULT_VETERINARY_BUSINESS_HOURS,
   petshop_operational_staff: DEFAULT_PETSHOP_OPERATIONAL_STAFF,
+  petshop_delivery_staff: DEFAULT_PETSHOP_DELIVERY_STAFF,
   petshop_service_durations: DEFAULT_PETSHOP_SERVICE_DURATIONS,
   appointment_reminder_enabled: false,
   appointment_reminder_lead_min: '60',
@@ -353,6 +357,7 @@ export default function SettingsPage() {
           veterinary_name: data.veterinary_name || DEFAULT_VETERINARY_NAME,
           veterinary_business_hours: normalizeBusinessHours(data.veterinary_business_hours, DEFAULT_VETERINARY_BUSINESS_HOURS),
           petshop_operational_staff: normalizeOperationalStaff(data.petshop_operational_staff ?? data.message_templates?.[OPERATIONAL_STAFF_TEMPLATE_KEY]),
+          petshop_delivery_staff: normalizeDeliveryStaff(data.message_templates?.[PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY]),
           petshop_service_durations: normalizeServiceDurations(data.petshop_service_durations),
           appointment_reminder_enabled: toBool(data.appointment_reminder_enabled, false),
           appointment_reminder_lead_min: data.appointment_reminder_lead_min != null ? String(data.appointment_reminder_lead_min) : '60',
@@ -437,9 +442,11 @@ export default function SettingsPage() {
   async function persistOperationalStaff({ announce = false } = {}) {
     if (!canEdit || effectiveModId !== 'petshop') return null
     const expectedStaff = normalizeOperationalStaff(form.petshop_operational_staff)
+    const expectedDeliveryStaff = normalizeDeliveryStaff(form.petshop_delivery_staff)
     const templates = {
       ...normalizeTemplates(form.message_templates),
       [OPERATIONAL_STAFF_TEMPLATE_KEY]: expectedStaff,
+      [PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY]: expectedDeliveryStaff,
     }
 
     if (announce) {
@@ -472,14 +479,19 @@ export default function SettingsPage() {
       const savedRaw = response.data?.petshop_operational_staff
         ?? response.data?.message_templates?.[OPERATIONAL_STAFF_TEMPLATE_KEY]
       const savedStaff = normalizeOperationalStaff(savedRaw)
+      const savedDeliveryStaff = normalizeDeliveryStaff(
+        response.data?.message_templates?.[PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY],
+      )
       const signature = (rows) => JSON.stringify(rows.map(({ key, name, active }) => ({ key, name, active })))
-      if (signature(savedStaff) !== signature(expectedStaff)) {
-        throw new Error('O banco nao confirmou os nomes informados para a equipe operacional.')
+      if (signature(savedStaff) !== signature(expectedStaff)
+        || signature(savedDeliveryStaff) !== signature(expectedDeliveryStaff)) {
+        throw new Error('O banco nao confirmou os nomes informados para as equipes operacionais.')
       }
 
       setForm((current) => ({
         ...current,
         petshop_operational_staff: savedStaff,
+        petshop_delivery_staff: savedDeliveryStaff,
         message_templates: templates,
       }))
       await auth.refreshSettings(effectiveModId)
@@ -513,11 +525,16 @@ export default function SettingsPage() {
 
     try {
       const upsertResponse = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+        const { petshop_delivery_staff: _deliveryStaff, ...persistableForm } = form
         const row = buildTenantPayload({
           module_id: effectiveModId,
-          ...form,
+          ...persistableForm,
           pet_transport_options: serializeTransportOptions(form.pet_transport_options),
-          message_templates: normalizeTemplates(form.message_templates),
+          message_templates: {
+            ...normalizeTemplates(form.message_templates),
+            [OPERATIONAL_STAFF_TEMPLATE_KEY]: normalizeOperationalStaff(form.petshop_operational_staff),
+            [PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY]: normalizeDeliveryStaff(form.petshop_delivery_staff),
+          },
           petbot_autonomy_allowlist: String(form.petbot_autonomy_allowlist || '').split(/[,\n]/).map((value) => value.trim()).filter(Boolean),
           petbot_timezone: String(form.petbot_timezone || 'America/Sao_Paulo').trim(),
           store_business_hours: normalizeBusinessHours(form.store_business_hours, DEFAULT_STORE_BUSINESS_HOURS),
@@ -675,6 +692,38 @@ export default function SettingsPage() {
         petshop_operational_staff: [
           ...rows,
           { key: `esteticista-${nextIndex}`, name: `Esteticista ${nextIndex}`, active: true },
+        ],
+      }
+    })
+  }
+
+  function updateDeliveryStaff(index, patch) {
+    setStaffMsg({ type: '', text: '' })
+    setForm((prev) => {
+      const rows = Array.isArray(prev.petshop_delivery_staff)
+        ? prev.petshop_delivery_staff
+        : normalizeDeliveryStaff(prev.petshop_delivery_staff)
+      return {
+        ...prev,
+        petshop_delivery_staff: rows.map((item, itemIndex) => (
+          itemIndex === index ? { ...item, ...patch } : item
+        )),
+      }
+    })
+  }
+
+  function addDeliveryStaff() {
+    setStaffMsg({ type: '', text: '' })
+    setForm((prev) => {
+      const rows = Array.isArray(prev.petshop_delivery_staff)
+        ? prev.petshop_delivery_staff
+        : normalizeDeliveryStaff(prev.petshop_delivery_staff)
+      const nextIndex = rows.length + 1
+      return {
+        ...prev,
+        petshop_delivery_staff: [
+          ...rows,
+          { key: `motoboy-${nextIndex}`, name: `Motoboy ${nextIndex}`, active: true },
         ],
       }
     })
@@ -1213,6 +1262,34 @@ export default function SettingsPage() {
                       </p>
                     )}
                   </div>
+                </div>
+              </div>
+
+              <div className="bg-card border border-white/5 rounded-3xl p-8 shadow-sm space-y-6">
+                <div className="flex items-center gap-2">
+                  <Truck size={16} />
+                  <div>
+                    <h4 className="font-bold">Equipe operacional de entregas</h4>
+                    <p className="text-xs text-muted">Motoboys definidos manualmente, sem login, e-mail ou cadastro de usuario no YuiSync.</p>
+                  </div>
+                </div>
+                <div className="space-y-3">
+                  {(Array.isArray(form.petshop_delivery_staff)
+                    ? form.petshop_delivery_staff
+                    : normalizeDeliveryStaff(form.petshop_delivery_staff)
+                  ).map((person, index) => (
+                    <div key={person.key} className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_110px] items-center gap-3 rounded-2xl border border-white/5 bg-white/[0.02] p-4">
+                      <div className="min-w-0">
+                        <label className="inp-label">Motoboy {index + 1}</label>
+                        <input className="inp" disabled={!canEdit} value={person.name} onChange={(event) => updateDeliveryStaff(index, { name: event.target.value })}/>
+                      </div>
+                      <label className="flex items-center gap-2 text-xs text-muted"><input type="checkbox" disabled={!canEdit} checked={person.active !== false} onChange={(event) => updateDeliveryStaff(index, { active: event.target.checked })}/>Ativo</label>
+                    </div>
+                  ))}
+                  {(Array.isArray(form.petshop_delivery_staff) ? form.petshop_delivery_staff : normalizeDeliveryStaff(form.petshop_delivery_staff)).length < 4 && (
+                    <button type="button" disabled={!canEdit} className="btn btn-secondary" onClick={addDeliveryStaff}><Plus size={14}/> Adicionar motoboy</button>
+                  )}
+                  <div className="flex flex-wrap items-center gap-3 pt-2"><button type="button" disabled={!canEdit || savingStaff} className="btn btn-primary gap-2" onClick={() => persistOperationalStaff({ announce: true })}>{savingStaff ? <RefreshCw size={14} className="animate-spin"/> : <Save size={14}/>} {savingStaff ? 'Salvando equipes...' : 'Salvar equipes'}</button></div>
                 </div>
               </div>
 

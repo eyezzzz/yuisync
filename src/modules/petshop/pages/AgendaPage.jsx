@@ -20,8 +20,10 @@ import {
 import { groupPetsByTutor } from '../../../shared/lib/petTutorGroups'
 import { serviceIcon } from '../lib/petshopTeam'
 import {
+  normalizeDeliveryStaff,
   normalizeOperationalStaff,
   normalizeServiceDurations,
+  PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY,
   resolvePetshopServiceDuration,
 } from '../../../../shared/petshopOperations'
 import {
@@ -141,6 +143,7 @@ function MotodogAgendaInfo({ appt, compact = false }) {
         <p className="mt-1 text-muted">Referencia: {appt.motodog.reference}</p>
       )}
       {motodog && contactPhone && <p className="mt-1 text-muted">Contato: {contactPhone}</p>}
+      {motodog && appt.motodog?.staff_name && <p className="mt-1 text-muted">Motoboy: {appt.motodog.staff_name}</p>}
       {motodog && contactEmail && <p className="mt-1 text-muted">E-mail: {contactEmail}</p>}
     </div>
   )
@@ -370,7 +373,7 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
 }
 
 // ── Modal de Agendamento ──────────────────────────────────────────────────────
-function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubscriptions, onManagePets, pets, services = SERVICES, subscriptions = [], staff = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
+function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubscriptions, onManagePets, pets, services = SERVICES, subscriptions = [], staff = [], deliveryStaff = [], transportOptions = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
   const isEdit = !!appt?.id
   const now = new Date()
   const defaultDate = appt?.date || isoDate(now)
@@ -397,6 +400,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
   const initialServiceCodes = existingCodes.length > 0 ? existingCodes : []
   const serviceGroupLabel = serviceGroup === 'veterinaria' ? 'Servicos veterinarios' : 'Servicos de banho/tosa'
   const staffOptions = normalizeOperationalStaff(staff).filter((person) => person.active)
+  const deliveryStaffOptions = normalizeDeliveryStaff(deliveryStaff).filter((person) => person.active)
 
   const [form, setForm] = useState({
     pet_id: isEdit ? appt.pets?.id || appt.client_id || '' : '',
@@ -407,6 +411,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     status: isEdit ? appt.status || 'agendado' : 'agendado',
     notes: isEdit ? appt.notes || '' : '',
     responsible_staff_key: isEdit ? appt.responsible_staff_key || '' : '',
+    delivery_staff_key: isEdit ? appt.delivery_staff_key || appt.motodog?.staff_key || '' : '',
     transport_mode: isEdit ? appt.motodog?.mode || 'cliente_leva' : 'cliente_leva',
     transport_address: isEdit ? appt.motodog?.address || '' : '',
     transport_neighborhood: isEdit ? appt.motodog?.neighborhood || '' : '',
@@ -652,6 +657,8 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
         notes: form.notes,
         responsible_staff_key: form.responsible_staff_key || null,
         responsible_staff_name: staffOptions.find((person) => person.key === form.responsible_staff_key)?.name || null,
+        delivery_staff_key: isMotodogTransportMode(form.transport_mode) ? (form.delivery_staff_key || null) : null,
+        delivery_staff_name: isMotodogTransportMode(form.transport_mode) ? deliveryStaffOptions.find((person) => person.key === form.delivery_staff_key)?.name || null : null,
         transport_mode: form.transport_mode || 'cliente_leva',
         transport_label: appointmentTransportLabel(form.transport_mode),
         transport_address: isMotodogTransportMode(form.transport_mode) ? form.transport_address || null : null,
@@ -1016,6 +1023,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                     setForm((current) => ({
                       ...current,
                       transport_mode: mode,
+                      delivery_staff_key: isMotodogTransportMode(mode) ? current.delivery_staff_key : '',
                       ...(isMotodogTransportMode(mode) && selectedPet
                         ? fillMotodogFromClient(current, selectedPet)
                         : {}),
@@ -1030,7 +1038,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
               </div>
 
               {isMotodogTransportMode(form.transport_mode) && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3"><div className="md:col-span-2"><label className="inp-label">Motoboy responsavel</label><select className="inp" value={form.delivery_staff_key} onChange={(event) => set('delivery_staff_key', event.target.value)}><option value="">Definir depois</option>{deliveryStaffOptions.map((person) => <option key={person.key} value={person.key}>{person.name}</option>)}</select>{deliveryStaffOptions.length === 0 && <p className="mt-1 text-xs text-amber-400">Cadastre o motoboy em Configuracoes &gt; Geral.</p>}</div>
                   <div className="md:col-span-2">
                     <label className="inp-label">Rua e numero</label>
                     <input className="inp" value={form.transport_address} onChange={(event) => set('transport_address', event.target.value)} placeholder="Rua, numero e complemento"/>
@@ -1493,6 +1501,7 @@ export default function AgendaPage({ setPage }) {
   const [agendaServices, setAgendaServices] = useState(SERVICES)
   const [subscriptions, setSubscriptions] = useState([])
   const staff = useMemo(() => normalizeOperationalStaff(storeSettings?.petshop_operational_staff), [storeSettings?.petshop_operational_staff])
+  const deliveryStaff = useMemo(() => normalizeDeliveryStaff(storeSettings?.petshop_delivery_staff || storeSettings?.message_templates?.[PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY]), [storeSettings?.petshop_delivery_staff, storeSettings?.message_templates])
 
   const staffById = useMemo(() => new Map((staff || []).map((person) => [person.key, person])), [staff])
   const transportOptions = useMemo(() => normalizeTransportOptions(storeSettings), [storeSettings])
@@ -1862,6 +1871,8 @@ export default function AgendaPage({ setPage }) {
           services={agendaServices}
           subscriptions={subscriptions}
           staff={staff}
+          deliveryStaff={deliveryStaff}
+          transportOptions={transportOptions}
           serviceDurations={storeSettings?.petshop_service_durations}
           onSearchClients={searchPets}
           appointments={appointments}

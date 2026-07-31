@@ -12,6 +12,8 @@ import { useClients }     from '../../../shared/hooks/useClients'
 import { useAuthCtx }  from '../../../context/AuthContext'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency, todayISO } from '../../../lib/supabase'
+import { normalizeDeliveryStaff, PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY } from '../../../../shared/petshopOperations'
+import { assignSaleDeliveryStaff } from '../lib/deliveryOperations'
 import { printThermalReceipt } from '../../../lib/thermalPrint'
 import { ProductCategorySelect } from '../../../components/ProductCategorySelect'
 import { BASE_PRODUCT_CATEGORIES, resolveCategoryMeta } from '../../../shared/lib/productCategories'
@@ -576,11 +578,13 @@ export default function VendasPage() {
   const [petId, setPetId]       = useState('')
   const [saleSource, setSaleSource] = useState('pdv')
   const [fulfillmentType, setFulfillmentType] = useState('balcao')
+  const [deliveryStaffKey, setDeliveryStaffKey] = useState('')
   const [paymentBreakdownEnabled, setPaymentBreakdownEnabled] = useState(false)
   const [paymentBreakdown, setPaymentBreakdown] = useState(DEFAULT_PAYMENT_SPLITS)
   const [sellers, setSellers] = useState([])
   const [sellerId, setSellerId] = useState(auth?.profile?.id || '')
   const [saving, setSaving]     = useState(false)
+  const deliveryStaff = useMemo(() => normalizeDeliveryStaff(auth?.storeSettings?.petshop_delivery_staff || auth?.storeSettings?.message_templates?.[PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY]).filter((person) => person.active !== false), [auth?.storeSettings])
   const checkoutAttemptRef = useRef({ fingerprint: '', key: '' })
   const [err, setErr]           = useState('')
   const [successSale, setSuccessSale] = useState(null)
@@ -937,6 +941,10 @@ export default function VendasPage() {
         idempotency_key: checkoutAttemptRef.current.key,
       }, cart)
       
+      if (fulfillmentType === 'entrega' && deliveryStaffKey) {
+        const selectedDeliveryStaff = deliveryStaff.find((person) => person.key === deliveryStaffKey)
+        if (selectedDeliveryStaff) await assignSaleDeliveryStaff({ moduleId: 'petshop', tenantId: auth?.activeTenantId, saleId: createdSale.id, staff: selectedDeliveryStaff, deliveryValue: deliveryFee })
+      }
       setSuccessSale({
         id: createdSale?.id,
         cart: [...cart],
@@ -950,6 +958,7 @@ export default function VendasPage() {
         fulfillmentType: createdSale?.fulfillment_type || (saleSource === 'whatsapp' ? fulfillmentType : 'balcao'),
       })
       clearCart()
+      setDeliveryStaffKey('')
       checkoutAttemptRef.current = { fingerprint: '', key: '' }
       await reloadHistoryScope()
       getDailyStats().then(setDailyStats)
@@ -1394,10 +1403,9 @@ export default function VendasPage() {
                       </button>
                     ))}
                   </div>
+                  {fulfillmentType === 'entrega' && (<div className="space-y-2"><label className="inp-label">Motoboy da entrega</label><select className="inp" value={deliveryStaffKey} onChange={(event) => setDeliveryStaffKey(event.target.value)}><option value="">Definir depois na Equipe</option>{deliveryStaff.map((person) => <option key={person.key} value={person.key}>{person.name}</option>)}</select></div>)}
                   {fulfillmentType !== 'balcao' && (
-                    <p className="text-[11px] text-muted leading-relaxed flex items-center gap-2">
-                      <Truck size={12}/> Essa venda vai abrir uma ordem automatica na aba de ordens.
-                    </p>
+                    <p className="text-[11px] text-muted leading-relaxed flex items-center gap-2"><Truck size={12}/> Essa venda vai abrir uma ordem automatica na aba de ordens.</p>
                   )}
                 </div>
               )}
