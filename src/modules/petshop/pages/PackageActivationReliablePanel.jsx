@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import {
   Banknote,
+  CalendarClock,
   CheckCircle2,
   CreditCard,
   PackageCheck,
@@ -44,6 +45,26 @@ function normalizeSubscription(subscription = {}) {
   }
 }
 
+function recurringSchedule(firstAppointmentAt) {
+  const first = new Date(firstAppointmentAt || '')
+  if (Number.isNaN(first.getTime())) return []
+  return Array.from({ length: 4 }, (_, index) => {
+    const date = new Date(first)
+    date.setDate(date.getDate() + index * 7)
+    return date
+  })
+}
+
+function scheduleLabel(value) {
+  return value.toLocaleString('pt-BR', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
 function ActivationCard({
   subscription,
   active,
@@ -61,6 +82,8 @@ function ActivationCard({
 }) {
   const total = Math.max(0, Number(subscription.plan.price || 0))
   const zeroTotal = total <= 0.005
+  const schedule = recurringSchedule(subscription.first_appointment_at)
+  const scheduleReady = schedule.length === 4
 
   return (
     <article data-yuisync-subscription-checkout-id={subscription.id} className="rounded-2xl border border-amber-500/25 bg-amber-500/[0.05] p-4">
@@ -79,6 +102,17 @@ function ActivationCard({
           {subscription.plan.services.map((service) => <div key={service.service_type} className="flex items-start justify-between gap-3 text-sm"><span className="text-text">{planServiceLabel(service)}</span><strong className="shrink-0 text-emerald-400">{Number(service.qty_per_cycle || 0)}x</strong></div>)}
           {!subscription.plan.services.length && <p className="text-xs text-amber-200">Este plano ainda usa benefícios legados. O pagamento pode ser confirmado normalmente e o saldo antigo será preservado.</p>}
         </div>
+      </div>
+
+      <div className={`mt-3 rounded-xl border p-3 ${scheduleReady ? 'border-amber-400/30 bg-amber-500/10' : 'border-red-500/25 bg-red-500/8'}`}>
+        <p className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-muted"><CalendarClock size={13}/> Agenda semanal do pacote</p>
+        {scheduleReady ? (
+          <div className="mt-2 grid gap-1.5 text-xs text-text sm:grid-cols-2">
+            {schedule.map((date, index) => <p key={date.toISOString()} className="rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-2"><strong>{index + 1}.</strong> {scheduleLabel(date)}</p>)}
+          </div>
+        ) : (
+          <p className="mt-2 text-xs text-red-300">A primeira data e o horário ainda não foram gravados. Volte à venda do pacote ou aguarde a atualização automática.</p>
+        )}
       </div>
 
       {active ? (
@@ -106,10 +140,10 @@ function ActivationCard({
           )}
           {zeroTotal && <p className="rounded-xl border border-sky-500/20 bg-sky-500/10 px-4 py-3 text-sm text-sky-200">Pacote de cortesia. A confirmação ativa os benefícios sem gerar cobrança.</p>}
           {error && <p className="text-sm text-red-400">{error}</p>}
-          <div className="flex gap-2"><button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button><button type="button" onClick={onConfirm} disabled={saving} className="btn btn-primary flex-1 justify-center"><CheckCircle2 size={15}/>{saving ? 'Ativando...' : zeroTotal ? 'Ativar cortesia' : 'Confirmar e ativar pacote'}</button></div>
+          <div className="flex gap-2"><button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button><button type="button" onClick={onConfirm} disabled={saving || !scheduleReady} className="btn btn-primary flex-1 justify-center"><CheckCircle2 size={15}/>{saving ? 'Ativando...' : zeroTotal ? 'Ativar cortesia e reservar' : 'Confirmar, ativar e reservar'}</button></div>
         </div>
       ) : (
-        <button type="button" onClick={onOpen} className="btn btn-primary mt-4 w-full justify-center"><CreditCard size={15}/> Receber e ativar pacote</button>
+        <button type="button" onClick={onOpen} disabled={!scheduleReady} className="btn btn-primary mt-4 w-full justify-center"><CreditCard size={15}/> {scheduleReady ? 'Receber, ativar e reservar' : 'Aguardando agenda do pacote'}</button>
       )}
     </article>
   )
@@ -160,6 +194,12 @@ export default function PackageActivationReliablePanel({ onChanged }) {
   useEffect(() => { void reload() }, [reload])
 
   useEffect(() => {
+    const onScheduleSaved = () => void reload()
+    window.addEventListener('yuisync:subscription-schedule-saved', onScheduleSaved)
+    return () => window.removeEventListener('yuisync:subscription-schedule-saved', onScheduleSaved)
+  }, [reload])
+
+  useEffect(() => {
     if (!focusId || loading) return
     const node = document.querySelector(`[data-yuisync-subscription-checkout-id="${focusId}"]`)
     node?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
@@ -168,6 +208,7 @@ export default function PackageActivationReliablePanel({ onChanged }) {
   const pendingTotal = useMemo(() => subscriptions.reduce((sum, subscription) => sum + Number(subscription.plan.price || 0), 0), [subscriptions])
 
   function open(subscription) {
+    if (recurringSchedule(subscription.first_appointment_at).length !== 4) return
     const total = Math.max(0, Number(subscription.plan.price || 0))
     setActiveId(subscription.id)
     setPaymentMethod('dinheiro')
@@ -182,6 +223,7 @@ export default function PackageActivationReliablePanel({ onChanged }) {
 
   async function confirm(subscription) {
     if (!activeTenantId) return setCheckoutError('Selecione uma empresa ativa antes de receber o pacote.')
+    if (recurringSchedule(subscription.first_appointment_at).length !== 4) return setCheckoutError('A primeira data e o horário ainda não foram gravados.')
     const total = Math.max(0, Number(subscription.plan.price || 0))
     setSaving(true)
     setCheckoutError('')
@@ -198,7 +240,7 @@ export default function PackageActivationReliablePanel({ onChanged }) {
           subscription_id: subscription.id,
           payment_method: total <= 0.005 ? 'cortesia' : paymentMethod,
           payment_splits: paymentSplits,
-          notes: 'Ativação confirmada em Ordens / Banho & Tosa',
+          notes: 'Ativação confirmada com quatro reservas semanais automáticas',
         },
       })
       if (response.error) throw response.error
@@ -223,7 +265,7 @@ export default function PackageActivationReliablePanel({ onChanged }) {
   return (
     <section className="space-y-4 border-b border-[var(--border)] pb-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div><h3 className="flex items-center gap-2 text-lg font-black text-text"><PackageCheck size={18} className="text-amber-400"/> Pacotes aguardando pagamento</h3><p className="mt-1 text-sm text-muted">Carregado pela mesma fonte da tela de Planos. O saldo só é liberado após a confirmação.</p></div>
+        <div><h3 className="flex items-center gap-2 text-lg font-black text-text"><PackageCheck size={18} className="text-amber-400"/> Pacotes aguardando pagamento</h3><p className="mt-1 text-sm text-muted">Ao confirmar, o saldo é liberado e as quatro semanas são reservadas na mesma transação.</p></div>
         <div className="flex items-center gap-3"><div className="text-right"><p className="text-[10px] font-black uppercase tracking-widest text-muted">A receber</p><p className="font-display text-xl font-black text-amber-400">{fmtCurrency(pendingTotal)}</p></div><button type="button" onClick={() => void reload()} className="btn btn-secondary btn-icon" title="Atualizar pacotes"><RefreshCw size={15}/></button></div>
       </div>
 
