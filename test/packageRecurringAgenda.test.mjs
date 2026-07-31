@@ -12,10 +12,21 @@ test('transporte aparece logo apos o cabecalho e antes dos nomes', async () => {
   assert.match(source, /data-yuisync-motodog='false'[\s\S]*display:\s*block\s*!important/)
 })
 
-test('venda do pacote exige primeira data e horario e grava na assinatura', async () => {
+test('card de pacote preserva selo e remove o valor zero do visual', async () => {
+  const source = await read('src/modules/petshop/components/AgendaCardLayoutEnhancer.jsx')
+  assert.match(source, /data-yuisync-card-kind='package'[\s\S]*\.yuisync-card-tutor[\s\S]*text-overflow:\s*ellipsis/)
+  assert.match(source, /data-yuisync-card-kind='package'[\s\S]*\.yuisync-card-service > span:first-child[\s\S]*-webkit-line-clamp:\s*2/)
+  assert.match(source, /\.yuisync-package-label::before[\s\S]*content:\s*'PACOTE'/)
+  assert.doesNotMatch(source, /content:\s*'R\$ 0,00'/)
+})
+
+test('venda do pacote aceita primeira data passada e identifica legado e futuro', async () => {
   const source = await read('src/modules/petshop/components/PackageRecurringScheduleEnhancer.jsx')
-  assert.match(source, /Primeiro agendamento/)
+  assert.match(source, /Primeiro atendimento do ciclo/)
   assert.match(source, /Horario fixo semanal/)
+  assert.match(source, /dateInput\.removeAttribute\('min'\)/)
+  assert.match(source, /consumido como legado/)
+  assert.match(source, /reserva futura/)
   assert.match(source, /first_appointment_at/)
   assert.match(source, /yuisync:subscription-schedule-saved/)
   assert.match(source, /Array\.from\(\{ length: 4 \}/)
@@ -29,7 +40,7 @@ test('checkout mostra as quatro datas e bloqueia ativacao sem agenda', async () 
   assert.match(source, /Confirmar, ativar e reservar/)
 })
 
-test('migration cria quatro reservas idempotentes na ativacao', async () => {
+test('migration original cria quatro reservas idempotentes na ativacao', async () => {
   const source = await read('supabase/migrations/20260731174500_petshop_package_recurring_appointments.sql')
   assert.match(source, /add column if not exists first_appointment_at timestamptz/)
   assert.match(source, /after update of status on public\.client_subscriptions/)
@@ -38,4 +49,16 @@ test('migration cria quatro reservas idempotentes na ativacao', async () => {
   assert.match(source, /subscription:%s:weekly:%s/)
   assert.match(source, /book_petshop_appointment_transaction/)
   assert.match(source, /recurring_appointments_created_at = now\(\)/)
+})
+
+test('hotfix cria o pet real consome datas passadas e reserva apenas futuras', async () => {
+  const source = await read('supabase/migrations/20260731193000_petshop_package_recurring_pet_legacy_dates.sql')
+  assert.match(source, /ensure_petshop_pet_from_client\(new\.client_id\)/)
+  assert.match(source, /'pet_id', v_pet_id/)
+  assert.doesNotMatch(source, /'pet_id', new\.client_id/)
+  assert.match(source, /if v_scheduled_at < now\(\) then/)
+  assert.match(source, /reserve_petshop_subscription_benefit/)
+  assert.match(source, /continue;/)
+  assert.match(source, /book_petshop_appointment_transaction/)
+  assert.match(source, /subscription:%s:weekly:%s/)
 })

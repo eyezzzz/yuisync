@@ -20,20 +20,48 @@ function buildFirstAt(dateValue, timeValue) {
   return Number.isNaN(value.getTime()) ? '' : value.toISOString()
 }
 
-function preview(firstAt) {
+function scheduleEntries(firstAt) {
   const first = new Date(firstAt || '')
-  if (Number.isNaN(first.getTime())) return 'Selecione a data e o horario.'
+  if (Number.isNaN(first.getTime())) return []
+  const now = Date.now()
   return Array.from({ length: 4 }, (_, index) => {
-    const value = new Date(first)
-    value.setDate(value.getDate() + index * 7)
-    return value.toLocaleString('pt-BR', {
+    const date = new Date(first)
+    date.setDate(date.getDate() + index * 7)
+    return {
+      date,
+      legacy: date.getTime() < now,
+    }
+  })
+}
+
+function preview(firstAt) {
+  const entries = scheduleEntries(firstAt)
+  if (!entries.length) return 'Selecione a data e o horario.'
+  return entries.map(({ date, legacy }) => {
+    const label = date.toLocaleString('pt-BR', {
       day: '2-digit',
       month: '2-digit',
       year: 'numeric',
       hour: '2-digit',
       minute: '2-digit',
     })
+    return `${label} — ${legacy ? 'consumido como legado' : 'reserva futura'}`
   }).join(' · ')
+}
+
+function parseCheckoutDate(value = '') {
+  const match = String(value).match(/(\d{2})\/(\d{2})\/(\d{4}),\s*(\d{2}):(\d{2})/)
+  if (!match) return null
+  const date = new Date(
+    Number(match[3]),
+    Number(match[2]) - 1,
+    Number(match[1]),
+    Number(match[4]),
+    Number(match[5]),
+    0,
+    0,
+  )
+  return Number.isNaN(date.getTime()) ? null : date
 }
 
 function saleModal() {
@@ -42,14 +70,54 @@ function saleModal() {
   )) || null
 }
 
+function enhanceCheckoutScheduleCards() {
+  document.querySelectorAll('[data-yuisync-subscription-checkout-id]').forEach((card) => {
+    const paragraphs = [...card.querySelectorAll('p')]
+    const scheduleHeading = paragraphs.find((node) => (
+      normalize(node.textContent).includes('agenda semanal do pacote')
+    ))
+    const scheduleBox = scheduleHeading?.parentElement
+    if (!scheduleBox) return
+
+    paragraphs
+      .filter((node) => node !== scheduleHeading && /^\s*\d+\.\s+\d{2}\/\d{2}\/\d{4}/.test(node.textContent || ''))
+      .forEach((node) => {
+        const date = parseCheckoutDate(node.textContent)
+        if (!date) return
+        const legacy = date.getTime() < Date.now()
+        let status = node.querySelector('[data-yuisync-package-date-status]')
+        if (!status) {
+          status = document.createElement('span')
+          status.dataset.yuisyncPackageDateStatus = 'true'
+          status.className = 'mt-1 block text-[9px] font-black uppercase tracking-wide'
+          node.appendChild(status)
+        }
+        status.textContent = legacy ? 'Consumido como legado' : 'Reserva futura'
+        status.classList.toggle('text-amber-300', legacy)
+        status.classList.toggle('text-emerald-300', !legacy)
+        node.dataset.yuisyncPackageDateKind = legacy ? 'legacy' : 'future'
+      })
+  })
+
+  document.querySelectorAll('[data-yuisync-plans-checkout-section] p').forEach((node) => {
+    if (normalize(node.textContent).includes('ao confirmar, o saldo e liberado e as quatro semanas sao reservadas')) {
+      node.textContent = 'Ao confirmar, datas passadas serão consumidas como legado e somente as semanas futuras serão reservadas na Agenda.'
+    }
+  })
+}
+
 function enhanceSaleModal() {
   const modal = saleModal()
   const dateInput = modal?.querySelector('input[type="date"]')
   if (!modal || !dateInput) return
 
+  // Cadastros legados podem começar no passado. As semanas vencidas serão
+  // consumidas e apenas as futuras serão criadas na Agenda.
+  dateInput.removeAttribute('min')
+
   const dateBox = dateInput.closest('div')
   const dateLabel = dateBox?.querySelector('label')
-  if (dateLabel) dateLabel.textContent = 'Primeiro agendamento'
+  if (dateLabel) dateLabel.textContent = 'Primeiro atendimento do ciclo'
 
   let timeBox = modal.querySelector('[data-yuisync-package-time]')
   if (!timeBox) {
@@ -58,7 +126,7 @@ function enhanceSaleModal() {
     timeBox.innerHTML = `
       <label class="inp-label">Horario fixo semanal</label>
       <input class="inp" type="time" aria-label="Horario fixo semanal do pacote" />
-      <p class="mt-1 text-[10px] text-muted">A confirmacao do pagamento reservara quatro semanas consecutivas.</p>
+      <p class="mt-1 text-[10px] text-muted">Datas passadas consumirao o beneficio como legado. Apenas as semanas futuras serao reservadas na Agenda.</p>
       <p data-yuisync-package-preview class="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[11px] font-semibold text-amber-200"></p>
       <p data-yuisync-package-error class="mt-2 hidden text-xs text-red-400"></p>
     `
@@ -94,16 +162,14 @@ function enhanceSaleModal() {
     submit.dataset.yuisyncPackageBound = 'true'
     submit.addEventListener('click', (event) => {
       const firstAt = buildFirstAt(dateInput.value, timeInput?.value)
-      if (firstAt && new Date(firstAt).getTime() >= Date.now() - 300000) {
+      if (firstAt) {
         window.sessionStorage.setItem(STORAGE_KEY, firstAt)
         return
       }
       event.preventDefault()
       event.stopPropagation()
       if (errorNode) {
-        errorNode.textContent = firstAt
-          ? 'O primeiro agendamento precisa estar no presente ou no futuro.'
-          : 'Informe a primeira data e o horario fixo.'
+        errorNode.textContent = 'Informe a primeira data e o horario fixo.'
         errorNode.classList.remove('hidden')
       }
       timeInput?.focus()
@@ -125,6 +191,7 @@ export function PackageRecurringScheduleEnhancer() {
       frame = window.requestAnimationFrame(() => {
         frame = 0
         enhanceSaleModal()
+        enhanceCheckoutScheduleCards()
       })
     }
     schedule()
@@ -168,7 +235,7 @@ export function PackageRecurringScheduleEnhancer() {
       window.dispatchEvent(new CustomEvent(PACKAGE_SCHEDULE_SAVED_EVENT, {
         detail: { subscriptionId, firstAppointmentAt: firstAt },
       }))
-      setNotice(`Quatro reservas preparadas: ${preview(firstAt)}.`)
+      setNotice(`Quatro semanas preparadas: ${preview(firstAt)}.`)
     }
 
     window.addEventListener('yuisync:subscription-pending-payment', saveSchedule)

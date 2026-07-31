@@ -57,6 +57,46 @@ const STYLES = `
   .yuisync-agenda-card-surface[data-yuisync-density='compact'] .yuisync-card-tutor {
     -webkit-line-clamp: 2 !important;
   }
+
+  /* Pacote preserva o selo e elimina o valor R$ 0,00, que nao agrega informacao. */
+  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-tutor {
+    display: block !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    -webkit-line-clamp: unset !important;
+  }
+
+  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-service {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 2px !important;
+  }
+
+  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-service > span:first-child {
+    grid-column: 1 !important;
+    -webkit-line-clamp: 2 !important;
+  }
+
+  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-package-label {
+    grid-column: 1 !important;
+    display: block !important;
+    width: fit-content !important;
+    max-width: 100% !important;
+    overflow: hidden !important;
+    color: transparent !important;
+    font-size: 0 !important;
+    line-height: 1 !important;
+    white-space: nowrap !important;
+  }
+
+  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-package-label::before {
+    content: 'PACOTE';
+    color: #fef3c7;
+    font-size: 9px;
+    line-height: 1.1;
+    font-weight: 900;
+    letter-spacing: .03em;
+  }
 `
 
 export function AgendaCardLayoutEnhancer() {
