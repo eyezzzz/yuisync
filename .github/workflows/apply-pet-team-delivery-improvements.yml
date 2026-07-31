@@ -1,0 +1,51 @@
+name: Apply pet team delivery improvements
+
+on:
+  push:
+    branches:
+      - agent/pet-cards-commissions-motoboy
+    paths:
+      - scripts/apply-pet-team-delivery-improvements.py
+      - .github/workflows/apply-pet-team-delivery-improvements.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: agent/pet-cards-commissions-motoboy
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Apply implementation
+        run: python3 scripts/apply-pet-team-delivery-improvements.py
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Focused regressions
+        run: node --test test/teamDeliveryAndCommissionSummary.test.mjs test/teamCommissionHistory.test.mjs test/agendaOperationalInfrastructure.test.mjs test/multiPetPackages.test.mjs
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit validated implementation
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Aprimorar pets, comissoes e entregas operacionais"
+          git push origin HEAD:agent/pet-cards-commissions-motoboy
