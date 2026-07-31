@@ -826,10 +826,15 @@ export function usePetshopAdvanced() {
     const staffName = String(staff?.name || '').trim()
     if (!appointmentId || !staffKey || !staffName) throw new Error('Selecione um responsavel valido.')
 
+    const updates = { responsible_staff_key: staffKey, responsible_staff_name: staffName }
+    if (Array.isArray(staff.service_items) && staff.service_items.length) {
+      updates.service_items = staff.service_items
+    }
+
     const res = await runScoped(async (includeTenant) => {
       let query = supabase
         .from('appointments')
-        .update({ responsible_staff_key: staffKey, responsible_staff_name: staffName })
+        .update(updates)
         .eq('id', appointmentId)
         .eq('module_id', moduleId)
         .eq('status', 'concluido')

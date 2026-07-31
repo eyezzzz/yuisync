@@ -111,6 +111,13 @@ export function AuthProvider({ children }) {
     module_id: null,
   })
 
+  const updateStoreSettings = useCallback((patch) => {
+    setStoreSettings((current) => {
+      const next = typeof patch === 'function' ? patch(current) : patch
+      return { ...current, ...(next || {}) }
+    })
+  }, [])
+
   const [tenants, setTenants] = useState([])
   const [activeTenantId, setActiveTenantId] = useState(null)
   const [tenantLoading, setTenantLoading] = useState(false)
@@ -418,6 +425,7 @@ export function AuthProvider({ children }) {
   const value = useMemo(() => ({
     ...auth,
     storeSettings,
+    updateStoreSettings,
     refreshSettings: loadSettings,
     lastModuleId: localStorage.getItem('@app_module'),
     tenants,
@@ -430,7 +438,7 @@ export function AuthProvider({ children }) {
     refreshTenants: loadTenantScope,
     tenantEnabledModules,
     refreshTenantModules: loadTenantEnabledModules,
-  }), [auth, storeSettings, tenants, activeTenantId, tenantLoading, tenantMode, tenantError, switchTenant, createTenant, loadTenantScope, tenantEnabledModules, loadTenantEnabledModules])
+  }), [auth, storeSettings, updateStoreSettings, tenants, activeTenantId, tenantLoading, tenantMode, tenantError, switchTenant, createTenant, loadTenantScope, tenantEnabledModules, loadTenantEnabledModules])
 
   return (
     <AuthContext.Provider value={value}>

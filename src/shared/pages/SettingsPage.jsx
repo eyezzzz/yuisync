@@ -494,6 +494,10 @@ export default function SettingsPage() {
         petshop_delivery_staff: savedDeliveryStaff,
         message_templates: templates,
       }))
+      auth.updateStoreSettings?.({
+        petshop_operational_staff: savedStaff,
+        message_templates: templates,
+      })
       await auth.refreshSettings(effectiveModId)
       if (announce) setStaffMsg({ type: 'success', text: 'Equipe salva e atualizada na Agenda e em Comissoes.' })
       return savedStaff
