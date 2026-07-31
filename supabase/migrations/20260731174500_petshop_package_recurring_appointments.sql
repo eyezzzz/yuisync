@@ -27,16 +27,22 @@ declare
   v_transport_mode text;
   v_transport_label text;
   v_address text;
-  v_client record;
+  v_client_address text;
+  v_client_neighborhood text;
+  v_client_city text;
+  v_client_details jsonb := '{}'::jsonb;
   v_result jsonb;
 begin
   if new.module_id <> 'petshop'
     or new.status <> 'active'
     or old.status = 'active'
-    or new.first_appointment_at is null
     or new.recurring_appointments_created_at is not null
   then
     return new;
+  end if;
+
+  if new.first_appointment_at is null then
+    raise exception 'Informe a primeira data e o horario do pacote antes de confirmar o pagamento.';
   end if;
 
   if new.first_appointment_at < now() - interval '5 minutes' then
@@ -49,14 +55,14 @@ begin
     client.address,
     client.neighborhood,
     client.city,
-    coalesce(client.details, '{}'::jsonb) as details
+    coalesce(client.details, '{}'::jsonb)
   into
     v_plan_services,
     v_plan_active,
-    v_client.address,
-    v_client.neighborhood,
-    v_client.city,
-    v_client.details
+    v_client_address,
+    v_client_neighborhood,
+    v_client_city,
+    v_client_details
   from public.subscription_plans plan
   join public.clients client
     on client.id = new.client_id
@@ -114,8 +120,8 @@ begin
 
   v_address := concat_ws(
     ' - ',
-    concat_ws(', ', nullif(trim(v_client.address), ''), nullif(trim(v_client.details->>'address_number'), '')),
-    nullif(trim(v_client.details->>'address_complement'), '')
+    concat_ws(', ', nullif(trim(v_client_address), ''), nullif(trim(v_client_details->>'address_number'), '')),
+    nullif(trim(v_client_details->>'address_complement'), '')
   );
 
   for v_index in 0..3
@@ -137,9 +143,9 @@ begin
       'transport_mode', v_transport_mode,
       'transport_label', v_transport_label,
       'transport_address', case when v_transport_mode = 'buscar_e_levar' then nullif(v_address, '') else null end,
-      'transport_neighborhood', case when v_transport_mode = 'buscar_e_levar' then nullif(trim(v_client.neighborhood), '') else null end,
-      'transport_city', case when v_transport_mode = 'buscar_e_levar' then nullif(trim(v_client.city), '') else null end,
-      'transport_reference', case when v_transport_mode = 'buscar_e_levar' then nullif(trim(v_client.details->>'address_reference'), '') else null end,
+      'transport_neighborhood', case when v_transport_mode = 'buscar_e_levar' then nullif(trim(v_client_neighborhood), '') else null end,
+      'transport_city', case when v_transport_mode = 'buscar_e_levar' then nullif(trim(v_client_city), '') else null end,
+      'transport_reference', case when v_transport_mode = 'buscar_e_levar' then nullif(trim(v_client_details->>'address_reference'), '') else null end,
       'idempotency_key', format('subscription:%s:weekly:%s', new.id, v_index + 1)
     ));
 
