@@ -1,0 +1,69 @@
+name: Run PR95 functional delivery
+
+on:
+  push:
+    branches:
+      - fix/agenda-stability-density-cep-thermal
+
+permissions:
+  contents: write
+
+jobs:
+  apply-test-commit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@v4
+        with:
+          ref: fix/agenda-stability-density-cep-thermal
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Execute prepared patch
+        shell: bash
+        run: |
+          python <<'RUNNER'
+          from pathlib import Path
+
+          workflow = Path('.github/workflows/apply-agenda-stability-density-cep-thermal.yml')
+          source = workflow.read_text(encoding='utf-8')
+          marker = "          python <<'PY'\n"
+          start = source.index(marker) + len(marker)
+          end = source.index("\n          PY\n", start)
+          lines = source[start:end].splitlines()
+          script = '\n'.join(line[10:] if line.startswith('          ') else line for line in lines)
+          exec(compile(script, str(workflow), 'exec'), {})
+          RUNNER
+
+          rm -f .github/workflows/run-pr95-push.yml .github/pr95-trigger.txt
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Focused regressions
+        run: |
+          node --test test/cepLookup.test.mjs test/agendaStabilityAndThermal.test.mjs
+          node --test test/agendaAdaptiveCards.test.mjs test/agendaVisualStandardization.test.mjs
+          npm run test:transactions
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build
+        run: npm run build
+
+      - name: Commit validated delivery
+        shell: bash
+        run: |
+          git diff --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Estabilizar agenda e padronizar operacao petshop"
+          git push origin HEAD:fix/agenda-stability-density-cep-thermal
