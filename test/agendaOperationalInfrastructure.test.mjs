@@ -98,5 +98,5 @@ test('infraestrutura conecta capacidade, transporte e responsible_staff_key', as
   assert.doesNotMatch(advanced, /\$\{startDate\}T00:00:00\.000Z/)
   assert.ok(advanced.includes(".is('responsible_staff_key', null)"))
   assert.match(commissions, /Tosa 10%/)
-  assert.match(commissions, /Outros 5%/)
+  assert.match(commissions, /Banho e demais servicos 5%/)
 })
