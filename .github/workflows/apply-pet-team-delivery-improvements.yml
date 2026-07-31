@@ -36,21 +36,24 @@ jobs:
           path = Path('src/modules/petshop/pages/EquipePage.jsx')
           content = path.read_text()
 
-          old_rate = 'Tosa na maquina, total ou tesoura recebe 10%.'
-          new_rate = 'Tosa 10%: maquina, total ou tesoura. Banho e outros servicos esteticos recebem 5%.'
-          if old_rate not in content:
-              raise SystemExit('Texto da taxa de tosa nao encontrado.')
-          content = content.replace(
-              'Tosa na maquina, total ou tesoura recebe 10%. Banho e outros servicos esteticos recebem 5%.',
-              new_rate,
-              1,
-          )
+          old_rates = 'Tosa na maquina, total ou tesoura recebe 10%. Banho e outros servicos esteticos recebem 5%.'
+          new_rates = 'Tosa 10%: maquina, total ou tesoura. Banho 5%. Outros 5%. MotoDog, transporte e entrega ficam fora deste calculo.'
+          if old_rates not in content:
+              raise SystemExit('Texto das taxas de comissao nao encontrado.')
+          content = content.replace(old_rates, new_rates, 1)
 
           old_button = '<button type="button" onClick={() => setHistoryRow(row)} className="btn btn-secondary btn-sm"><Eye size={13}/> Conferir</button>'
           new_button = '<button type="button" title="Visualizar e imprimir historico" aria-label="Visualizar e imprimir historico" onClick={() => setHistoryRow(row)} className="btn btn-secondary btn-sm"><Eye size={13}/> Conferir</button>'
           if old_button not in content:
               raise SystemExit('Botao de conferencia nao encontrado.')
           content = content.replace(old_button, new_button, 1)
+
+          old_total = '<tfoot><tr><td colSpan={4} className="font-bold text-text">Totais</td>'
+          new_total = '<tfoot><tr><td colSpan={4} className="font-bold text-text">Total conferido</td>'
+          if old_total not in content:
+              raise SystemExit('Total do historico nao encontrado.')
+          content = content.replace(old_total, new_total, 1)
+
           path.write_text(content)
           PY
 
