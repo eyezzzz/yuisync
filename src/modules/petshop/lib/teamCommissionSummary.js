@@ -69,27 +69,28 @@ export function appointmentCommissionLines(appointment = {}) {
   if (appointmentGroup && appointmentGroup !== 'banho_tosa') return []
 
   const serviceBenefits = (Array.isArray(appointment.subscription_benefits) ? appointment.subscription_benefits : [])
-  .filter((benefit) => benefit?.kind === 'service'
-    && ['reserved', 'consumed'].includes(String(benefit?.status || appointment.subscription_benefit_status || 'reserved')))
-const rawItems = Array.isArray(appointment.service_items) && appointment.service_items.length
-  ? appointment.service_items
-  : serviceBenefits.length
-    ? serviceBenefits.map((benefit) => ({
-      code: benefit.service_code || benefit.key,
-      name: benefit.label || benefit.service_name || benefit.service_code || 'Servico do pacote',
-      service_type: benefit.service_code || benefit.key,
-      group_type: appointment.service_group || 'banho_tosa',
-      unit_price: 0,
-      catalog_price: benefit.catalog_price,
-      subscription_benefit_used: true,
-    }))
-    : [{
-      code: appointment.service_type,
-      name: appointment.service_type,
-      service_type: appointment.service_type,
-      group_type: appointment.service_group || 'banho_tosa',
-      unit_price: appointment.price,
-    }]
+    .filter((benefit) => benefit?.kind === 'service'
+      && ['reserved', 'consumed'].includes(String(benefit?.status || appointment.subscription_benefit_status || 'reserved')))
+  const rawItems = Array.isArray(appointment.service_items) && appointment.service_items.length
+    ? appointment.service_items
+    : serviceBenefits.length
+      ? serviceBenefits.map((benefit) => ({
+        code: benefit.service_code || benefit.key,
+        name: benefit.label || benefit.service_name || benefit.service_code || 'Servico do pacote',
+        service_type: benefit.service_code || benefit.key,
+        group_type: appointment.service_group || 'banho_tosa',
+        unit_price: 0,
+        catalog_price: benefit.catalog_price,
+        subscription_benefit_used: true,
+        package_covered: true,
+      }))
+      : [{
+        code: appointment.service_type,
+        name: appointment.service_type,
+        service_type: appointment.service_type,
+        group_type: appointment.service_group || 'banho_tosa',
+        unit_price: appointment.price,
+      }]
 
   const eligible = rawItems.filter((item) => {
     const group = normalizeText(item?.group_type || appointment.service_group || 'banho_tosa')
@@ -109,8 +110,10 @@ const rawItems = Array.isArray(appointment.service_items) && appointment.service
         || (benefitKey && key === benefitKey)
         || (eligible.length === 1 && serviceBenefits.length === 1 && !serviceCode)
     })
-    const packageCovered = item.subscription_benefit_used === true
+    const packageCovered = item.package_covered === true
+      || item.subscription_benefit_used === true
       || item.benefit_used === true
+      || appointment.package_commission === true
       || Boolean(matchingBenefit)
     const catalogRevenue = Number(
       item.catalog_price
@@ -120,9 +123,14 @@ const rawItems = Array.isArray(appointment.service_items) && appointment.service
       ?? item.price
       ?? 0
     )
+    const packageRevenue = Number(
+      item.package_unit_price
+      ?? appointment.package_commission_unit_value
+      ?? 0
+    )
     const netRevenue = Number(item.unit_price ?? item.price ?? 0)
     const revenue = packageCovered
-      ? catalogRevenue
+      ? packageRevenue > 0 ? packageRevenue : catalogRevenue
       : netRevenue > 0
         ? netRevenue
         : eligible.length === 1
@@ -131,14 +139,17 @@ const rawItems = Array.isArray(appointment.service_items) && appointment.service
     const rate = ['machine_grooming', 'scissor_grooming'].includes(category) ? 0.10 : 0.05
     const rawLabel = item.name || item.label || item.code || item.value || appointment.service_type || 'Servico estetico'
     const legacyGeneric = genericBathTosaPattern.test(normalizeText(item.service_type || item.code || appointment.service_type || ''))
+    const baseLabel = legacyGeneric && category === 'bath' ? 'Banho (registro antigo)' : rawLabel
     return {
       appointment_id: appointment.id,
       category,
       code: item.code || item.value || item.service_type || appointment.service_type || '',
-      label: legacyGeneric && category === 'bath' ? 'Banho (registro antigo)' : rawLabel,
+      label: packageCovered ? `${baseLabel} · PACOTE` : baseLabel,
       revenue: Math.max(0, revenue),
       commission: Math.max(0, revenue) * rate,
       rate,
+      package_covered: packageCovered,
+      package_plan_name: item.package_plan_name || appointment.package_plan_name || '',
     }
   })
 }
@@ -167,13 +178,18 @@ export function buildCommissionRows(history = [], configuredStaff = []) {
         scissor_grooming_count: 0,
         grooming_count: 0,
         other_service_count: 0,
+        package_count: 0,
+        package_bath_count: 0,
+        package_grooming_count: 0,
         service_revenue: 0,
         bath_revenue: 0,
         grooming_revenue: 0,
         other_service_revenue: 0,
+        package_revenue: 0,
         bath_commission: 0,
         grooming_commission: 0,
         other_service_commission: 0,
+        package_commission: 0,
         total_commission: 0,
       })
     }
@@ -192,6 +208,16 @@ export function buildCommissionRows(history = [], configuredStaff = []) {
       row.service_count += 1
       row.service_revenue += line.revenue
       row.total_commission += line.commission
+
+      if (line.package_covered) {
+        row.package_count += 1
+        row.package_revenue += line.revenue
+        row.package_commission += line.commission
+        if (line.category === 'bath') row.package_bath_count += 1
+        if (['machine_grooming', 'scissor_grooming'].includes(line.category)) row.package_grooming_count += 1
+        return
+      }
+
       if (line.category === 'bath') {
         row.bath_count += 1
         row.bath_revenue += line.revenue

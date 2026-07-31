@@ -19,9 +19,9 @@ const CampanhasPage = lazy(() => import('../modules/petshop/pages/CampanhasPage'
 const CaixaPage = lazy(() => import('../modules/petshop/pages/CaixaPage'))
 const OrdensEntregaPage = lazy(() => import('../modules/petshop/pages/OrdensBanhoTosaIntegratedPage'))
 const GrowthPage = lazy(() => import('../modules/petshop/pages/GrowthPage'))
+const PetshopReportsPage = lazy(() => import('../modules/petshop/pages/PetshopReportsPage'))
 const UsersPage = lazy(() => import('../shared/pages/UsersPage'))
 const SettingsPage = lazy(() => import('../shared/pages/SettingsIntegratedPage'))
-const ReportsSharedPage = lazy(() => import('../shared/pages/ReportsSharedPage'))
 const BillingPage = lazy(() => import('../shared/pages/BillingPage'))
 const LogsPage = lazy(() => import('../shared/pages/LogsPage'))
 const SupportHubPage = lazy(() => import('../shared/pages/SupportHubPage'))
@@ -125,7 +125,7 @@ export const MODULES = {
       campanhas: CampanhasPage,
       usuarios: UsersPage,
       equipe: EquipePage,
-      relatorios: ReportsSharedPage,
+      relatorios: PetshopReportsPage,
       financeiro: BillingPage,
       config: SettingsPage,
       logs: LogsPage,
