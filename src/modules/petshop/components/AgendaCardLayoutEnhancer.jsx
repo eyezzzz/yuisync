@@ -58,7 +58,7 @@ const STYLES = `
     -webkit-line-clamp: 2 !important;
   }
 
-  /* Pacote preserva o selo e elimina o valor R$ 0,00, que nao agrega informacao. */
+  /* Pacote ocupa a mesma coluna visual do valor, sem criar uma linha extra. */
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-tutor {
     display: block !important;
     overflow: hidden !important;
@@ -68,21 +68,24 @@ const STYLES = `
   }
 
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-service {
-    grid-template-columns: minmax(0, 1fr) !important;
-    gap: 2px !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: start !important;
+    gap: 5px !important;
   }
 
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-service > span:first-child {
     grid-column: 1 !important;
+    min-width: 0 !important;
     -webkit-line-clamp: 2 !important;
   }
 
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-package-label {
-    grid-column: 1 !important;
+    grid-column: 2 !important;
     display: block !important;
-    width: fit-content !important;
-    max-width: 100% !important;
-    overflow: hidden !important;
+    align-self: start !important;
+    width: auto !important;
+    max-width: none !important;
+    overflow: visible !important;
     color: transparent !important;
     font-size: 0 !important;
     line-height: 1 !important;
@@ -96,6 +99,7 @@ const STYLES = `
     line-height: 1.1;
     font-weight: 900;
     letter-spacing: .03em;
+    white-space: nowrap;
   }
 `
 
