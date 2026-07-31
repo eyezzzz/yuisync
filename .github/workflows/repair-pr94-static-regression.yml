@@ -20,7 +20,7 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Update current multi-pet card expectation
+      - name: Update current multi-pet expectations
         shell: bash
         run: |
           python <<'PY'
@@ -28,11 +28,21 @@ jobs:
 
           test_path = Path('test/transactionalStatic.test.mjs')
           source = test_path.read_text(encoding='utf-8')
-          old = r"assert.match(source, /flex min-h-\[250px\] flex-col/)"
-          new = r"assert.match(source, /flex min-h-\[270px\] flex-col/)"
-          if old not in source:
-              raise SystemExit('Expected legacy 250px assertion was not found.')
-          test_path.write_text(source.replace(old, new, 1), encoding='utf-8')
+          replacements = [
+              (
+                  r"assert.match(source, /flex min-h-\[250px\] flex-col/)",
+                  r"assert.match(source, /flex min-h-\[270px\] flex-col/)",
+              ),
+              (
+                  r"assert.match(source, /visiblePets\.map/)",
+                  r"assert.match(source, /visibleTutorGroups\.map/)",
+              ),
+          ]
+          for old, new in replacements:
+              if old not in source:
+                  raise SystemExit(f'Expected legacy assertion was not found: {old}')
+              source = source.replace(old, new, 1)
+          test_path.write_text(source, encoding='utf-8')
           PY
 
       - name: Remove temporary workflow
