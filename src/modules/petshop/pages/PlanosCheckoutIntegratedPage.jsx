@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { CreditCard, PackageCheck } from 'lucide-react'
 
+import { PACKAGE_SCHEDULE_SAVED_EVENT } from '../components/PackageRecurringScheduleEnhancer'
 import PackageActivationReliablePanel from './PackageActivationReliablePanel'
 import PlanosNativePage from './PlanosNativePage'
 
@@ -29,8 +30,16 @@ export default function PlanosCheckoutIntegratedPage({ setPage }) {
       setCheckoutVersion((current) => current + 1)
       setActiveTab('pagamentos')
     }
+    const onScheduleSaved = () => {
+      setCheckoutVersion((current) => current + 1)
+      setActiveTab('pagamentos')
+    }
     window.addEventListener('yuisync:subscription-pending-payment', onPendingPayment)
-    return () => window.removeEventListener('yuisync:subscription-pending-payment', onPendingPayment)
+    window.addEventListener(PACKAGE_SCHEDULE_SAVED_EVENT, onScheduleSaved)
+    return () => {
+      window.removeEventListener('yuisync:subscription-pending-payment', onPendingPayment)
+      window.removeEventListener(PACKAGE_SCHEDULE_SAVED_EVENT, onScheduleSaved)
+    }
   }, [])
 
   const handlePageChange = useCallback((nextPage) => {
