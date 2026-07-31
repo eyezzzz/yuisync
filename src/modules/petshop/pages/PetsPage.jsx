@@ -11,7 +11,7 @@ import { importLegacyRows } from '../../../lib/api'
 import { parseLegacyClients } from '../../../shared/lib/legacyImport'
 import { matchesSearchTerms } from '../../../shared/lib/searchMatch'
 
-import { createTutorGroupId } from '../../../shared/lib/petTutorGroups'
+import { createTutorGroupId, groupPetsByTutor } from '../../../shared/lib/petTutorGroups'
 const SPECIES = [
   { value: 'dog', label: 'Cao', icon: Dog },
   { value: 'cat', label: 'Gato', icon: Cat },
@@ -52,7 +52,7 @@ function getRegistrationBadge(pet = {}) {
   return { label: 'Pendente cadastro', cls: 'badge-amber' }
 }
 
-function PetModal({ pet, plans, subscription, onClose, onSave }) {
+function PetModal({ pet, tutorPets = [], plans, subscription, onClose, onSave, onSelectPet }) {
   const addingPetForTutor = Boolean(pet?.adding_pet_for_tutor)
   const [form, setForm] = useState({
     ...(pet ? { ...EMPTY_FORM, ...pet } : EMPTY_FORM),
@@ -107,6 +107,9 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
               Novo pet para <strong>{form.owner_name}</strong>. Os dados do tutor ficam bloqueados para evitar cadastros divergentes.
             </div>
           )}
+          {!addingPetForTutor && pet?.id && tutorPets.length > 0 && (
+            <div className="rounded-2xl border border-[var(--border)] bg-card p-4"><p className="text-xs font-bold uppercase tracking-widest text-muted">Pets deste cliente</p><div className="mt-3 flex flex-wrap gap-2">{tutorPets.map((item) => (<button key={item.id} type="button" onClick={() => item.id !== pet.id && onSelectPet?.(item)} className={`rounded-xl border px-3 py-2 text-left text-sm transition-colors ${item.id === pet.id ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border)] text-text hover:border-emerald-500/30'}`}><strong>{item.pet_name || 'Pet sem nome'}</strong><span className="ml-2 text-xs text-muted">{item.breed || item.species || ''}</span></button>))}</div></div>
+          )}
           <div className="grid grid-cols-1 xl:grid-cols-2 gap-5">
             <fieldset disabled={addingPetForTutor} className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-1 md:grid-cols-2 gap-3 disabled:opacity-70">
               <div className="md:col-span-2"><label className="inp-label">Tutor</label><input className="inp" value={form.owner_name} onChange={(e) => setField('owner_name', e.target.value)} /></div>
@@ -143,7 +146,7 @@ function PetModal({ pet, plans, subscription, onClose, onSave }) {
   )
 }
 
-function PetDrawer({ pet, subscriptions = [], onClose, onEdit, onAddPet, speciesIcon, serviceLabel, statusBadge }) {
+function PetDrawer({ pet, tutorPets = [], subscriptions = [], onClose, onEdit, onAddPet, onSelectPet, speciesIcon, serviceLabel, statusBadge }) {
   const { appointments, load } = useAppointments()
   useEffect(() => { if (pet?.id) load({ date: '' }) }, [pet?.id])
   if (!pet) return null
@@ -178,6 +181,7 @@ function PetDrawer({ pet, subscriptions = [], onClose, onEdit, onAddPet, species
           <div className="flex items-center gap-2"><button type="button" data-yuisync-add-pet-action aria-label={`Adicionar outro pet para ${pet.owner_name || 'este tutor'}`} onClick={() => onAddPet(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => onEdit(pet)} className="btn btn-secondary btn-sm">Editar</button><button type="button" aria-label="Fechar detalhes" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button></div>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
+          <div className="rounded-2xl border border-[var(--border)] bg-card p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold">Pets deste cliente</p><div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">{tutorPets.map((item) => (<button key={item.id} type="button" onClick={() => item.id !== pet.id && onSelectPet?.(item)} className={`rounded-xl border p-3 text-left ${item.id === pet.id ? 'border-emerald-500/45 bg-emerald-500/12' : 'border-[var(--border)] hover:border-emerald-500/30'}`}><p className="font-semibold text-text">{item.pet_name || 'Pet sem nome'}</p><p className="mt-1 text-xs text-muted">{item.breed || item.species || 'Sem raca informada'}</p></button>))}</div></div>
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5 grid grid-cols-2 gap-3 text-sm">
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Tutor</p><p className="text-text font-semibold mt-1">{pet.owner_name || '-'}</p></div>
             <div><p className="text-[10px] uppercase tracking-widest text-muted font-bold">Pet</p><p className="text-text font-semibold mt-1">{pet.pet_name || '-'}</p></div>
@@ -362,10 +366,16 @@ export default function PetsPage() {
     setPage(1)
   }, [search, speciesFilter, planFilter, view])
 
-  const totalPages = Math.max(1, Math.ceil(filteredPets.length / CLIENTS_PAGE_SIZE))
+  const filteredTutorGroups = useMemo(() => groupPetsByTutor(filteredPets), [filteredPets])
+  const tutorPetsByPetId = useMemo(() => {
+    const map = new Map()
+    groupPetsByTutor(pets || []).forEach((group) => group.pets.forEach((pet) => map.set(pet.id, group.pets)))
+    return map
+  }, [pets])
+  const totalPages = Math.max(1, Math.ceil(filteredTutorGroups.length / CLIENTS_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
   const pageStart = (currentPage - 1) * CLIENTS_PAGE_SIZE
-  const visiblePets = filteredPets.slice(pageStart, pageStart + CLIENTS_PAGE_SIZE)
+  const visibleTutorGroups = filteredTutorGroups.slice(pageStart, pageStart + CLIENTS_PAGE_SIZE)
 
   function openAddPetForTutor(pet) {
     const tutorGroupId = pet.tutor_group_id || createTutorGroupId()
@@ -456,7 +466,7 @@ export default function PetsPage() {
 
       {!loading && filteredPets.length > 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted">
-          <span>Exibindo {pageStart + 1}-{Math.min(pageStart + CLIENTS_PAGE_SIZE, filteredPets.length)} de {filteredPets.length} clientes</span>
+          <span>Exibindo {pageStart + 1}-{Math.min(pageStart + CLIENTS_PAGE_SIZE, filteredTutorGroups.length)} de {filteredTutorGroups.length} clientes</span>
           {totalPages > 1 && (
             <div className="flex items-center gap-2">
               <button type="button" className="btn btn-secondary btn-sm" disabled={currentPage <= 1} onClick={() => setPage((value) => Math.max(1, value - 1))}>Anterior</button>
@@ -471,57 +481,19 @@ export default function PetsPage() {
         <div className="rounded-2xl border border-[var(--border)] bg-card px-6 py-12 text-center text-muted"><RefreshCw size={18} className="animate-spin mx-auto mb-3" />Carregando clientes...</div>
       ) : view === 'grid' ? (
         <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {visiblePets.map((pet) => {
-            const Icon = speciesIcon(pet.species)
-            const subscription = latestSubscriptionByClient.get(pet.id)
-            const ageLabel = age(pet.birth_date)
-            const registrationBadge = getRegistrationBadge(pet)
-            return (
-              <div key={pet.id} className="flex min-h-[250px] flex-col rounded-2xl border border-[var(--border)] bg-card p-5 shadow-card transition-all hover:-translate-y-1 hover:border-emerald-500/30">
-                <div className="flex items-start gap-4">
-                  <button type="button" onClick={() => setDrawerPet(pet)} className="flex min-w-0 flex-1 items-start gap-4 text-left">
-                    <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center flex-shrink-0">
-                      <Icon size={24} />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h3 className="line-clamp-2 text-base font-bold leading-snug text-text" title={pet.owner_name || 'Tutor sem nome'}>
-                        {formatPersonName(pet.owner_name)}
-                      </h3>
-                      {subscription && (
-                        <p className="mt-1 truncate text-xs font-semibold text-emerald-600">
-                          {subscription.subscription_plans?.name || 'Pacote ativo'}
-                        </p>
-                      )}
-                      <p className="mt-1 truncate text-sm text-muted" title={`${pet.pet_name || 'Pet sem nome'}${pet.breed ? ` - ${pet.breed}` : ''}`}>
-                        {pet.pet_name || 'Pet sem nome'}{pet.breed ? ` - ${pet.breed}` : ''}
-                      </p>
-                    </div>
-                  </button>
-                  <span className={`badge flex-shrink-0 ${registrationBadge.cls}`}>{registrationBadge.label}</span>
-                </div>
-                <div className="mt-auto border-t border-[var(--border2)] pt-4">
-                  <div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2">
-                    <div className="flex min-w-0 items-center gap-2 text-muted"><Phone size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{formatPhone(pet.phone)}</span></div>
-                    <div className="flex min-w-0 items-center gap-2 text-muted"><Weight size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{pet.weight_kg ? `${pet.weight_kg} kg` : 'Peso nao informado'}</span></div>
-                    {ageLabel && <div className="flex min-w-0 items-center gap-2 text-muted"><CalendarIcon size={13} className="flex-shrink-0 text-emerald-500" /><span className="truncate">{ageLabel}</span></div>}
-                  </div>
-                  <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
-                    <button type="button" data-yuisync-add-pet-action aria-label={`Adicionar outro pet para ${pet.owner_name || 'este tutor'}`} onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button>
-                    <button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar</button>
-                    <button type="button" aria-label={`Excluir ${pet.pet_name || pet.owner_name}`} title="Excluir" onClick={() => handleDelete(pet.id)} className="btn btn-ghost btn-sm text-red-400"><Trash2 size={13} /></button>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-          {filteredPets.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-[var(--border)] px-6 py-12 text-center"><p className="text-text font-semibold">Nenhum cadastro encontrado</p><p className="text-muted text-sm mt-2">Tente remover filtros ou criar um novo cliente.</p></div>}
+          {visibleTutorGroups.map((group) => { const pet = group.pets[0]; const Icon = speciesIcon(pet.species); const registrationBadge = getRegistrationBadge(pet); const activePackages = group.pets.flatMap((item) => subscriptionsByClient.get(item.id) || []).filter((item) => item.status === 'active'); return (
+            <div key={group.key} className="flex min-h-[270px] flex-col rounded-2xl border border-[var(--border)] bg-card p-5 shadow-card transition-all hover:-translate-y-1 hover:border-emerald-500/30"><div className="flex items-start gap-4"><div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center flex-shrink-0"><Icon size={24}/></div><div className="min-w-0 flex-1"><h3 className="line-clamp-2 text-base font-bold leading-snug text-text">{formatPersonName(group.owner_name || pet.owner_name)}</h3><p className="mt-1 text-xs font-semibold text-emerald-500">{group.pets.length} {group.pets.length === 1 ? 'pet cadastrado' : 'pets cadastrados'}</p></div><span className={`badge flex-shrink-0 ${registrationBadge.cls}`}>{registrationBadge.label}</span></div>
+              <div className="mt-4 space-y-2">{group.pets.map((item) => (<button key={item.id} type="button" onClick={() => setDrawerPet(item)} className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--border2)] bg-surface/60 px-3 py-2 text-left hover:border-emerald-500/30"><span className="min-w-0"><strong className="block truncate text-sm text-text">{item.pet_name || 'Pet sem nome'}</strong><span className="block truncate text-xs text-muted">{item.breed || item.species || 'Sem raca informada'}</span></span><span className="text-xs font-semibold text-emerald-500">Abrir</span></button>))}</div>
+              <div className="mt-auto border-t border-[var(--border2)] pt-4"><div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2"><div className="flex min-w-0 items-center gap-2 text-muted"><Phone size={13} className="flex-shrink-0 text-emerald-500"/><span className="truncate">{formatPhone(pet.phone)}</span></div><div className="flex min-w-0 items-center gap-2 text-muted"><PawPrint size={13} className="flex-shrink-0 text-emerald-500"/><span className="truncate">{activePackages.length} pacote(s) ativo(s)</span></div></div><div className="mt-4 flex flex-wrap items-center justify-end gap-2"><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar cliente</button></div></div></div>
+          )})}
+          {filteredTutorGroups.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-[var(--border)] px-6 py-12 text-center"><p className="text-text font-semibold">Nenhum cadastro encontrado</p></div>}
         </div>
       ) : (
-        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pet</th><th>Telefone</th><th>Plano</th><th className="text-right">Acoes</th></tr></thead><tbody>{visiblePets.map((pet) => { const subscription = latestSubscriptionByClient.get(pet.id); return <tr key={pet.id} className="cursor-pointer" onClick={() => setDrawerPet(pet)}><td className="font-semibold text-text">{formatPersonName(pet.owner_name)}</td><td>{pet.pet_name || '-'}</td><td>{formatPhone(pet.phone)}</td><td>{subscription ? <span className={`badge ${getPlanTone(subscription.status)}`}>{subscription.subscription_plans?.name || 'Plano'}</span> : <span className="text-muted">Sem plano</span>}</td><td className="text-right"><div className="flex justify-end gap-2"><button type="button" data-yuisync-add-pet-action aria-label={`Adicionar outro pet para ${pet.owner_name || 'este tutor'}`} onClick={(e) => { e.stopPropagation(); openAddPetForTutor(pet) }} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={(e) => { e.stopPropagation(); setModalPet(pet) }} className="btn btn-secondary btn-sm">Editar</button><button onClick={(e) => { e.stopPropagation(); handleDelete(pet.id) }} className="btn btn-danger btn-sm">Excluir</button></div></td></tr> })}{filteredPets.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
+        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pets</th><th>Telefone</th><th>Pacotes ativos</th><th className="text-right">Acoes</th></tr></thead><tbody>{visibleTutorGroups.map((group) => { const pet = group.pets[0]; const activePackages = group.pets.flatMap((item) => subscriptionsByClient.get(item.id) || []).filter((item) => item.status === 'active'); return <tr key={group.key}><td className="font-semibold text-text">{formatPersonName(group.owner_name || pet.owner_name)}</td><td><div className="flex flex-wrap gap-1">{group.pets.map((item) => <button key={item.id} type="button" onClick={() => setDrawerPet(item)} className="badge badge-green">{item.pet_name || 'Pet'}</button>)}</div></td><td>{formatPhone(pet.phone)}</td><td>{activePackages.length}</td><td className="text-right"><div className="flex justify-end gap-2"><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar</button></div></td></tr>})}{filteredTutorGroups.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
       )}
 
-      {modalPet !== null && <PetModal pet={modalPet} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onClose={() => setModalPet(null)} onSave={handleSave} />}
-      {drawerPet && <PetDrawer pet={drawerPet} subscriptions={subscriptionsByClient.get(drawerPet.id) || []} onClose={() => setDrawerPet(null)} onAddPet={openAddPetForTutor} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
+      {modalPet !== null && <PetModal key={modalPet?.id || (modalPet?.adding_pet_for_tutor ? 'new-pet' : 'new-client')} pet={modalPet} tutorPets={modalPet?.id ? (tutorPetsByPetId.get(modalPet.id) || [modalPet]) : []} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onSelectPet={setModalPet} onClose={() => setModalPet(null)} onSave={handleSave} />}
+      {drawerPet && <PetDrawer pet={drawerPet} tutorPets={tutorPetsByPetId.get(drawerPet.id) || [drawerPet]} subscriptions={subscriptionsByClient.get(drawerPet.id) || []} onSelectPet={setDrawerPet} onClose={() => setDrawerPet(null)} onAddPet={openAddPetForTutor} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
       {legacyImportModal && <LegacyClientsImportModal moduleId={activeModuleId} tenantId={auth?.activeTenantId} onClose={() => setLegacyImportModal(false)} onDone={reloadAll} />}
     </div>
   )

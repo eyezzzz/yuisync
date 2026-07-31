@@ -7,6 +7,7 @@ import { applyTenantFilter, buildTenantPayload, runWithTenantFallback } from '..
 const APPOINTMENT_BASE_FIELDS = `
   id, pet_id, client_id, service_type, service_group, service_items, scheduled_at, duration_min, price, status, notes, source, created_at,
   employee_id, groomer_id, responsible_staff_key, responsible_staff_name,
+  delivery_staff_key, delivery_staff_name,
   transport_mode, transport_label, transport_address, transport_neighborhood, transport_city, transport_reference,
   live_status, checkin_at, ready_at, subscription_id, subscription_benefit_used
 `
@@ -122,6 +123,8 @@ function mapAppointmentRow(appointment) {
         neighborhood: appointment.transport_neighborhood || null,
         city: appointment.transport_city || null,
         reference: appointment.transport_reference || null,
+        staff_key: appointment.delivery_staff_key || null,
+        staff_name: appointment.delivery_staff_name || null,
       }
       : null,
   }
@@ -184,6 +187,20 @@ function normalizeAppointmentPayload(payload = {}, moduleId) {
   }
 
   return apiPayload
+}
+
+async function persistAppointmentDeliveryStaff(activeModuleId, activeTenantId, appointmentId, payload = {}) {
+  if (!appointmentId || !Object.prototype.hasOwnProperty.call(payload, 'delivery_staff_key')) return
+  const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
+    let query = supabase.from('appointments').update({ delivery_staff_key: payload.delivery_staff_key || null, delivery_staff_name: payload.delivery_staff_name || null, updated_at: new Date().toISOString() }).eq('id', appointmentId).eq('module_id', activeModuleId)
+    query = applyTenantFilter(query, activeTenantId, includeTenant)
+    return query
+  })
+  if (response.error) {
+    const message = String(response.error.message || '')
+    if (message.includes('delivery_staff_key') || message.includes('delivery_staff_name')) throw new Error('Aplique a migracao de motoboys operacionais antes de salvar o responsavel da entrega.')
+    throw response.error
+  }
 }
 
 async function ensurePetRecordForClient(activeModuleId, activeTenantId, clientId) {
@@ -485,6 +502,7 @@ export function useAppointments() {
 
     if (response.error) throw response.error
 
+    await persistAppointmentDeliveryStaff(activeModuleId, activeTenantId, response.data?.appointment_id, apiPayload)
     const created = await fetchAppointmentById(response.data?.appointment_id)
     setAppointments((current) => mergeAppointmentState(current, created))
     emitAppointmentSync({ type: 'upsert', appointment: created, moduleId: activeModuleId, tenantId: activeTenantId })
@@ -538,6 +556,7 @@ export function useAppointments() {
       if (response.error) throw response.error
     }
 
+    await persistAppointmentDeliveryStaff(activeModuleId, activeTenantId, id, apiPayload)
     const updated = await fetchAppointmentById(id)
     setAppointments((current) => mergeAppointmentState(current, updated))
     emitAppointmentSync({ type: 'upsert', appointment: updated, moduleId: activeModuleId, tenantId: activeTenantId })
