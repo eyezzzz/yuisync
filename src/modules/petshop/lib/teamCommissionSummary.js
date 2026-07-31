@@ -68,8 +68,21 @@ export function appointmentCommissionLines(appointment = {}) {
   const appointmentGroup = normalizeText(appointment.service_group || '')
   if (appointmentGroup && appointmentGroup !== 'banho_tosa') return []
 
-  const rawItems = Array.isArray(appointment.service_items) && appointment.service_items.length
-    ? appointment.service_items
+  const serviceBenefits = (Array.isArray(appointment.subscription_benefits) ? appointment.subscription_benefits : [])
+  .filter((benefit) => benefit?.kind === 'service'
+    && ['reserved', 'consumed'].includes(String(benefit?.status || appointment.subscription_benefit_status || 'reserved')))
+const rawItems = Array.isArray(appointment.service_items) && appointment.service_items.length
+  ? appointment.service_items
+  : serviceBenefits.length
+    ? serviceBenefits.map((benefit) => ({
+      code: benefit.service_code || benefit.key,
+      name: benefit.label || benefit.service_name || benefit.service_code || 'Servico do pacote',
+      service_type: benefit.service_code || benefit.key,
+      group_type: appointment.service_group || 'banho_tosa',
+      unit_price: 0,
+      catalog_price: benefit.catalog_price,
+      subscription_benefit_used: true,
+    }))
     : [{
       code: appointment.service_type,
       name: appointment.service_type,
@@ -87,12 +100,34 @@ export function appointmentCommissionLines(appointment = {}) {
 
   return eligible.map((item) => {
     const category = itemCategory(item, appointment)
-    const itemRevenue = Number(item.unit_price ?? item.catalog_price ?? item.price ?? 0)
-    const revenue = itemRevenue > 0
-      ? itemRevenue
-      : eligible.length === 1
-        ? Number(appointment.price || 0)
-        : 0
+    const code = String(item.code || item.service_type || item.value || '').trim()
+    const benefitKey = String(item.benefit_key || '').trim()
+    const matchingBenefit = serviceBenefits.find((benefit) => {
+      const serviceCode = String(benefit?.service_code || '').trim()
+      const key = String(benefit?.key || benefit?.benefit_key || '').trim()
+      return (code && serviceCode === code)
+        || (benefitKey && key === benefitKey)
+        || (eligible.length === 1 && serviceBenefits.length === 1 && !serviceCode)
+    })
+    const packageCovered = item.subscription_benefit_used === true
+      || item.benefit_used === true
+      || Boolean(matchingBenefit)
+    const catalogRevenue = Number(
+      item.catalog_price
+      ?? item.default_price
+      ?? matchingBenefit?.catalog_price
+      ?? item.unit_price
+      ?? item.price
+      ?? 0
+    )
+    const netRevenue = Number(item.unit_price ?? item.price ?? 0)
+    const revenue = packageCovered
+      ? catalogRevenue
+      : netRevenue > 0
+        ? netRevenue
+        : eligible.length === 1
+          ? Number(appointment.price || 0)
+          : 0
     const rate = ['machine_grooming', 'scissor_grooming'].includes(category) ? 0.10 : 0.05
     const rawLabel = item.name || item.label || item.code || item.value || appointment.service_type || 'Servico estetico'
     const legacyGeneric = genericBathTosaPattern.test(normalizeText(item.service_type || item.code || appointment.service_type || ''))
