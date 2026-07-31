@@ -8,6 +8,7 @@ const LUNCH_COLLAPSED_HEIGHT = 32
 const FLUID_AGENDA_STYLES = `
   .yuisync-agenda-card-surface,
   .yuisync-resolved-card {
+    min-width: 0 !important;
     padding: 7px !important;
   }
 
@@ -19,6 +20,7 @@ const FLUID_AGENDA_STYLES = `
   }
 
   .yuisync-card-body {
+    min-width: 0 !important;
     gap: 2px !important;
   }
 
@@ -36,14 +38,22 @@ const FLUID_AGENDA_STYLES = `
     font-weight: 800 !important;
   }
 
+  .yuisync-card-pet,
+  .yuisync-card-tutor,
+  .yuisync-card-service > span:first-child {
+    min-width: 0 !important;
+    overflow: hidden !important;
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical !important;
+    overflow-wrap: anywhere !important;
+  }
+
   .yuisync-card-pet {
     margin-top: 1px !important;
     font-size: 12px !important;
     line-height: 1.15 !important;
     font-weight: 900 !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    -webkit-line-clamp: 2 !important;
   }
 
   .yuisync-card-tutor {
@@ -51,12 +61,14 @@ const FLUID_AGENDA_STYLES = `
     font-size: 10px !important;
     line-height: 1.2 !important;
     font-weight: 700 !important;
-    white-space: nowrap !important;
-    overflow: hidden !important;
-    text-overflow: ellipsis !important;
+    -webkit-line-clamp: 2 !important;
   }
 
   .yuisync-card-service {
+    display: grid !important;
+    grid-template-columns: minmax(0, 1fr) auto !important;
+    align-items: start !important;
+    gap: 5px !important;
     margin-top: 2px !important;
     min-width: 0 !important;
     font-size: 10px !important;
@@ -65,11 +77,7 @@ const FLUID_AGENDA_STYLES = `
   }
 
   .yuisync-card-service > span:first-child {
-    min-width: 0 !important;
-    overflow: hidden !important;
-    display: -webkit-box !important;
     -webkit-line-clamp: 2 !important;
-    -webkit-box-orient: vertical !important;
   }
 
   .yuisync-card-service > span:last-child {
@@ -81,51 +89,115 @@ const FLUID_AGENDA_STYLES = `
 
   .yuisync-card-transport,
   .yuisync-card-responsible {
+    min-width: 0 !important;
     margin-top: 1px !important;
     font-size: 9px !important;
     line-height: 1.15 !important;
     font-weight: 600 !important;
   }
 
-  .yuisync-resolved-actions,
-  [data-yuisync-width='compact'] .yuisync-resolved-actions,
-  [data-yuisync-width='narrow'] .yuisync-resolved-actions,
-  [data-yuisync-density='compact'] .yuisync-resolved-actions,
-  [data-yuisync-density='micro'] .yuisync-resolved-actions {
+  .yuisync-card-transport > p {
+    min-width: 0 !important;
+  }
+
+  .yuisync-card-transport > p:not(:first-child) {
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .yuisync-resolved-actions {
     right: 5px !important;
     top: 5px !important;
     gap: 4px !important;
   }
 
-  .yuisync-resolved-action,
-  [data-yuisync-width='compact'] .yuisync-resolved-action,
-  [data-yuisync-width='narrow'] .yuisync-resolved-action,
-  [data-yuisync-density='compact'] .yuisync-resolved-action,
-  [data-yuisync-density='micro'] .yuisync-resolved-action {
+  .yuisync-resolved-action {
     width: 28px !important;
     height: 28px !important;
     flex-basis: 28px !important;
     border-radius: 8px !important;
   }
 
-  .yuisync-agenda-card-surface[data-yuisync-density='compact'],
-  .yuisync-resolved-card[data-yuisync-density='compact'] {
+  [data-yuisync-density='compact'],
+  [data-yuisync-density='dense'],
+  [data-yuisync-density='micro'] {
     padding: 5px !important;
   }
 
-  [data-yuisync-density='compact'] .yuisync-card-responsible {
+  [data-yuisync-density='compact'] .yuisync-card-status,
+  [data-yuisync-density='compact'] .yuisync-card-responsible,
+  [data-yuisync-density='dense'] .yuisync-card-status,
+  [data-yuisync-density='dense'] .yuisync-card-responsible,
+  [data-yuisync-density='micro'] .yuisync-card-status,
+  [data-yuisync-density='micro'] .yuisync-card-responsible {
     display: none !important;
   }
 
-  .yuisync-agenda-card-surface[data-yuisync-density='micro'],
-  .yuisync-resolved-card[data-yuisync-density='micro'] {
-    padding: 4px !important;
+  [data-yuisync-density='compact'] .yuisync-card-pet,
+  [data-yuisync-density='compact'] .yuisync-card-tutor,
+  [data-yuisync-density='compact'] .yuisync-card-service > span:first-child {
+    -webkit-line-clamp: 2 !important;
   }
 
-  [data-yuisync-density='micro'] .yuisync-card-status,
-  [data-yuisync-density='micro'] .yuisync-card-transport,
-  [data-yuisync-density='micro'] .yuisync-card-responsible,
-  [data-yuisync-density='micro'] .yuisync-card-tutor {
+  [data-yuisync-density='dense'] .yuisync-card-header,
+  [data-yuisync-density='micro'] .yuisync-card-header {
+    min-height: 28px !important;
+    padding-right: 82px !important;
+  }
+
+  [data-yuisync-density='dense'] .yuisync-resolved-action,
+  [data-yuisync-density='micro'] .yuisync-resolved-action {
+    width: 24px !important;
+    height: 24px !important;
+    flex-basis: 24px !important;
+    border-radius: 7px !important;
+  }
+
+  [data-yuisync-density='dense'] .yuisync-card-time,
+  [data-yuisync-density='micro'] .yuisync-card-time {
+    font-size: 10px !important;
+  }
+
+  [data-yuisync-density='dense'] .yuisync-card-pet {
+    font-size: 11px !important;
+  }
+
+  [data-yuisync-density='dense'] .yuisync-card-tutor,
+  [data-yuisync-density='dense'] .yuisync-card-service,
+  [data-yuisync-density='dense'] .yuisync-card-service > span:last-child {
+    font-size: 9px !important;
+  }
+
+  [data-yuisync-density='micro'] .yuisync-card-pet {
+    font-size: 10px !important;
+  }
+
+  [data-yuisync-density='micro'] .yuisync-card-tutor,
+  [data-yuisync-density='micro'] .yuisync-card-service,
+  [data-yuisync-density='micro'] .yuisync-card-service > span:last-child,
+  [data-yuisync-density='micro'] .yuisync-card-transport {
+    font-size: 8.5px !important;
+  }
+
+  [data-yuisync-density='dense'] .yuisync-card-pet,
+  [data-yuisync-density='dense'] .yuisync-card-tutor,
+  [data-yuisync-density='dense'] .yuisync-card-service > span:first-child,
+  [data-yuisync-density='micro'] .yuisync-card-pet,
+  [data-yuisync-density='micro'] .yuisync-card-tutor,
+  [data-yuisync-density='micro'] .yuisync-card-service > span:first-child {
+    -webkit-line-clamp: 1 !important;
+  }
+
+  [data-yuisync-density='compact'][data-yuisync-motodog='false'] .yuisync-card-transport,
+  [data-yuisync-density='dense'][data-yuisync-motodog='false'] .yuisync-card-transport,
+  [data-yuisync-density='micro'][data-yuisync-motodog='false'] .yuisync-card-transport {
+    display: none !important;
+  }
+
+  [data-yuisync-density='compact'] .yuisync-card-transport > p:not(:first-child),
+  [data-yuisync-density='dense'] .yuisync-card-transport > p:not(:first-child),
+  [data-yuisync-density='micro'] .yuisync-card-transport > p:not(:first-child) {
     display: none !important;
   }
 
@@ -141,20 +213,28 @@ const FLUID_AGENDA_STYLES = `
     background: rgba(30, 58, 138, 0.97) !important;
   }
 
-  [data-yuisync-card-kind='grooming'] .yuisync-resolved-action:hover {
-    background: rgba(37, 99, 235, 0.98) !important;
+  .yuisync-agenda-card-surface[data-yuisync-card-kind='package'],
+  .yuisync-resolved-card[data-yuisync-card-kind='package'] {
+    border-color: rgba(253, 224, 71, 0.95) !important;
+    background: linear-gradient(135deg, #92400e 0%, #b45309 54%, #713f12 100%) !important;
+    box-shadow: 0 10px 28px rgba(120, 53, 15, 0.42) !important;
   }
 
-  [data-yuisync-card-kind='grooming'] .yuisync-resolved-action.is-complete {
+  [data-yuisync-card-kind='package'] .yuisync-resolved-action {
+    border-color: rgba(254, 240, 138, 0.72) !important;
+    background: rgba(146, 64, 14, 0.96) !important;
+  }
+
+  [data-yuisync-card-kind='grooming'] .yuisync-resolved-action.is-complete,
+  [data-yuisync-card-kind='package'] .yuisync-resolved-action.is-complete {
     background: #059669 !important;
   }
 
-  .yuisync-agenda-card-surface .yuisync-package-label,
-  .yuisync-resolved-card .yuisync-package-label {
-    color: #a7f3d0 !important;
-    font-size: 10px !important;
+  .yuisync-package-label {
+    color: #fef3c7 !important;
+    font-size: 9px !important;
     font-weight: 900 !important;
-    letter-spacing: .035em !important;
+    letter-spacing: .02em !important;
     text-transform: uppercase !important;
     white-space: nowrap !important;
   }
@@ -174,17 +254,6 @@ const FLUID_AGENDA_STYLES = `
     font-weight: 900;
     text-transform: uppercase;
     letter-spacing: .04em;
-    transition: background 120ms ease, border-color 120ms ease;
-  }
-
-  .yuisync-lunch-toggle:hover:not(:disabled) {
-    border-color: rgba(251, 191, 36, .62);
-    background: rgba(245, 158, 11, .17);
-  }
-
-  .yuisync-lunch-toggle:disabled {
-    cursor: default;
-    opacity: .72;
   }
 
   .yuisync-lunch-marker {
@@ -205,13 +274,13 @@ const FLUID_AGENDA_STYLES = `
     letter-spacing: .05em;
   }
 
-  .yuisync-lunch-marker-content {
-    inset-inline: 0;
-    cursor: pointer;
-  }
-
+  .yuisync-lunch-marker-content,
   .yuisync-lunch-marker-label {
     inset-inline: 0;
+  }
+
+  .yuisync-lunch-marker-content {
+    cursor: pointer;
   }
 `
 
@@ -245,48 +314,93 @@ const intervalFromCard = (card) => {
   }
 }
 
+const inferOverlapCount = (card) => {
+  const explicit = Number(card?.dataset?.yuisyncOverlapCount || 0)
+  if (explicit > 0) return explicit
+  const width = card?.getBoundingClientRect?.().width || 0
+  if (width <= 150) return 5
+  if (width <= 205) return 4
+  if (width <= 320) return 3
+  return 2
+}
+
 const applyCardPresentation = () => {
   document.querySelectorAll('.yuisync-agenda-card-surface').forEach((card) => {
     const text = normalizeCardText(card.textContent)
-    const price = [...card.querySelectorAll('span')]
-      .find((node) => /^r\$\s*/i.test(String(node.textContent || '').trim()))
-    if (price) {
-      const amount = currencyValue(price.textContent)
-      const packageBath = amount !== null && Math.abs(amount) < 0.005 && text.includes('banho')
-      if (packageBath) {
-        price.textContent = 'PACOTE BANHO'
-        price.classList.add('yuisync-package-label')
+    const serviceNode = card.querySelector('.yuisync-card-service > span:first-child')
+    const priceNode = card.querySelector('.yuisync-card-service > span:last-child')
+    const serviceText = normalizeCardText(serviceNode?.textContent)
+    const amount = currencyValue(priceNode?.textContent)
+    const packageAppointment = card.dataset.yuisyncPackage === 'true'
+      || text.includes('pacote')
+      || (amount !== null && Math.abs(amount) < 0.005 && /banho|tosa/.test(serviceText))
+    const genericGroup = ['banho/tosa', 'banho_tosa', 'banho tosa'].includes(serviceText)
+
+    if (priceNode) {
+      if (packageAppointment) {
+        priceNode.textContent = 'PACOTE · R$ 0,00'
+        priceNode.classList.add('yuisync-package-label')
       } else {
-        price.classList.remove('yuisync-package-label')
+        priceNode.classList.remove('yuisync-package-label')
       }
     }
 
-    const serviceNode = card.querySelector('.yuisync-card-service > span:first-child')
-    const serviceText = normalizeCardText(serviceNode?.textContent)
-    const genericGroup = ['banho/tosa', 'banho_tosa', 'banho tosa'].includes(serviceText)
-    card.dataset.yuisyncCardKind = serviceText.includes('tosa') && !genericGroup
-      ? 'grooming'
-      : 'bath'
+    card.dataset.yuisyncCardKind = packageAppointment
+      ? 'package'
+      : serviceText.includes('tosa') && !genericGroup
+        ? 'grooming'
+        : 'bath'
+    card.dataset.yuisyncMotodog = String(/motodog|buscar e trazer|buscar|trazer/.test(text))
+
+    const count = inferOverlapCount(card)
+    card.dataset.yuisyncDensity = count <= 2
+      ? 'comfortable'
+      : count === 3
+        ? 'compact'
+        : count === 4
+          ? 'dense'
+          : 'micro'
   })
-}
-
-const rememberLayoutValue = (element, key, value) => {
-  if (!element?.dataset) return
-  if (!(key in element.dataset)) element.dataset[key] = String(value ?? '')
-}
-
-const restoreLayoutNode = (node) => {
-  if (!node?.dataset) return
-  if ('yuisyncLunchOriginalTop' in node.dataset) node.style.top = node.dataset.yuisyncLunchOriginalTop
-  if ('yuisyncLunchOriginalDisplay' in node.dataset) node.style.display = node.dataset.yuisyncLunchOriginalDisplay
 }
 
 function AgendaFluidRefinement() {
   useEffect(() => {
-    let densityFrame = 0
+    let frame = 0
     let lunchPreference = null
+    const managedStyles = new WeakMap()
 
-    const ensureLunchMarker = (column, kind, top) => {
+    const rememberAndApply = (element, property, value) => {
+      if (!element) return
+      const state = managedStyles.get(element) || {}
+      state[property] = { original: element.style[property], applied: value }
+      managedStyles.set(element, state)
+      element.style[property] = value
+    }
+
+    const restoreManaged = (element) => {
+      const state = managedStyles.get(element)
+      if (!state) return
+      Object.entries(state).forEach(([property, values]) => {
+        if (element.style[property] === values.applied) element.style[property] = values.original
+      })
+      managedStyles.delete(element)
+    }
+
+    const resetLunchColumn = (column) => {
+      if (!column) return
+      restoreManaged(column)
+      ;[...column.children].forEach((node) => {
+        if (node.dataset.yuisyncLunchMarker) return
+        restoreManaged(node)
+      })
+    }
+
+    const schedule = () => {
+      if (frame) return
+      frame = window.requestAnimationFrame(applyAll)
+    }
+
+    const ensureMarker = (column, kind, top) => {
       const selector = `[data-yuisync-lunch-marker='${kind}']`
       let marker = column.querySelector(selector)
       if (!marker) {
@@ -303,29 +417,35 @@ function AgendaFluidRefinement() {
       if (kind === 'content') {
         marker.onclick = () => {
           lunchPreference = 'expanded'
-          scheduleDensity()
+          schedule()
         }
       }
-      return marker
     }
 
     const applyLunchGap = () => {
-      const slots = [...document.querySelectorAll('button[aria-label^="Agendar as "]')]
-      const startSlot = slots.find((slot) => minutesFromClock(slot.getAttribute('aria-label')) === LUNCH_START_MINUTES)
-      const endSlot = slots.find((slot) => minutesFromClock(slot.getAttribute('aria-label')) === LUNCH_END_MINUTES)
-      if (!startSlot || !endSlot || startSlot.parentElement !== endSlot.parentElement) return
+      const allSlots = [...document.querySelectorAll('button[aria-label^="Agendar as "]')]
+      const initialStart = allSlots.find((slot) => minutesFromClock(slot.getAttribute('aria-label')) === LUNCH_START_MINUTES)
+      const initialEnd = allSlots.find((slot) => minutesFromClock(slot.getAttribute('aria-label')) === LUNCH_END_MINUTES)
+      if (!initialStart || !initialEnd || initialStart.parentElement !== initialEnd.parentElement) return
 
-      const contentColumn = startSlot.parentElement
+      const contentColumn = initialStart.parentElement
       const labelColumn = contentColumn.previousElementSibling
       const grid = contentColumn.parentElement
       if (!labelColumn || !grid) return
 
-      const startTop = Number(startSlot.dataset.yuisyncLunchOriginalTop || startSlot.style.top.replace('px', ''))
-      const endTop = Number(endSlot.dataset.yuisyncLunchOriginalTop || endSlot.style.top.replace('px', ''))
+      resetLunchColumn(labelColumn)
+      resetLunchColumn(contentColumn)
+
+      const slots = [...contentColumn.querySelectorAll('button[aria-label^="Agendar as "]')]
+      const startSlot = slots.find((slot) => minutesFromClock(slot.getAttribute('aria-label')) === LUNCH_START_MINUTES)
+      const endSlot = slots.find((slot) => minutesFromClock(slot.getAttribute('aria-label')) === LUNCH_END_MINUTES)
+      if (!startSlot || !endSlot) return
+
+      const startTop = Number(startSlot.style.top.replace('px', ''))
+      const endTop = Number(endSlot.style.top.replace('px', ''))
       if (!Number.isFinite(startTop) || !Number.isFinite(endTop) || endTop <= startTop) return
 
-      const cards = [...contentColumn.querySelectorAll('.yuisync-agenda-card-surface')]
-      const lunchInUse = cards.some((card) => {
+      const lunchInUse = [...contentColumn.querySelectorAll('.yuisync-agenda-card-surface')].some((card) => {
         const interval = intervalFromCard(card)
         return interval && interval.start < LUNCH_END_MINUTES && interval.end > LUNCH_START_MINUTES
       })
@@ -339,85 +459,54 @@ function AgendaFluidRefinement() {
         toggle.type = 'button'
         toggle.dataset.yuisyncLunchToggle = 'true'
         toggle.className = 'yuisync-lunch-toggle'
-        const target = header.lastElementChild || header
-        target.appendChild(toggle)
+        ;(header.lastElementChild || header).appendChild(toggle)
       }
       if (toggle) {
         toggle.disabled = lunchInUse
         toggle.textContent = lunchInUse
           ? '11:00–13:00 em uso'
-          : collapsed
-            ? 'Mostrar 11:00–13:00'
-            : 'Recolher 11:00–13:00'
+          : collapsed ? 'Mostrar 11:00–13:00' : 'Recolher 11:00–13:00'
         toggle.onclick = () => {
           if (lunchInUse) return
           lunchPreference = collapsed ? 'expanded' : 'collapsed'
-          scheduleDensity()
+          schedule()
         }
+      }
+
+      if (!collapsed) {
+        labelColumn.querySelector('[data-yuisync-lunch-marker="label"]')?.remove()
+        contentColumn.querySelector('[data-yuisync-lunch-marker="content"]')?.remove()
+        grid.dataset.yuisyncLunchCollapsed = 'false'
+        return
       }
 
       ;[labelColumn, contentColumn].forEach((column) => {
-        rememberLayoutValue(column, 'yuisyncLunchOriginalHeight', column.style.height)
-        const originalHeight = Number(column.dataset.yuisyncLunchOriginalHeight.replace('px', ''))
+        const originalHeight = Number(column.style.height.replace('px', ''))
         if (Number.isFinite(originalHeight)) {
-          column.style.height = `${collapsed ? originalHeight - shift : originalHeight}px`
+          rememberAndApply(column, 'height', `${Math.max(LUNCH_COLLAPSED_HEIGHT, originalHeight - shift)}px`)
         }
+
+        ;[...column.children].forEach((node) => {
+          if (node.dataset.yuisyncLunchMarker || !node.style?.top) return
+          const originalTop = Number(node.style.top.replace('px', ''))
+          if (!Number.isFinite(originalTop)) return
+          if (originalTop >= startTop && originalTop < endTop) {
+            rememberAndApply(node, 'display', 'none')
+          } else if (originalTop >= endTop) {
+            rememberAndApply(node, 'top', `${originalTop - shift}px`)
+          }
+        })
       })
 
-      const repositionRows = (column) => {
-        ;[...column.children].forEach((node) => {
-          if (node.dataset.yuisyncLunchMarker) return
-          if (!node.style?.top) return
-          rememberLayoutValue(node, 'yuisyncLunchOriginalTop', node.style.top)
-          rememberLayoutValue(node, 'yuisyncLunchOriginalDisplay', node.style.display)
-          const originalTop = Number(node.dataset.yuisyncLunchOriginalTop.replace('px', ''))
-          if (!Number.isFinite(originalTop)) return
-
-          if (!collapsed) {
-            restoreLayoutNode(node)
-            return
-          }
-
-          if (originalTop >= startTop && originalTop < endTop) {
-            node.style.display = 'none'
-            return
-          }
-          node.style.display = node.dataset.yuisyncLunchOriginalDisplay
-          node.style.top = `${originalTop >= endTop ? originalTop - shift : originalTop}px`
-        })
-      }
-
-      repositionRows(labelColumn)
-      repositionRows(contentColumn)
-
-      if (collapsed) {
-        ensureLunchMarker(labelColumn, 'label', startTop)
-        ensureLunchMarker(contentColumn, 'content', startTop)
-      } else {
-        labelColumn.querySelector('[data-yuisync-lunch-marker="label"]')?.remove()
-        contentColumn.querySelector('[data-yuisync-lunch-marker="content"]')?.remove()
-      }
-
-      grid.dataset.yuisyncLunchCollapsed = String(collapsed)
+      ensureMarker(labelColumn, 'label', startTop)
+      ensureMarker(contentColumn, 'content', startTop)
+      grid.dataset.yuisyncLunchCollapsed = 'true'
     }
 
-    const applyDensity = () => {
-      densityFrame = 0
-      document.querySelectorAll('.yuisync-agenda-card-surface').forEach((card) => {
-        const outer = card.parentElement
-        const rect = card.getBoundingClientRect()
-        const height = outer?.getBoundingClientRect?.().height || rect.height
-        const width = rect.width
-        card.dataset.yuisyncDensity = height <= 58 ? 'micro' : height <= 104 ? 'compact' : 'regular'
-        card.dataset.yuisyncWidth = width <= 170 ? 'narrow' : width <= 240 ? 'compact' : 'wide'
-      })
+    function applyAll() {
+      frame = 0
       applyCardPresentation()
       applyLunchGap()
-    }
-
-    const scheduleDensity = () => {
-      if (densityFrame) return
-      densityFrame = window.requestAnimationFrame(applyDensity)
     }
 
     const onClickCapture = (event) => {
@@ -429,18 +518,20 @@ function AgendaFluidRefinement() {
       }, 0)
     }
 
-    const observer = new MutationObserver(scheduleDensity)
-
+    const observer = new MutationObserver(schedule)
     observer.observe(document.body, { childList: true, subtree: true })
     document.addEventListener('click', onClickCapture, true)
-    window.addEventListener('resize', scheduleDensity)
-    scheduleDensity()
+    window.addEventListener('resize', schedule)
+    schedule()
 
     return () => {
       observer.disconnect()
       document.removeEventListener('click', onClickCapture, true)
-      window.removeEventListener('resize', scheduleDensity)
-      if (densityFrame) window.cancelAnimationFrame(densityFrame)
+      window.removeEventListener('resize', schedule)
+      if (frame) window.cancelAnimationFrame(frame)
+      document.querySelectorAll('[data-yuisync-lunch-toggle]').forEach((node) => node.remove())
+      document.querySelectorAll('[data-yuisync-lunch-marker]').forEach((node) => node.remove())
+      document.querySelectorAll('button[aria-label^="Agendar as "]').forEach((slot) => restoreManaged(slot))
     }
   }, [])
 
