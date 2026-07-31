@@ -7,7 +7,9 @@ import {
   Download,
   Eye,
   Percent,
+  Pencil,
   Printer,
+  Save,
   RefreshCw,
   RotateCcw,
   Truck,
@@ -19,12 +21,16 @@ import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
 import { fmtCurrency } from '../../../lib/supabase'
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
-import { normalizeOperationalStaff } from '../../../../shared/petshopOperations'
+import {
+  normalizeOperationalStaff,
+  PETSHOP_COMMISSION_RESET_TEMPLATE_KEY,
+} from '../../../../shared/petshopOperations'
 import {
   appointmentCommissionLines,
   appointmentHasCommissionServices,
   buildCommissionRows,
   commissionHistoryLabel,
+  hydrateLegacyCommissionAppointments,
 } from '../lib/teamCommissionSummary'
 import {
   assignAppointmentDeliveryStaff,
@@ -32,6 +38,7 @@ import {
   deliveryStaffFromSettings,
   loadDeliveryTeamSnapshot,
 } from '../lib/deliveryOperations'
+import { persistPetshopTeamSettings } from '../lib/teamSettingsOperations'
 
 const TABS = [
   { id: 'fechamento', label: 'Comissoes', icon: Wallet },
@@ -48,6 +55,7 @@ const emptyRange = () => {
 }
 
 const dateLabel = (value) => value ? new Date(value).toLocaleDateString('pt-BR') : '-'
+const dateTimeLabel = (value) => value ? new Date(value).toLocaleString('pt-BR') : '-'
 const escapeHtml = (value = '') => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -167,6 +175,10 @@ export default function EquipePage() {
   const [error, setError] = useState('')
   const [assigningServiceId, setAssigningServiceId] = useState('')
   const [assigningDeliveryId, setAssigningDeliveryId] = useState('')
+  const [editingStaffKey, setEditingStaffKey] = useState('')
+  const [editingStaffName, setEditingStaffName] = useState('')
+  const [savingStaffKey, setSavingStaffKey] = useState('')
+  const [resettingCommissions, setResettingCommissions] = useState(false)
 
   const configuredStaff = useMemo(
     () => normalizeOperationalStaff(storeSettings?.petshop_operational_staff),
@@ -188,13 +200,32 @@ export default function EquipePage() {
     () => configuredDeliveryStaff.filter((person) => person.active !== false),
     [configuredDeliveryStaff],
   )
+  const commissionResetAt = storeSettings?.message_templates?.[PETSHOP_COMMISSION_RESET_TEMPLATE_KEY] || null
+  const hydratedServiceHistory = useMemo(
+    () => hydrateLegacyCommissionAppointments(serviceHistory, services),
+    [serviceHistory, services],
+  )
+  const hydratedPendingServices = useMemo(
+    () => hydrateLegacyCommissionAppointments(pendingServices, services),
+    [pendingServices, services],
+  )
+  const afterCommissionReset = (appointment) => {
+    if (!commissionResetAt) return true
+    const resetTime = new Date(commissionResetAt).getTime()
+    const appointmentTime = new Date(appointment?.scheduled_at || 0).getTime()
+    return !Number.isFinite(resetTime) || appointmentTime > resetTime
+  }
+  const commissionServiceHistory = useMemo(
+    () => hydratedServiceHistory.filter(afterCommissionReset),
+    [hydratedServiceHistory, commissionResetAt],
+  )
   const displayRows = useMemo(
-    () => buildCommissionRows(serviceHistory, configuredStaff),
-    [configuredStaff, serviceHistory],
+    () => buildCommissionRows(commissionServiceHistory, configuredStaff),
+    [configuredStaff, commissionServiceHistory],
   )
   const commissionPendingServices = useMemo(
-    () => pendingServices.filter(appointmentHasCommissionServices),
-    [pendingServices],
+    () => hydratedPendingServices.filter(afterCommissionReset).filter(appointmentHasCommissionServices),
+    [hydratedPendingServices, commissionResetAt],
   )
 
   async function reload(nextRange = range) {
@@ -230,7 +261,11 @@ export default function EquipePage() {
     setAssigningServiceId(appointment.id)
     setError('')
     try {
-      await assignPendingServiceResponsible(appointment.id, { key: person.key, name: person.name })
+      await assignPendingServiceResponsible(appointment.id, {
+        key: person.key,
+        name: person.name,
+        service_items: appointment.service_items,
+      })
       await reload(range)
     } catch (err) {
       setError(err.message)
@@ -274,11 +309,11 @@ export default function EquipePage() {
   }, [])
 
   const selectedHistoryItems = useMemo(() => historyRow?.staff_key
-    ? serviceHistory.filter((item) => (
+    ? commissionServiceHistory.filter((item) => (
       item.responsible_staff_key === historyRow.staff_key
       && appointmentHasCommissionServices(item)
     ))
-    : [], [historyRow, serviceHistory])
+    : [], [historyRow, commissionServiceHistory])
 
   const totals = useMemo(() => displayRows.reduce((acc, row) => ({
     serviceCount: acc.serviceCount + Number(row.service_count || 0),
@@ -312,10 +347,115 @@ export default function EquipePage() {
     return [...map.values()]
   }, [configuredDeliveryStaff, deliveryRows])
 
-  function resetRange() {
+  function resetRangeToMonth() {
     const next = emptyRange()
     setRange(next)
     void reload(next)
+  }
+
+  async function saveStaffName(person) {
+    const cleanName = editingStaffName.trim()
+    if (!cleanName || !person?.key) return
+    const moduleId = activeModuleId || 'petshop'
+    const nextStaff = normalizeOperationalStaff(configuredStaff.map((item) => (
+      item.key === person.key ? { ...item, name: cleanName } : item
+    )))
+    const previousSettings = storeSettings
+    const optimisticTemplates = {
+      ...(storeSettings?.message_templates || {}),
+      __petshop_operational_staff: nextStaff,
+    }
+    setSavingStaffKey(person.key)
+    setError('')
+    auth.updateStoreSettings?.({
+      petshop_operational_staff: nextStaff,
+      message_templates: optimisticTemplates,
+    })
+    try {
+      const saved = await persistPetshopTeamSettings({
+        moduleId,
+        tenantId: activeTenantId,
+        currentSettings: { ...storeSettings, message_templates: optimisticTemplates },
+        staff: nextStaff,
+      })
+      auth.updateStoreSettings?.(saved)
+      setEditingStaffKey('')
+      setEditingStaffName('')
+      await auth.refreshSettings(moduleId)
+    } catch (err) {
+      auth.updateStoreSettings?.(previousSettings)
+      setError(err.message || 'Nao foi possivel alterar o nome da esteticista.')
+    } finally {
+      setSavingStaffKey('')
+    }
+  }
+
+  async function resetCommissionCycle() {
+    if (!window.confirm('Zerar o fechamento atual? Os agendamentos nao serao apagados; eles apenas ficarao fora do proximo ciclo de comissoes.')) return
+    const moduleId = activeModuleId || 'petshop'
+    const resetAt = new Date().toISOString()
+    const previousSettings = storeSettings
+    const optimisticTemplates = {
+      ...(storeSettings?.message_templates || {}),
+      [PETSHOP_COMMISSION_RESET_TEMPLATE_KEY]: resetAt,
+    }
+    setResettingCommissions(true)
+    setError('')
+    setHistoryRow(null)
+    auth.updateStoreSettings?.({ message_templates: optimisticTemplates })
+    try {
+      const saved = await persistPetshopTeamSettings({
+        moduleId,
+        tenantId: activeTenantId,
+        currentSettings: { ...storeSettings, message_templates: optimisticTemplates },
+        staff: configuredStaff,
+        templatePatch: { [PETSHOP_COMMISSION_RESET_TEMPLATE_KEY]: resetAt },
+      })
+      auth.updateStoreSettings?.(saved)
+      await auth.refreshSettings(moduleId)
+    } catch (err) {
+      auth.updateStoreSettings?.(previousSettings)
+      setError(err.message || 'Nao foi possivel zerar o fechamento de comissoes.')
+    } finally {
+      setResettingCommissions(false)
+    }
+  }
+
+  function renderEditableStaffName(person, compact = false) {
+    if (editingStaffKey === person.key) {
+      return (
+        <div className="flex items-center gap-2 flex-wrap">
+          <input
+            className={`inp ${compact ? 'min-w-[150px] py-1 text-sm' : 'min-w-[190px]'}`}
+            value={editingStaffName}
+            autoFocus
+            onChange={(event) => setEditingStaffName(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') void saveStaffName(person)
+              if (event.key === 'Escape') setEditingStaffKey('')
+            }}
+          />
+          <button type="button" className="btn btn-primary btn-sm" disabled={savingStaffKey === person.key} onClick={() => void saveStaffName(person)}>
+            <Save size={13}/> {savingStaffKey === person.key ? 'Salvando...' : 'Salvar'}
+          </button>
+          <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditingStaffKey('')}>Cancelar</button>
+        </div>
+      )
+    }
+    return (
+      <div className="flex items-center gap-2">
+        <span className={compact ? 'font-semibold text-text' : 'font-display text-lg font-bold text-text'}>{person.name}</span>
+        <button
+          type="button"
+          title="Editar nome da esteticista"
+          aria-label={`Editar nome de ${person.name}`}
+          className="rounded-lg p-1.5 text-muted hover:text-emerald-400 hover:bg-emerald-500/10"
+          onClick={() => { setEditingStaffKey(person.key); setEditingStaffName(person.name) }}
+        >
+          <Pencil size={13}/>
+        </button>
+      </div>
+    )
   }
 
   function printCommissionSummary() {
@@ -423,18 +563,26 @@ export default function EquipePage() {
           <div><label className="inp-label">Inicio</label><input className="inp" type="date" value={range.startDate} onChange={(event) => setRange((prev) => ({ ...prev, startDate: event.target.value }))}/></div>
           <div><label className="inp-label">Fim</label><input className="inp" type="date" value={range.endDate} onChange={(event) => setRange((prev) => ({ ...prev, endDate: event.target.value }))}/></div>
           <button onClick={() => reload(range)} className="btn btn-primary"><RefreshCw size={15}/> Recalcular</button>
-          <button onClick={resetRange} className="btn btn-secondary"><RotateCcw size={15}/> Resetar periodo</button>
+          <button onClick={resetRangeToMonth} className="btn btn-secondary">Periodo do mes</button>
+          {activeTab === 'fechamento' && (
+            <button onClick={() => void resetCommissionCycle()} disabled={resettingCommissions} className="btn btn-secondary">
+              <RotateCcw size={15} className={resettingCommissions ? 'animate-spin' : ''}/> {resettingCommissions ? 'Zerando...' : 'Zerar fechamento'}
+            </button>
+          )}
         </div>
       )}
 
       {activeTab === 'fechamento' && (
         <div className="space-y-5">
+          {commissionResetAt && (
+            <p className="text-xs text-muted">Ultimo fechamento zerado em {dateTimeLabel(commissionResetAt)}. Agendamentos anteriores continuam preservados no historico operacional.</p>
+          )}
           <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/8 px-5 py-4">
             <div className="flex items-start gap-3">
               <CheckCircle size={18} className="mt-0.5 text-emerald-400" />
               <div>
                 <p className="font-semibold text-text">Somente servicos de estetica entram na comissao</p>
-                <p className="mt-1 text-sm text-muted">Tosa 10%: maquina, total ou tesoura. Banho 5%. Outros 5%. MotoDog, transporte e entrega ficam fora deste calculo. MotoDog, transporte e entrega ficam fora deste calculo.</p>
+                <p className="mt-1 text-sm text-muted">Tosa 10%: maquina, total ou tesoura. Banho 5%. Outros 5%. MotoDog, transporte e entrega ficam fora deste calculo.</p>
               </div>
             </div>
           </div>
@@ -477,7 +625,7 @@ export default function EquipePage() {
               <tbody>
                 {displayRows.map((row) => (
                   <tr key={row.staff_key}>
-                    <td className="font-semibold text-text">{row.collaborator_name}</td>
+                    <td>{renderEditableStaffName(configuredStaffByKey.get(row.staff_key) || { key: row.staff_key, name: row.collaborator_name, active: true }, true)}</td>
                     <td>{row.bath_count}</td>
                     <td>{row.machine_grooming_count}</td>
                     <td>{row.scissor_grooming_count}</td>
@@ -508,7 +656,7 @@ export default function EquipePage() {
               return (
                 <div key={person.key} className="rounded-2xl border border-[var(--border)] bg-card p-5">
                   <div className="flex items-start justify-between gap-3">
-                    <div><p className="font-display text-lg font-bold text-text">{person.name}</p><p className="mt-1 text-xs text-muted">{row?.service_count || 0} servico(s) no periodo</p></div>
+                    <div>{renderEditableStaffName(person)}<p className="mt-1 text-xs text-muted">{row?.service_count || 0} servico(s) no periodo</p></div>
                     <span className={`badge ${person.active === false ? 'badge-gray' : 'badge-green'}`}>{person.active === false ? 'Inativa' : 'Ativa'}</span>
                   </div>
                   <div className="mt-5 grid grid-cols-3 gap-2 text-center">

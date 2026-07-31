@@ -18,6 +18,7 @@ export const DEFAULT_PETSHOP_OPERATIONAL_STAFF = [
 ]
 
 export const PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY = '__petshop_delivery_staff'
+export const PETSHOP_COMMISSION_RESET_TEMPLATE_KEY = '__petshop_commission_reset_at'
 
 export const DEFAULT_PETSHOP_DELIVERY_STAFF = [
   { key: 'motoboy-1', name: 'Motoboy 1', active: true },
