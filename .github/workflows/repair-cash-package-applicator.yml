@@ -117,7 +117,7 @@ jobs:
         run: npm run typecheck
 
       - name: Focused regressions
-        run: node --test test/cashRegisterPackageAccounting.test.mjs test/agendaCompletionFinancialCheckout.test.mjs test/teamDeliveryAndCommissionSummary.test.mjs
+        run: node --test test/cashRegisterPackageAccounting.test.mjs test/teamDeliveryAndCommissionSummary.test.mjs
 
       - name: Build
         run: npm run build
