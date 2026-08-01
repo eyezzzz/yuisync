@@ -87,6 +87,17 @@ test('recorrencia inclui todos os servicos aplicaveis em cada semana', async () 
   assert.match(sql, /repair_petshop_package_recurring_appointment/)
 })
 
+test('data de hoje permanece reservada independentemente do horario', async () => {
+  const sql = await read('supabase/migrations/20260801103400_petshop_package_today_is_reserved.sql')
+  const enhancer = await read('src/modules/petshop/components/PackageRecurringScheduleEnhancer.jsx')
+
+  assert.match(sql, /v_scheduled_at::date < current_date/)
+  assert.doesNotMatch(sql, /v_scheduled_at < now\(\)/)
+  assert.match(sql, /v_used \+ v_reserved > v_limit/)
+  assert.match(enhancer, /localDateKey\(value\) < localDateKey\(new Date\(\)\)/)
+  assert.doesNotMatch(enhancer, /date\.getTime\(\) < Date\.now\(\)/)
+})
+
 test('fechamento legado consome diretamente em vez de criar nova reserva', async () => {
   const sql = await read('supabase/migrations/20260801103100_petshop_package_completion_consumption.sql')
 
