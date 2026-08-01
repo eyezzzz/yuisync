@@ -34,6 +34,23 @@ before insert or update of service_items, subscription_id, subscription_benefit_
 on public.appointments
 for each row execute function public.mark_petshop_appointment_reserved_ledger();
 
+-- A migration anterior reconstroi reservas existentes antes deste trigger ser
+-- criado. Marca esses snapshots sem alterar novamente os saldos.
+update public.appointments appointment
+set subscription_benefits = (
+  select coalesce(jsonb_agg(
+    case
+      when coalesce(benefit->>'status', 'reserved') = 'reserved'
+        then benefit || jsonb_build_object('accounting', 'reserved_ledger')
+      else benefit
+    end
+  ), '[]'::jsonb)
+  from jsonb_array_elements(coalesce(appointment.subscription_benefits, '[]'::jsonb)) benefit
+),
+updated_at = now()
+where appointment.module_id = 'petshop'
+  and appointment.subscription_benefit_status = 'reserved';
+
 comment on function public.mark_petshop_appointment_reserved_ledger() is
   'Marca reservas novas para impedir que backfills futuros as confundam com consumo legado.';
 
