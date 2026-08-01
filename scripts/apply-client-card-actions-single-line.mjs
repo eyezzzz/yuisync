@@ -1,23 +1,26 @@
 import assert from 'node:assert/strict'
 import { readFileSync, rmSync, writeFileSync } from 'node:fs'
 
+function replaceOnce(source, before, after, label) {
+  if (source.includes(after)) return source
+  assert.ok(source.includes(before), `${label} nao encontrado`)
+  return source.replace(before, after)
+}
+
 const petsPath = 'src/modules/petshop/pages/PetsPage.jsx'
 let pets = readFileSync(petsPath, 'utf8')
-
 const oldRow = '<div className="mt-4 flex flex-wrap items-center justify-end gap-2"><button type="button" data-yuisync-client-history={group.key} className="btn btn-secondary btn-sm"><History size={13}/> Histórico</button><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar cliente</button></div>'
 const newRow = '<div className="mt-4 flex flex-nowrap items-center justify-end gap-1.5"><button type="button" data-yuisync-client-history={group.key} className="btn btn-secondary btn-sm shrink-0 gap-1 whitespace-nowrap px-2 text-[10px]"><History size={12}/> Histórico</button><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm shrink-0 gap-1 whitespace-nowrap px-2 text-[10px]"><Plus size={12}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm shrink-0 whitespace-nowrap px-2 text-[10px]">Editar cliente</button></div>'
-
-assert.ok(pets.includes(oldRow), 'linha de acoes do card nao encontrada')
-pets = pets.replace(oldRow, newRow)
-assert.equal((pets.match(/mt-4 flex flex-nowrap items-center justify-end gap-1\.5/g) || []).length, 1)
+pets = replaceOnce(pets, oldRow, newRow, 'linha de acoes do card')
 writeFileSync(petsPath, pets)
 
 const enhancerPath = 'src/modules/petshop/components/ClientHistoryGroomingEnhancer.jsx'
 let enhancer = readFileSync(enhancerPath, 'utf8')
-
-enhancer = enhancer.replace(
+enhancer = replaceOnce(
+  enhancer,
   "import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'\n",
   "import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'\nimport { groupPetsByTutor } from '../../../shared/lib/petTutorGroups'\n",
+  'import do agrupamento compartilhado',
 )
 
 const oldGrouping = `function clientGroupKey(client = {}) {
@@ -75,7 +78,6 @@ function groupClients(clients = []) {
   })
   return groups
 }`
-
 const newGrouping = `function mapClient(client = {}) {
   return {
     ...client,
@@ -98,15 +100,13 @@ function groupClients(clients = []) {
   })
   return groups
 }`
-
-assert.ok(enhancer.includes(oldGrouping), 'agrupamento antigo do historico nao encontrado')
-enhancer = enhancer.replace(oldGrouping, newGrouping)
-
-enhancer = enhancer.replace(
+enhancer = replaceOnce(enhancer, oldGrouping, newGrouping, 'agrupamento do historico')
+enhancer = replaceOnce(
+  enhancer,
   "    setClients((response.data || []).map(mapClient))\n",
   "    const mappedClients = (response.data || []).map(mapClient)\n    setClients(mappedClients)\n    return mappedClients\n",
+  'retorno do carregamento de clientes',
 )
-
 const oldClick = `      const group = groups.get(button.dataset.yuisyncClientHistory)
       if (group) void openHistory(group)`
 const newClick = `      const groupKey = button.dataset.yuisyncClientHistory
@@ -132,15 +132,31 @@ const newClick = `      const groupKey = button.dataset.yuisyncClientHistory
         }
         void openHistory(group)
       })()`
-assert.ok(enhancer.includes(oldClick), 'tratamento antigo do clique no historico nao encontrado')
-enhancer = enhancer.replace(oldClick, newClick)
-enhancer = enhancer.replace('  }, [groups, openHistory])', '  }, [groups, loadClients, openHistory])')
-
-assert.match(enhancer, /groupPetsByTutor\(clients\)/)
-assert.match(enhancer, /groupClients\(await loadClients\(\)\)/)
+enhancer = replaceOnce(enhancer, oldClick, newClick, 'tratamento do clique no historico')
+enhancer = replaceOnce(
+  enhancer,
+  '  }, [groups, openHistory])',
+  '  }, [groups, loadClients, openHistory])',
+  'dependencias do clique no historico',
+)
 writeFileSync(enhancerPath, enhancer)
 
-writeFileSync('test/clientHistoryClickAndLayout.test.mjs', `import assert from 'node:assert/strict'\nimport { readFile } from 'node:fs/promises'\nimport test from 'node:test'\n\nconst root = new URL('../', import.meta.url)\nconst read = (path) => readFile(new URL(path, root), 'utf8')\n\ntest('acoes do card permanecem em uma unica linha', async () => {\n  const pets = await read('src/modules/petshop/pages/PetsPage.jsx')\n  assert.match(pets, /mt-4 flex flex-nowrap items-center justify-end gap-1\\.5/)\n  assert.match(pets, /whitespace-nowrap px-2 text-\\[10px\\]/)\n})\n\ntest('clique do historico usa o mesmo agrupamento da tela e recarrega em caso de corrida', async () => {\n  const enhancer = await read('src/modules/petshop/components/ClientHistoryGroomingEnhancer.jsx')\n  assert.match(enhancer, /groupPetsByTutor/)\n  assert.match(enhancer, /groupPetsByTutor\\(clients\\)/)\n  assert.match(enhancer, /groupClients\\(await loadClients\\(\\)\\)\\.get\\(groupKey\\)/)\n  assert.match(enhancer, /Não foi possível identificar este tutor/)\n  assert.doesNotMatch(enhancer, /function clientGroupKey/)\n})\n`)
+const corePath = 'src/modules/petshop/hooks/usePetshopAdvancedCore.js'
+let core = readFileSync(corePath, 'utf8')
+core = replaceOnce(
+  core,
+  'ready_at,notes,subscription_benefit_used,transport_mode',
+  'ready_at,notes,subscription_id,subscription_benefit_used,transport_mode',
+  'subscription_id no snapshot de comissoes',
+)
+writeFileSync(corePath, core)
 
-rmSync('scripts/apply-client-card-actions-single-line.mjs')
-rmSync('.github/workflows/apply-client-card-actions-single-line.yml')
+writeFileSync('test/clientHistoryClickLayoutAndPackageCommission.test.mjs', `import assert from 'node:assert/strict'\nimport { readFile } from 'node:fs/promises'\nimport test from 'node:test'\n\nconst root = new URL('../', import.meta.url)\nconst read = (path) => readFile(new URL(path, root), 'utf8')\n\ntest('acoes do card permanecem em uma unica linha', async () => {\n  const pets = await read('src/modules/petshop/pages/PetsPage.jsx')\n  assert.match(pets, /mt-4 flex flex-nowrap items-center justify-end gap-1\\.5/)\n  assert.match(pets, /whitespace-nowrap px-2 text-\\[10px\\]/)\n})\n\ntest('clique do historico usa exatamente o agrupamento da tela e recarrega se necessario', async () => {\n  const enhancer = await read('src/modules/petshop/components/ClientHistoryGroomingEnhancer.jsx')\n  assert.match(enhancer, /groupPetsByTutor/)\n  assert.match(enhancer, /groupPetsByTutor\\(clients\\)/)\n  assert.match(enhancer, /groupClients\\(await loadClients\\(\\)\\)\\.get\\(groupKey\\)/)\n  assert.match(enhancer, /Não foi possível identificar este tutor/)\n  assert.doesNotMatch(enhancer, /function clientGroupKey/)\n})\n\ntest('snapshot de comissoes carrega subscription_id para aplicar o valor liquido do pacote', async () => {\n  const core = await read('src/modules/petshop/hooks/usePetshopAdvancedCore.js')\n  assert.match(core, /notes,subscription_id,subscription_benefit_used/)\n})\n\ntest('banho de pacote de 200 dividido em quatro usa base 50 e comissao 2,50', async () => {\n  const { buildPackageCommissionAllocation } = await import('../src/modules/petshop/lib/packageCommissionOperations.js')\n  const { appointmentCommissionLines } = await import('../src/modules/petshop/lib/teamCommissionSummary.js')\n  const allocation = buildPackageCommissionAllocation({\n    plan: { name: '4 banhos', price: 200, services: [{ service_type: 'banho_0_10', qty_per_cycle: 4 }] },\n    catalogServices: [{ code: 'banho_0_10', default_price: 55 }],\n  })\n  assert.equal(allocation.unit_values.get('banho_0_10'), 50)\n  const [line] = appointmentCommissionLines({\n    id: 'package-bath',\n    service_group: 'banho_tosa',\n    subscription_id: 'subscription-1',\n    subscription_benefit_used: true,\n    package_commission: true,\n    package_commission_unit_value: 50,\n    service_items: [{ code: 'banho_0_10', name: 'Banho', group_type: 'banho_tosa', unit_price: 0, package_covered: true, package_unit_price: 50 }],\n  })\n  assert.equal(line.revenue, 50)\n  assert.equal(line.commission, 2.5)\n  assert.notEqual(line.commission, 2.75)\n})\n`)
+
+for (const disposable of [
+  'scripts/apply-client-card-actions-single-line.mjs',
+  '.github/workflows/apply-client-card-actions-single-line.yml',
+  '.github/history-fix-trigger',
+]) {
+  try { rmSync(disposable) } catch {}
+}
