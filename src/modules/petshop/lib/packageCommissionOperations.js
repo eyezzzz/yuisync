@@ -99,13 +99,19 @@ export function buildPackageCommissionAllocation({ plan = {}, catalogServices = 
   }
 }
 
-const appointmentUsesPackage = (appointment = {}) => Boolean(
-  appointment.subscription_id
-  && (
-    appointment.subscription_benefit_used === true
+const appointmentHasPackageSignal = (appointment = {}) => {
+  const items = Array.isArray(appointment.service_items) ? appointment.service_items : []
+  return appointment.subscription_benefit_used === true
     || Number(appointment.price || 0) <= 0.005
     || appointment.source === 'package_activation'
-  )
+    || items.some((item) => item?.package_covered === true
+      || item?.subscription_benefit_used === true
+      || item?.benefit_used === true)
+}
+
+const appointmentUsesPackage = (appointment = {}) => Boolean(
+  appointmentHasPackageSignal(appointment)
+  && (appointment.subscription_id || appointment.client_id)
 )
 
 function allocationValueForItem(allocation, item = {}) {
@@ -119,6 +125,53 @@ function allocationValueForItem(allocation, item = {}) {
   return allocation.fallback_unit_value || 0
 }
 
+const subscriptionPriority = (subscription = {}) => {
+  const status = String(subscription.status || '').toLowerCase()
+  const statusScore = status === 'active' ? 3 : status === 'paused' ? 2 : 1
+  const date = new Date(subscription.updated_at || subscription.started_at || 0).getTime()
+  return [statusScore, Number.isFinite(date) ? date : 0]
+}
+
+function newestPreferredSubscription(current, candidate) {
+  if (!current) return candidate
+  const [currentStatus, currentDate] = subscriptionPriority(current)
+  const [candidateStatus, candidateDate] = subscriptionPriority(candidate)
+  if (candidateStatus !== currentStatus) return candidateStatus > currentStatus ? candidate : current
+  return candidateDate > currentDate ? candidate : current
+}
+
+async function loadSubscriptionsByIds({ moduleId, tenantId, ids }) {
+  if (!ids.length) return []
+  const response = await runWithTenantFallback(tenantId, async (includeTenant) => {
+    let query = supabase
+      .from('client_subscriptions')
+      .select('id,plan_id,client_id,status,started_at,updated_at')
+      .eq('module_id', moduleId)
+      .in('id', ids)
+    query = applyTenantFilter(query, tenantId, includeTenant)
+    return query
+  })
+  if (response.error) throw response.error
+  return response.data || []
+}
+
+async function loadSubscriptionsByClients({ moduleId, tenantId, clientIds }) {
+  if (!clientIds.length) return []
+  const response = await runWithTenantFallback(tenantId, async (includeTenant) => {
+    let query = supabase
+      .from('client_subscriptions')
+      .select('id,plan_id,client_id,status,started_at,updated_at')
+      .eq('module_id', moduleId)
+      .in('client_id', clientIds)
+      .in('status', ['active', 'paused'])
+      .order('started_at', { ascending: false })
+    query = applyTenantFilter(query, tenantId, includeTenant)
+    return query
+  })
+  if (response.error) throw response.error
+  return response.data || []
+}
+
 export async function enrichPackageCommissionAppointments({
   appointments = [],
   moduleId = 'petshop',
@@ -127,25 +180,59 @@ export async function enrichPackageCommissionAppointments({
   catalogServices = [],
 } = {}) {
   const source = Array.isArray(appointments) ? appointments : []
-  const subscriptionIds = [...new Set(source
-    .filter(appointmentUsesPackage)
+  const packageAppointments = source.filter(appointmentUsesPackage)
+  if (!tenantId || !packageAppointments.length) return source
+
+  const explicitSubscriptionIds = [...new Set(packageAppointments
     .map((appointment) => appointment.subscription_id)
     .filter(Boolean))]
-  if (!tenantId || !subscriptionIds.length) return source
+  const unresolvedClientIds = [...new Set(packageAppointments
+    .filter((appointment) => !appointment.subscription_id)
+    .map((appointment) => appointment.client_id)
+    .filter(Boolean))]
 
-  const subscriptionResponse = await runWithTenantFallback(tenantId, async (includeTenant) => {
-    let query = supabase
-      .from('client_subscriptions')
-      .select('id,plan_id')
-      .eq('module_id', moduleId)
-      .in('id', subscriptionIds)
-    query = applyTenantFilter(query, tenantId, includeTenant)
-    return query
+  const [explicitSubscriptions, clientSubscriptions] = await Promise.all([
+    loadSubscriptionsByIds({
+      moduleId,
+      tenantId,
+      ids: explicitSubscriptionIds,
+    }),
+    loadSubscriptionsByClients({
+      moduleId,
+      tenantId,
+      clientIds: unresolvedClientIds,
+    }),
+  ])
+
+  const subscriptionsById = new Map()
+  ;[...explicitSubscriptions, ...clientSubscriptions].forEach((subscription) => {
+    subscriptionsById.set(subscription.id, subscription)
   })
-  if (subscriptionResponse.error) throw subscriptionResponse.error
 
-  const subscriptions = subscriptionResponse.data || []
-  const planIds = [...new Set(subscriptions.map((subscription) => subscription.plan_id).filter(Boolean))]
+  const subscriptionByClient = new Map()
+  clientSubscriptions.forEach((subscription) => {
+    const current = subscriptionByClient.get(subscription.client_id)
+    subscriptionByClient.set(
+      subscription.client_id,
+      newestPreferredSubscription(current, subscription),
+    )
+  })
+
+  const resolvedSubscriptionByAppointment = new Map()
+  packageAppointments.forEach((appointment) => {
+    const explicit = appointment.subscription_id
+      ? subscriptionsById.get(appointment.subscription_id)
+      : null
+    const inferred = appointment.client_id
+      ? subscriptionByClient.get(appointment.client_id)
+      : null
+    const resolved = explicit || inferred || null
+    if (resolved) resolvedSubscriptionByAppointment.set(appointment.id, resolved)
+  })
+
+  const planIds = [...new Set([...resolvedSubscriptionByAppointment.values()]
+    .map((subscription) => subscription.plan_id)
+    .filter(Boolean))]
   if (!planIds.length) return source
 
   const planResponse = await runWithTenantFallback(tenantId, async (includeTenant) => {
@@ -160,17 +247,22 @@ export async function enrichPackageCommissionAppointments({
   if (planResponse.error) throw planResponse.error
 
   const planMap = new Map((planResponse.data || []).map((plan) => [plan.id, plan]))
-  const allocationBySubscription = new Map(subscriptions.map((subscription) => {
-    const plan = planMap.get(subscription.plan_id)
-    return [subscription.id, plan
-      ? buildPackageCommissionAllocation({ plan, catalogServices, settings })
-      : null]
-  }))
+  const allocationByPlan = new Map()
+  planMap.forEach((plan, planId) => {
+    allocationByPlan.set(
+      planId,
+      buildPackageCommissionAllocation({ plan, catalogServices, settings }),
+    )
+  })
 
   return source.map((appointment) => {
     if (!appointmentUsesPackage(appointment)) return appointment
-    const allocation = allocationBySubscription.get(appointment.subscription_id)
+    const subscription = resolvedSubscriptionByAppointment.get(appointment.id)
+    const allocation = subscription
+      ? allocationByPlan.get(subscription.plan_id)
+      : null
     if (!allocation) return appointment
+
     const items = Array.isArray(appointment.service_items) ? appointment.service_items : []
     const enrichedItems = items.map((item) => ({
       ...item,
@@ -180,8 +272,10 @@ export async function enrichPackageCommissionAppointments({
       package_service_pool: allocation.service_pool,
       package_transport_total: allocation.transport_total,
     }))
+
     return {
       ...appointment,
+      subscription_id: appointment.subscription_id || subscription.id,
       package_commission: true,
       package_plan_name: allocation.plan_name,
       package_service_pool: allocation.service_pool,

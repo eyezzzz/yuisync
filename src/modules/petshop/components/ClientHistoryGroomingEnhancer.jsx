@@ -6,6 +6,7 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
 import { supabase } from '../../../lib/supabase'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
+import { groupPetsByTutor } from '../../../shared/lib/petTutorGroups'
 
 const GROOMING_MACHINE_OPTIONS = [4, 7, 10]
 const FINAL_STATUSES = new Set(['concluido', 'completed', 'finalizado', 'finalizada'])
@@ -16,8 +17,6 @@ const normalize = (value = '') => String(value || '')
   .toLowerCase()
   .replace(/\s+/g, ' ')
   .trim()
-
-const phoneDigits = (value = '') => String(value || '').replace(/\D/g, '')
 
 const fmtMoney = (value = 0) => Number(value || 0).toLocaleString('pt-BR', {
   style: 'currency',
@@ -36,58 +35,25 @@ const fmtDateTime = (value) => {
   })
 }
 
-function clientGroupKey(client = {}) {
-  const explicit = String(client?.details?.tutor_group_id || '').trim()
-  if (explicit) return `group:${explicit}`
-  const phone = phoneDigits(client.phone)
-  if (phone) return `phone:${phone}`
-  return `pet:${String(client.id || '').trim()}`
-}
-
 function mapClient(client = {}) {
   return {
     ...client,
+    owner_name: client.name || '',
+    owner_cpf: client.document || '',
+    tutor_group_id: client?.details?.tutor_group_id || '',
     pet_name: String(client?.details?.pet_name || '').trim() || 'Pet',
-    group_key: clientGroupKey(client),
   }
 }
 
-function clientIdentityKeys(client = {}) {
-  const keys = []
-  const document = phoneDigits(client.document)
-  if (document) keys.push(`document:${document}`)
-  const phone = phoneDigits(client.phone)
-  if (phone) keys.push(`phone:${phone}`)
-  return keys
-}
-
 function groupClients(clients = []) {
-  const explicitGroupByIdentity = new Map()
-
-  clients.forEach((client) => {
-    const explicit = String(client?.details?.tutor_group_id || '').trim()
-    if (!explicit) return
-    const groupKey = `group:${explicit}`
-    clientIdentityKeys(client).forEach((identityKey) => {
-      if (!explicitGroupByIdentity.has(identityKey)) explicitGroupByIdentity.set(identityKey, groupKey)
-    })
-  })
-
   const groups = new Map()
-  clients.forEach((client) => {
-    const explicit = String(client?.details?.tutor_group_id || '').trim()
-    const inherited = clientIdentityKeys(client)
-      .map((identityKey) => explicitGroupByIdentity.get(identityKey))
-      .find(Boolean)
-    const key = explicit ? `group:${explicit}` : inherited || clientGroupKey(client)
-    const current = groups.get(key) || {
-      key,
-      owner_name: client.name || 'Cliente',
-      phone: client.phone || '',
-      clients: [],
-    }
-    current.clients.push(client)
-    groups.set(key, current)
+  groupPetsByTutor(clients).forEach((group) => {
+    groups.set(group.key, {
+      key: group.key,
+      owner_name: group.owner_name || 'Cliente',
+      phone: group.phone || '',
+      clients: group.pets,
+    })
   })
   return groups
 }
@@ -148,8 +114,11 @@ async function tenantQuery(tenantId, callback) {
 }
 
 async function loadHistory(moduleId, tenantId, group) {
-  const clientIds = group.clients.map((client) => client.id)
-  const petById = new Map(group.clients.map((client) => [String(client.id), client.pet_name]))
+  const clients = Array.isArray(group?.clients) ? group.clients : []
+  const clientIds = clients.map((client) => client.id).filter(Boolean)
+  if (!clientIds.length) return []
+
+  const petById = new Map(clients.map((client) => [String(client.id), client.pet_name]))
 
   const appointmentQuery = async (includeMachine = true) => tenantQuery(tenantId, async (includeTenant) => {
     const fields = [
@@ -250,6 +219,7 @@ async function loadHistory(moduleId, tenantId, group) {
 }
 
 function HistoryModal({ group, rows, loading, error, onClose }) {
+  const clients = Array.isArray(group?.clients) ? group.clients : []
   const lastFinal = rows.find((row) => row.final)
   return createPortal(
     <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
@@ -257,7 +227,10 @@ function HistoryModal({ group, rows, loading, error, onClose }) {
         <div className="modal-header">
           <div>
             <h2 className="font-display text-xl font-bold text-text">Histórico do cliente</h2>
-            <p className="mt-1 text-sm text-muted">{group.owner_name} · {group.clients.map((client) => client.pet_name).join(', ')}</p>
+            <p className="mt-1 text-sm text-muted">
+              {group?.owner_name || 'Cliente'}
+              {clients.length ? ` · ${clients.map((client) => client.pet_name).join(', ')}` : ''}
+            </p>
           </div>
           <button type="button" aria-label="Fechar histórico" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
@@ -265,7 +238,7 @@ function HistoryModal({ group, rows, loading, error, onClose }) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-muted">Registros</p><strong className="mt-2 block text-2xl text-text">{rows.length}</strong></div>
             <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-muted">Último valor finalizado</p><strong className="mt-2 block text-2xl text-emerald-400">{lastFinal ? fmtMoney(lastFinal.value) : '-'}</strong></div>
-            <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-muted">Pets vinculados</p><strong className="mt-2 block text-2xl text-text">{group.clients.length}</strong></div>
+            <div className="rounded-xl border border-[var(--border)] bg-card p-4"><p className="text-[10px] font-bold uppercase tracking-widest text-muted">Pets vinculados</p><strong className="mt-2 block text-2xl text-text">{clients.length}</strong></div>
           </div>
 
           {loading ? <p className="py-10 text-center text-sm text-muted">Carregando histórico...</p> : error ? (
@@ -304,7 +277,7 @@ function HistoryModal({ group, rows, loading, error, onClose }) {
   )
 }
 
-function MachineModal({ prompt, selected, saving, error, onSelect, onConfirm, onClose }) {
+function MachineModal({ selected, saving, error, onSelect, onConfirm, onClose }) {
   return createPortal(
     <div className="modal-overlay theme-petshop-modal" onClick={(event) => !saving && event.target === event.currentTarget && onClose()}>
       <div className="modal-box max-w-md">
@@ -345,7 +318,7 @@ export function ClientHistoryGroomingEnhancer() {
   const groups = useMemo(() => groupClients(clients), [clients])
 
   const loadClients = useCallback(async () => {
-    if (!activeTenantId || activeModuleId !== 'petshop') return
+    if (!activeTenantId || activeModuleId !== 'petshop') return []
     const response = await tenantQuery(activeTenantId, async (includeTenant) => {
       let query = supabase
         .from('clients')
@@ -356,7 +329,9 @@ export function ClientHistoryGroomingEnhancer() {
       return query
     })
     if (response.error) throw response.error
-    setClients((response.data || []).map(mapClient))
+    const mappedClients = (response.data || []).map(mapClient)
+    setClients(mappedClients)
+    return mappedClients
   }, [activeModuleId, activeTenantId])
 
   useEffect(() => {
@@ -367,7 +342,6 @@ export function ClientHistoryGroomingEnhancer() {
     })
     return () => { cancelled = true }
   }, [activeModuleId, activeTenantId, loadClients])
-
 
   const openHistory = useCallback(async (group) => {
     setHistoryGroup(group)
@@ -389,8 +363,32 @@ export function ClientHistoryGroomingEnhancer() {
       if (!button) return
       event.preventDefault()
       event.stopPropagation()
-      const group = groups.get(button.dataset.yuisyncClientHistory)
-      if (group) void openHistory(group)
+      const groupKey = button.dataset.yuisyncClientHistory
+
+      void (async () => {
+        let group = groups.get(groupKey)
+        if (!group) {
+          try {
+            group = groupClients(await loadClients()).get(groupKey)
+          } catch (error) {
+            setHistoryGroup({ key: groupKey, owner_name: 'Cliente', clients: [] })
+            setHistoryRows([])
+            setHistoryError(error?.message || 'Não foi possível carregar os clientes para abrir o histórico.')
+            setHistoryLoading(false)
+            return
+          }
+        }
+
+        if (!group) {
+          setHistoryGroup({ key: groupKey, owner_name: 'Cliente', clients: [] })
+          setHistoryRows([])
+          setHistoryError('Não foi possível identificar este tutor. Atualize a página e tente novamente.')
+          setHistoryLoading(false)
+          return
+        }
+
+        void openHistory(group)
+      })()
     }
 
     const onCompleteCapture = (event) => {
@@ -417,7 +415,7 @@ export function ClientHistoryGroomingEnhancer() {
       document.removeEventListener('click', onHistoryClick, true)
       document.removeEventListener('click', onCompleteCapture, true)
     }
-  }, [groups, openHistory])
+  }, [groups, loadClients, openHistory])
 
   const confirmMachine = useCallback(async () => {
     if (!machinePrompt?.appointmentId) return
@@ -450,7 +448,7 @@ export function ClientHistoryGroomingEnhancer() {
   return (
     <>
       {historyGroup && <HistoryModal group={historyGroup} rows={historyRows} loading={historyLoading} error={historyError} onClose={() => setHistoryGroup(null)} />}
-      {machinePrompt && <MachineModal prompt={machinePrompt} selected={machineNo} saving={machineSaving} error={machineError} onSelect={setMachineNo} onConfirm={confirmMachine} onClose={() => !machineSaving && setMachinePrompt(null)} />}
+      {machinePrompt && <MachineModal selected={machineNo} saving={machineSaving} error={machineError} onSelect={setMachineNo} onConfirm={confirmMachine} onClose={() => !machineSaving && setMachinePrompt(null)} />}
     </>
   )
 }
