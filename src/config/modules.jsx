@@ -7,7 +7,6 @@ import {
 } from 'lucide-react'
 import { DashboardServiceKpiEnhancer } from '../modules/petshop/components/DashboardServiceKpiEnhancer'
 import { ClientHistoryGroomingEnhancer } from '../modules/petshop/components/ClientHistoryGroomingEnhancer'
-import { ClientHistoryButtonVisibilityFix } from '../modules/petshop/components/ClientHistoryButtonVisibilityFix'
 
 const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
 const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPackageIntegratedPage'))
@@ -52,7 +51,6 @@ function PetsWithClientHistory(props) {
   return (
     <>
       <PetsPage {...props} />
-      <ClientHistoryButtonVisibilityFix />
       <ClientHistoryGroomingEnhancer />
     </>
   )
