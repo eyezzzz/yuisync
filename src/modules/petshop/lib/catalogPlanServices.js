@@ -92,10 +92,14 @@ export function buildCatalogUsageSummary(subscription = {}, catalogServices = []
   const usage = subscription.services_used && typeof subscription.services_used === 'object'
     ? subscription.services_used
     : {}
+  const reservations = subscription.services_reserved && typeof subscription.services_reserved === 'object'
+    ? subscription.services_reserved
+    : {}
   const catalog = catalogServiceMap(catalogServices)
 
   return services.map((service) => {
     const used = Math.max(0, Number(usage[service.service_type] || 0))
+    const reserved = Math.max(0, Number(reservations[service.service_type] || 0))
     const total = Math.max(0, Number(service.qty_per_cycle || 0))
     const catalogService = catalog.get(service.service_code || service.service_type) || null
     return {
@@ -103,8 +107,9 @@ export function buildCatalogUsageSummary(subscription = {}, catalogServices = []
       label: String(catalogService?.name || catalogService?.label || service.service_name || service.service_type).trim(),
       catalog_service: catalogService,
       used,
+      reserved,
       total,
-      remaining: Math.max(0, total - used),
+      remaining: Math.max(0, total - used - reserved),
     }
   })
 }
@@ -135,6 +140,7 @@ export function buildCombinedCatalogUsageSummary(subscriptions = [], catalogServ
       const current = combined.get(key) || {
         ...item,
         used: 0,
+        reserved: 0,
         total: 0,
         remaining: 0,
         subscription_count: 0,
@@ -142,6 +148,7 @@ export function buildCombinedCatalogUsageSummary(subscriptions = [], catalogServ
         plan_names: [],
       }
       current.used += Number(item.used || 0)
+      current.reserved += Number(item.reserved || 0)
       current.total += Number(item.total || 0)
       current.remaining += Number(item.remaining || 0)
       current.subscription_count += 1
