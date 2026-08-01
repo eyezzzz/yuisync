@@ -5,6 +5,7 @@ import {
   FileText, CreditCard, Shield, Trophy, Megaphone,
   Wallet, ClipboardList,
 } from 'lucide-react'
+import { DashboardServiceKpiEnhancer } from '../modules/petshop/components/DashboardServiceKpiEnhancer'
 
 const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
 const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPackageIntegratedPage'))
@@ -25,6 +26,19 @@ const SettingsPage = lazy(() => import('../shared/pages/SettingsIntegratedPage')
 const BillingPage = lazy(() => import('../shared/pages/BillingPage'))
 const LogsPage = lazy(() => import('../shared/pages/LogsPage'))
 const SupportHubPage = lazy(() => import('../shared/pages/SupportHubPage'))
+
+function DashboardWithServiceKpis(props) {
+  return (
+    <>
+      <DashboardPage {...props} />
+      <DashboardServiceKpiEnhancer />
+    </>
+  )
+}
+
+function getPageComponent(page) {
+  return page
+}
 
 export const MODULES = {
   petshop: {
@@ -111,7 +125,7 @@ export const MODULES = {
     ],
     adminNav: [],
     pages: {
-      dashboard: DashboardPage,
+      dashboard: getPageComponent(DashboardWithServiceKpis),
       agenda: AgendaPage,
       vendas: VendasPage,
       ordens: OrdensEntregaPage,
