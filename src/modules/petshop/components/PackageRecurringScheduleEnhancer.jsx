@@ -20,16 +20,25 @@ function buildFirstAt(dateValue, timeValue) {
   return Number.isNaN(value.getTime()) ? '' : value.toISOString()
 }
 
+function localDateKey(value) {
+  const date = value instanceof Date ? value : new Date(value || '')
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function isLegacyPackageDate(value) {
+  return Boolean(localDateKey(value)) && localDateKey(value) < localDateKey(new Date())
+}
+
 function scheduleEntries(firstAt) {
   const first = new Date(firstAt || '')
   if (Number.isNaN(first.getTime())) return []
-  const now = Date.now()
   return Array.from({ length: 4 }, (_, index) => {
     const date = new Date(first)
     date.setDate(date.getDate() + index * 7)
     return {
       date,
-      legacy: date.getTime() < now,
+      legacy: isLegacyPackageDate(date),
     }
   })
 }
@@ -84,7 +93,7 @@ function enhanceCheckoutScheduleCards() {
       .forEach((node) => {
         const date = parseCheckoutDate(node.textContent)
         if (!date) return
-        const legacy = date.getTime() < Date.now()
+        const legacy = isLegacyPackageDate(date)
         let status = node.querySelector('[data-yuisync-package-date-status]')
         if (!status) {
           status = document.createElement('span')
@@ -101,7 +110,7 @@ function enhanceCheckoutScheduleCards() {
 
   document.querySelectorAll('[data-yuisync-plans-checkout-section] p').forEach((node) => {
     if (normalize(node.textContent).includes('ao confirmar, o saldo e liberado e as quatro semanas sao reservadas')) {
-      node.textContent = 'Ao confirmar, datas passadas serão consumidas como legado e somente as semanas futuras serão reservadas na Agenda.'
+      node.textContent = 'Ao confirmar, datas anteriores a hoje serão consumidas como legado; hoje e semanas futuras serão reservadas na Agenda.'
     }
   })
 }
@@ -111,8 +120,8 @@ function enhanceSaleModal() {
   const dateInput = modal?.querySelector('input[type="date"]')
   if (!modal || !dateInput) return
 
-  // Cadastros legados podem começar no passado. As semanas vencidas serão
-  // consumidas e apenas as futuras serão criadas na Agenda.
+  // Cadastros legados podem começar no passado. Somente datas anteriores ao dia
+  // atual são consumidas; qualquer horário de hoje permanece reservado.
   dateInput.removeAttribute('min')
 
   const dateBox = dateInput.closest('div')
@@ -126,7 +135,7 @@ function enhanceSaleModal() {
     timeBox.innerHTML = `
       <label class="inp-label">Horario fixo semanal</label>
       <input class="inp" type="time" aria-label="Horario fixo semanal do pacote" />
-      <p class="mt-1 text-[10px] text-muted">Datas passadas consumirao o beneficio como legado. Apenas as semanas futuras serao reservadas na Agenda.</p>
+      <p class="mt-1 text-[10px] text-muted">Datas anteriores a hoje consumirao o beneficio como legado. Hoje e semanas futuras serao reservados na Agenda.</p>
       <p data-yuisync-package-preview class="mt-2 rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-[11px] font-semibold text-amber-200"></p>
       <p data-yuisync-package-error class="mt-2 hidden text-xs text-red-400"></p>
     `
