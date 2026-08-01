@@ -27,6 +27,8 @@ const escapeHtml = (value = '') => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;')
 
+const agendaDurationState = new WeakMap()
+
 function findTodayAgendaTable() {
   const heading = [...document.querySelectorAll('h2')]
     .find((node) => normalizeText(node.textContent) === 'agenda de hoje')
@@ -79,6 +81,96 @@ function enhanceDashboardRows(serviceMap) {
         if (friendly && friendly !== detail.textContent) detail.textContent = friendly
       }
     }
+  })
+}
+
+function serviceOptionLabel(option) {
+  const highlighted = [...(option?.querySelectorAll?.('span') || [])]
+    .find((span) => String(span.className || '').includes('font-bold'))
+  return normalizeText(highlighted?.textContent || option?.textContent)
+}
+
+function isPrimaryBathSearch(value) {
+  const query = normalizeText(value)
+  return Boolean(query) && ('banho'.startsWith(query) || query.startsWith('banho'))
+}
+
+function isPrimaryBathOption(option) {
+  const label = serviceOptionLabel(option)
+  if (!label || label.includes('tosa')) return false
+  const primaryName = label.includes('banho pet porte pequeno')
+  const primaryWeight = label.includes('0 kg a 10 kg')
+    || label.includes('0 a 10 kg')
+    || label.includes('ate 10 kg')
+  return label.includes('banho') && primaryName && primaryWeight
+}
+
+function enhanceAgendaServiceSearch() {
+  const input = document.querySelector('input[aria-label="Buscar servico para adicionar"]')
+  if (!input || !isPrimaryBathSearch(input.value)) return
+
+  const modal = input.closest('.modal-box')
+  const listbox = modal?.querySelector('[role="listbox"][aria-label="Servicos encontrados"]')
+  if (!listbox) return
+
+  const options = [...listbox.querySelectorAll('button[role="option"]')]
+  const primaryBath = options.find(isPrimaryBathOption)
+  if (!primaryBath) return
+
+  primaryBath.dataset.yuisyncPrimaryBathPriority = 'true'
+  if (listbox.firstElementChild !== primaryBath) {
+    listbox.insertBefore(primaryBath, listbox.firstElementChild)
+  }
+}
+
+function selectedAgendaServiceRows(modal) {
+  return [...(modal?.querySelectorAll('button[aria-label^="Remover "]') || [])]
+    .map((button) => button.parentElement)
+    .filter(Boolean)
+}
+
+function selectedAgendaServiceSignature(modal) {
+  return [...(modal?.querySelectorAll('button[aria-label^="Remover "]') || [])]
+    .map((button) => String(button.getAttribute('aria-label') || '').trim())
+    .join('|')
+}
+
+function durationFromSelectedServiceRow(row) {
+  const matches = [...String(row?.textContent || '').matchAll(/(\d+)\s*min\b/gi)]
+  const value = Number(matches.at(-1)?.[1] || 0)
+  return Number.isFinite(value) ? value : 0
+}
+
+function setReactInputValue(input, value) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement?.prototype || {}, 'value')?.set
+  if (setter) setter.call(input, value)
+  else input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+function enhanceAgendaDurationAfterServiceChange() {
+  document.querySelectorAll('.modal-box').forEach((modal) => {
+    const title = normalizeText(modal.querySelector('h2')?.textContent)
+    if (title !== 'editar agendamento' && title !== 'novo agendamento') return
+
+    const durationInput = modal.querySelector('input[aria-label="Duracao total do agendamento"]')
+    if (!durationInput) return
+
+    const signature = selectedAgendaServiceSignature(modal)
+    const previous = agendaDurationState.get(modal)
+    if (previous === undefined) {
+      agendaDurationState.set(modal, signature)
+      return
+    }
+    if (previous === signature) return
+
+    agendaDurationState.set(modal, signature)
+    const nextDuration = selectedAgendaServiceRows(modal)
+      .reduce((sum, row) => sum + durationFromSelectedServiceRow(row), 0)
+    const nextValue = nextDuration > 0 ? String(nextDuration) : ''
+    if (durationInput.value !== nextValue) setReactInputValue(durationInput, nextValue)
+    durationInput.dataset.yuisyncDurationRecalculated = 'true'
   })
 }
 
@@ -245,6 +337,8 @@ export function DashboardAgendaLabelsEnhancer() {
     const apply = () => {
       frame = 0
       enhanceDashboardRows(serviceMap)
+      enhanceAgendaServiceSearch()
+      enhanceAgendaDurationAfterServiceChange()
     }
     const schedule = () => {
       if (frame) return
@@ -262,7 +356,11 @@ export function DashboardAgendaLabelsEnhancer() {
       event.stopImmediatePropagation()
       safeCommissionSummaryPrint()
     }
+    const onInput = (event) => {
+      if (event.target?.matches?.('input[aria-label="Buscar servico para adicionar"]')) schedule()
+    }
     document.addEventListener('click', interceptCommissionPrint, true)
+    document.addEventListener('input', onInput, true)
 
     loadServiceMap(activeModuleId, activeTenantId)
       .then((loaded) => {
@@ -280,6 +378,7 @@ export function DashboardAgendaLabelsEnhancer() {
       cancelled = true
       observer.disconnect()
       document.removeEventListener('click', interceptCommissionPrint, true)
+      document.removeEventListener('input', onInput, true)
       if (frame) window.cancelAnimationFrame(frame)
     }
   }, [activeModuleId, activeTenantId])

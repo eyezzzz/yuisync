@@ -19,6 +19,9 @@ const subscription = {
     motodog: 2,
     legacy_audit_key: 7,
   },
+  services_reserved: {
+    catalog_banho_pequeno: 1,
+  },
   client: {
     owner_name: 'Marcos Antônio Freitas Carvalho',
     pet_name: 'Bento',
@@ -55,29 +58,33 @@ test('pesquisa de assinantes ignora acentos e também encontra telefone e pacote
   assert.equal(subscriptionMatchesSearch(subscription, 'marcos antonio'), true)
 })
 
-test('editor monta consumo atual e limite de cada benefício real', () => {
+test('editor monta consumo, reserva e limite editavel de cada benefício', () => {
   assert.deepEqual(buildEditableUsage(subscription), [
     {
       service_type: 'catalog_banho_pequeno',
       service_name: 'BANHO PET PORTE PEQUENO 0 KG A 10 KG',
       total: 4,
+      reserved: 1,
+      max_used: 3,
       used: 1,
     },
     {
       service_type: 'motodog',
       service_name: 'MotoDog - buscar e levar',
       total: 4,
+      reserved: 0,
+      max_used: 4,
       used: 2,
     },
   ])
 })
 
-test('ajuste manual limita consumo entre zero e a quantidade contratada', () => {
+test('ajuste manual nunca ocupa a unidade ja reservada na agenda', () => {
   assert.deepEqual(clampSubscriptionUsage(subscription, {
     catalog_banho_pequeno: 99,
     motodog: -4,
   }), {
-    catalog_banho_pequeno: 4,
+    catalog_banho_pequeno: 3,
     motodog: 0,
     legacy_audit_key: 7,
   })
