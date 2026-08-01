@@ -5,13 +5,16 @@ import test from 'node:test'
 const root = new URL('../', import.meta.url)
 const read = (path) => readFile(new URL(path, root), 'utf8')
 
-test('estagio preserva horario e impede que hoje seja contado como legado na 1030', async () => {
+test('estagio preserva horario e detecta qualquer semana recorrente de hoje', async () => {
   const sql = await read('supabase/migrations/20260801102950_petshop_package_today_recovery_stage.sql')
 
   assert.match(sql, /original_first_appointment_at timestamptz not null/)
-  assert.match(sql, /first_appointment_at::date = current_date/)
+  assert.match(sql, /today_appointment_at timestamptz not null/)
   assert.match(sql, /scheduled_at::date = current_date/)
-  assert.match(sql, /current_date \+ time '23:59:59'/)
+  assert.match(sql, /join lateral/)
+  assert.match(sql, /date_trunc\('day', stage\.today_appointment_at\)/)
+  assert.match(sql, /interval '23 hours 59 minutes 59 seconds'/)
+  assert.doesNotMatch(sql, /subscription\.first_appointment_at::date = current_date/)
   assert.match(sql, /subscription_benefit_status = 'reserved'/)
 })
 
