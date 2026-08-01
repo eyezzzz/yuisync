@@ -29,7 +29,8 @@ end;
 $$;
 
 drop trigger if exists a9_mark_petshop_appointment_reserved_ledger on public.appointments;
-create trigger a9_mark_petshop_appointment_reserved_ledger
+drop trigger if exists az_mark_petshop_appointment_reserved_ledger on public.appointments;
+create trigger az_mark_petshop_appointment_reserved_ledger
 before insert or update of service_items, subscription_id, subscription_benefit_used, subscription_benefits, subscription_benefit_status, client_id, transport_mode
 on public.appointments
 for each row execute function public.mark_petshop_appointment_reserved_ledger();
