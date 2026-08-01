@@ -15,6 +15,8 @@ test('historico de Clientes e Pets e renderizado no JSX nativo', async () => {
   assert.doesNotMatch(modules, /ClientHistoryButtonVisibilityFix/)
   assert.doesNotMatch(enhancer, /MutationObserver/)
   assert.doesNotMatch(enhancer, /createElement\('button'\)/)
+  assert.match(enhancer, /explicitGroupByIdentity/)
+  assert.match(enhancer, /document,phone,details/)
 })
 
 test('observacoes do pet preenchem instrucoes e ficam salvas no historico', async () => {
@@ -24,7 +26,8 @@ test('observacoes do pet preenchem instrucoes e ficam salvas no historico', asyn
   const history = await read('src/modules/petshop/components/ClientHistoryGroomingEnhancer.jsx')
 
   assert.match(clients, /pet_notes: p\.notes \|\| null/)
-  assert.match(clients, /c\.details\?\.pet_notes \|\| c\.notes/)
+  assert.match(clients, /hasOwnProperty\.call\(details, 'pet_notes'\)/)
+  assert.match(clients, /notes: petNotesFromClient\(c\)/)
   assert.match(appointments, /details\?\.pet_notes \|\| normalized\.clients\.notes/)
   assert.match(agenda, /petNotesDefaultRef/)
   assert.match(agenda, /selectedPet\?\.notes/)

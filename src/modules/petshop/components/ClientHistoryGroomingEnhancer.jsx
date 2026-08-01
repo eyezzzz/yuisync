@@ -52,10 +52,34 @@ function mapClient(client = {}) {
   }
 }
 
+function clientIdentityKeys(client = {}) {
+  const keys = []
+  const document = phoneDigits(client.document)
+  if (document) keys.push(`document:${document}`)
+  const phone = phoneDigits(client.phone)
+  if (phone) keys.push(`phone:${phone}`)
+  return keys
+}
+
 function groupClients(clients = []) {
+  const explicitGroupByIdentity = new Map()
+
+  clients.forEach((client) => {
+    const explicit = String(client?.details?.tutor_group_id || '').trim()
+    if (!explicit) return
+    const groupKey = `group:${explicit}`
+    clientIdentityKeys(client).forEach((identityKey) => {
+      if (!explicitGroupByIdentity.has(identityKey)) explicitGroupByIdentity.set(identityKey, groupKey)
+    })
+  })
+
   const groups = new Map()
   clients.forEach((client) => {
-    const key = client.group_key
+    const explicit = String(client?.details?.tutor_group_id || '').trim()
+    const inherited = clientIdentityKeys(client)
+      .map((identityKey) => explicitGroupByIdentity.get(identityKey))
+      .find(Boolean)
+    const key = explicit ? `group:${explicit}` : inherited || clientGroupKey(client)
     const current = groups.get(key) || {
       key,
       owner_name: client.name || 'Cliente',
@@ -66,16 +90,6 @@ function groupClients(clients = []) {
     groups.set(key, current)
   })
   return groups
-}
-
-function matchingGroup(groups, ownerName, petNames = []) {
-  const owner = normalize(ownerName)
-  const pets = petNames.map(normalize).filter(Boolean)
-  return [...groups.values()].find((group) => {
-    if (normalize(group.owner_name) !== owner) return false
-    if (!pets.length) return true
-    return group.clients.some((client) => pets.includes(normalize(client.pet_name)))
-  }) || null
 }
 
 function serviceLabel(appointment, serviceMap) {
@@ -335,7 +349,7 @@ export function ClientHistoryGroomingEnhancer() {
     const response = await tenantQuery(activeTenantId, async (includeTenant) => {
       let query = supabase
         .from('clients')
-        .select('id,name,phone,details')
+        .select('id,name,document,phone,details')
         .eq('module_id', activeModuleId)
         .eq('active', true)
       query = applyTenantFilter(query, activeTenantId, includeTenant)

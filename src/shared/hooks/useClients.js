@@ -20,6 +20,13 @@ async function fetchAllClientPages(buildQuery) {
   return { data: rows, error: null }
 }
 
+const petNotesFromClient = (client = {}) => {
+  const details = client.details || {}
+  return Object.prototype.hasOwnProperty.call(details, 'pet_notes')
+    ? String(details.pet_notes || '')
+    : String(client.notes || '')
+}
+
 const mapClientToPet = (c) => ({
   id: c.id,
   owner_name: c.name || '',
@@ -30,7 +37,7 @@ const mapClientToPet = (c) => ({
   owner_neighborhood: c.neighborhood || '',
   owner_city: c.city || '',
   client_notes: c.notes || '',
-  notes: c.details?.pet_notes || c.notes || '',
+  notes: petNotesFromClient(c),
   created_at: c.created_at,
   tutor_birth_date: c.details?.tutor_birth_date || '',
   zip_code: c.details?.zip_code || '',
