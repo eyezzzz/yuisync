@@ -37,15 +37,22 @@ export function buildEditableUsage(subscription = {}) {
   const current = subscription.services_used && typeof subscription.services_used === 'object'
     ? subscription.services_used
     : {}
+  const reservations = subscription.services_reserved && typeof subscription.services_reserved === 'object'
+    ? subscription.services_reserved
+    : {}
 
   return services.map((service) => {
     const key = service.service_type
     const total = Math.max(0, Math.trunc(Number(service.qty_per_cycle || 0)))
-    const used = Math.min(total, Math.max(0, Math.trunc(Number(current[key] || 0))))
+    const reserved = Math.min(total, Math.max(0, Math.trunc(Number(reservations[key] || 0))))
+    const maxUsed = Math.max(0, total - reserved)
+    const used = Math.min(maxUsed, Math.max(0, Math.trunc(Number(current[key] || 0))))
     return {
       service_type: key,
       service_name: service.service_name || (key === 'motodog' ? 'MotoDog - buscar e levar' : key),
       total,
+      reserved,
+      max_used: maxUsed,
       used,
     }
   })
@@ -61,7 +68,7 @@ export function clampSubscriptionUsage(subscription = {}, requested = {}) {
   buildEditableUsage(subscription).forEach((item) => {
     const raw = Number(requested[item.service_type])
     const value = Number.isFinite(raw) ? Math.trunc(raw) : item.used
-    next[item.service_type] = Math.min(item.total, Math.max(0, value))
+    next[item.service_type] = Math.min(item.max_used, Math.max(0, value))
   })
 
   return next
