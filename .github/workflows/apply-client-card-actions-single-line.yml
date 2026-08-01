@@ -1,21 +1,21 @@
-name: Corrigir clique e alinhamento do histórico
+name: Preparar correções de histórico, layout e comissão
 
 on:
   push:
     branches:
-      - fix/client-card-actions-single-line
+      - main
 
 permissions:
   contents: write
 
 jobs:
-  apply-fix:
+  prepare-fix:
     if: github.actor != 'github-actions[bot]'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: fix/client-card-actions-single-line
+          ref: main
           fetch-depth: 0
 
       - uses: actions/setup-node@v4
@@ -23,22 +23,23 @@ jobs:
           node-version: 22
           cache: npm
 
-      - name: Aplicar ajustes
+      - name: Aplicar correções
         run: node scripts/apply-client-card-actions-single-line.mjs
 
       - name: Instalar dependências
         run: npm ci
 
-      - name: Testar regressões
-        run: node --test test/clientHistoryNativeAndInstructions.test.mjs test/clientHistoryClickAndLayout.test.mjs
+      - name: Testar regressões envolvidas
+        run: node --test test/clientHistoryNativeAndInstructions.test.mjs test/clientHistoryClickLayoutAndPackageCommission.test.mjs test/teamDeliveryAndCommissionSummary.test.mjs
 
       - name: Validar build
         run: npm run build
 
-      - name: Publicar alterações na branch
+      - name: Publicar branch limpa com as correções
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B fix/history-layout-package-commission
           git add -A
-          git commit -m "Corrigir clique e manter acoes do card em uma linha"
-          git push origin HEAD:fix/client-card-actions-single-line
+          git commit -m "Corrigir histórico, layout dos cards e comissão de pacotes"
+          git push --force-with-lease origin HEAD:fix/history-layout-package-commission
