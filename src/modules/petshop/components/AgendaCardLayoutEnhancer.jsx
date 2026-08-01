@@ -58,6 +58,20 @@ const STYLES = `
     -webkit-line-clamp: 2 !important;
   }
 
+  /* O responsavel cabe mesmo com tres ou mais cards: nunca esconder por densidade. */
+  .yuisync-agenda-card-surface[data-yuisync-density='compact'] .yuisync-card-responsible,
+  .yuisync-agenda-card-surface[data-yuisync-density='dense'] .yuisync-card-responsible,
+  .yuisync-agenda-card-surface[data-yuisync-density='micro'] .yuisync-card-responsible {
+    display: block !important;
+    min-width: 0 !important;
+    margin-top: 1px !important;
+    overflow: hidden !important;
+    white-space: nowrap !important;
+    text-overflow: ellipsis !important;
+    font-size: 8.5px !important;
+    line-height: 1.05 !important;
+  }
+
   /* Pacote ocupa a mesma coluna visual do valor, sem criar uma linha extra. */
   .yuisync-agenda-card-surface[data-yuisync-card-kind='package'] .yuisync-card-tutor {
     display: block !important;

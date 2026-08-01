@@ -5,6 +5,8 @@ import {
   FileText, CreditCard, Shield, Trophy, Megaphone,
   Wallet, ClipboardList,
 } from 'lucide-react'
+import { DashboardServiceKpiEnhancer } from '../modules/petshop/components/DashboardServiceKpiEnhancer'
+import { ClientHistoryGroomingEnhancer } from '../modules/petshop/components/ClientHistoryGroomingEnhancer'
 
 const DashboardPage = lazy(() => import('../modules/petshop/pages/DashboardPage'))
 const AgendaPage = lazy(() => import('../modules/petshop/pages/AgendaPackageIntegratedPage'))
@@ -25,6 +27,33 @@ const SettingsPage = lazy(() => import('../shared/pages/SettingsIntegratedPage')
 const BillingPage = lazy(() => import('../shared/pages/BillingPage'))
 const LogsPage = lazy(() => import('../shared/pages/LogsPage'))
 const SupportHubPage = lazy(() => import('../shared/pages/SupportHubPage'))
+
+function DashboardWithServiceKpis(props) {
+  return (
+    <>
+      <DashboardPage {...props} />
+      <DashboardServiceKpiEnhancer />
+    </>
+  )
+}
+
+function AgendaWithClientHistory(props) {
+  return (
+    <>
+      <AgendaPage {...props} />
+      <ClientHistoryGroomingEnhancer />
+    </>
+  )
+}
+
+function PetsWithClientHistory(props) {
+  return (
+    <>
+      <PetsPage {...props} />
+      <ClientHistoryGroomingEnhancer />
+    </>
+  )
+}
 
 export const MODULES = {
   petshop: {
@@ -111,13 +140,13 @@ export const MODULES = {
     ],
     adminNav: [],
     pages: {
-      dashboard: DashboardPage,
-      agenda: AgendaPage,
+      dashboard: DashboardWithServiceKpis,
+      agenda: AgendaWithClientHistory,
       vendas: VendasPage,
       ordens: OrdensEntregaPage,
       growth: GrowthPage,
       estoque: EstoquePage,
-      pets: PetsPage,
+      pets: PetsWithClientHistory,
       fidelidade: FidelidadePage,
       chat: ChatPage,
       caixa: CaixaPage,
