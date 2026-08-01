@@ -82,6 +82,45 @@ function enhanceDashboardRows(serviceMap) {
   })
 }
 
+function serviceOptionLabel(option) {
+  const highlighted = [...(option?.querySelectorAll?.('span') || [])]
+    .find((span) => String(span.className || '').includes('font-bold'))
+  return normalizeText(highlighted?.textContent || option?.textContent)
+}
+
+function isPrimaryBathSearch(value) {
+  const query = normalizeText(value)
+  return Boolean(query) && ('banho'.startsWith(query) || query.startsWith('banho'))
+}
+
+function isPrimaryBathOption(option) {
+  const label = serviceOptionLabel(option)
+  if (!label || label.includes('tosa')) return false
+  const primaryName = label.includes('banho pet porte pequeno')
+  const primaryWeight = label.includes('0 kg a 10 kg')
+    || label.includes('0 a 10 kg')
+    || label.includes('ate 10 kg')
+  return label.includes('banho') && primaryName && primaryWeight
+}
+
+function enhanceAgendaServiceSearch() {
+  const input = document.querySelector('input[aria-label="Buscar servico para adicionar"]')
+  if (!input || !isPrimaryBathSearch(input.value)) return
+
+  const modal = input.closest('.modal-box')
+  const listbox = modal?.querySelector('[role="listbox"][aria-label="Servicos encontrados"]')
+  if (!listbox) return
+
+  const options = [...listbox.querySelectorAll('button[role="option"]')]
+  const primaryBath = options.find(isPrimaryBathOption)
+  if (!primaryBath) return
+
+  primaryBath.dataset.yuisyncPrimaryBathPriority = 'true'
+  if (listbox.firstElementChild !== primaryBath) {
+    listbox.insertBefore(primaryBath, listbox.firstElementChild)
+  }
+}
+
 function findCommissionSummaryTable() {
   return [...document.querySelectorAll('table')].find((table) => {
     const headers = [...table.querySelectorAll('thead th')].map((cell) => normalizeText(cell.textContent))
@@ -245,6 +284,7 @@ export function DashboardAgendaLabelsEnhancer() {
     const apply = () => {
       frame = 0
       enhanceDashboardRows(serviceMap)
+      enhanceAgendaServiceSearch()
     }
     const schedule = () => {
       if (frame) return
@@ -262,7 +302,11 @@ export function DashboardAgendaLabelsEnhancer() {
       event.stopImmediatePropagation()
       safeCommissionSummaryPrint()
     }
+    const onInput = (event) => {
+      if (event.target?.matches?.('input[aria-label="Buscar servico para adicionar"]')) schedule()
+    }
     document.addEventListener('click', interceptCommissionPrint, true)
+    document.addEventListener('input', onInput, true)
 
     loadServiceMap(activeModuleId, activeTenantId)
       .then((loaded) => {
@@ -280,6 +324,7 @@ export function DashboardAgendaLabelsEnhancer() {
       cancelled = true
       observer.disconnect()
       document.removeEventListener('click', interceptCommissionPrint, true)
+      document.removeEventListener('input', onInput, true)
       if (frame) window.cancelAnimationFrame(frame)
     }
   }, [activeModuleId, activeTenantId])
