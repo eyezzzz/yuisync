@@ -1,0 +1,44 @@
+name: Corrigir clique e alinhamento do histórico
+
+on:
+  push:
+    branches:
+      - fix/client-card-actions-single-line
+
+permissions:
+  contents: write
+
+jobs:
+  apply-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/client-card-actions-single-line
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Aplicar ajustes
+        run: node scripts/apply-client-card-actions-single-line.mjs
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Testar regressões
+        run: node --test test/clientHistoryNativeAndInstructions.test.mjs test/clientHistoryClickAndLayout.test.mjs
+
+      - name: Validar build
+        run: npm run build
+
+      - name: Publicar alterações na branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "Corrigir clique e manter acoes do card em uma linha"
+          git push origin HEAD:fix/client-card-actions-single-line
