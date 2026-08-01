@@ -12,7 +12,7 @@ const APPOINTMENT_BASE_FIELDS = `
   live_status, checkin_at, ready_at, subscription_id, subscription_benefit_used
 `
 const APPOINTMENT_SELECT = `${APPOINTMENT_BASE_FIELDS},
-  clients ( id, name, document, phone, email, address, neighborhood, city, details )
+  clients ( id, name, document, phone, email, address, neighborhood, city, notes, details )
 `
 const SERVICE_TRANSPORT_SELECT = `
   id, client_id, sale_id, scheduled_for, delivery_address, delivery_neighborhood,
@@ -147,6 +147,7 @@ function mapAppointmentRow(appointment) {
       species: normalized.clients.details?.species || '',
       breed: normalized.clients.details?.breed || '',
       weight_kg: normalized.clients.details?.weight_kg || null,
+      notes: normalized.clients.details?.pet_notes || normalized.clients.notes || '',
     },
     clients: undefined,
   }
@@ -159,7 +160,7 @@ async function loadClientsMap(activeModuleId, activeTenantId, clientIds) {
   const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
     let query = supabase
       .from('clients')
-      .select('id, name, document, phone, email, address, neighborhood, city, details')
+      .select('id, name, document, phone, email, address, neighborhood, city, notes, details')
       .eq('module_id', activeModuleId)
       .in('id', ids)
 
@@ -240,7 +241,7 @@ async function ensurePetRecordForClient(activeModuleId, activeTenantId, clientId
     birth_date: client.details?.birth_date || null,
     weight_kg: client.details?.weight_kg || null,
     color: client.details?.color || null,
-    notes: client.notes || null,
+    notes: client.details?.pet_notes || client.notes || null,
     updated_at: new Date().toISOString(),
   }
 

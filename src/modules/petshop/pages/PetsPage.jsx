@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { AlertCircle, Calendar as CalendarIcon, Cat, Dog, Fish, Grid, List as ListIcon, PawPrint, Phone, Plus, RefreshCw, Search, Trash2, Upload, Weight, X } from 'lucide-react'
+import { AlertCircle, Calendar as CalendarIcon, Cat, Dog, Fish, Grid, History, List as ListIcon, PawPrint, Phone, Plus, RefreshCw, Search, Trash2, Upload, Weight, X } from 'lucide-react'
 import { useClients } from '../../../shared/hooks/useClients'
 import { useAppointments } from '../../../shared/hooks/useAppointments'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
@@ -23,6 +23,7 @@ const SPECIES = [
 
 const EMPTY_FORM = {
   owner_name: '', owner_cpf: '', phone: '', email: '', owner_address: '', owner_neighborhood: '', owner_city: '',
+  client_notes: '',
   tutor_birth_date: '', zip_code: '', address_number: '', address_complement: '', address_reference: '',
   pet_name: '', species: 'dog', breed: '', birth_date: '', weight_kg: '', color: '', notes: '',
 }
@@ -73,6 +74,7 @@ function PetModal({ pet, tutorPets = [], plans, subscription, onClose, onSave, o
         petPayload: {
           tutor_group_id: form.tutor_group_id || null,
           owner_name: form.owner_name.trim(), owner_cpf: formatCpf(form.owner_cpf), phone: formatPhone(form.phone), email: form.email.trim(),
+          client_notes: form.client_notes || '',
           owner_address: form.owner_address.trim(), owner_neighborhood: form.owner_neighborhood.trim(), owner_city: form.owner_city.trim(),
           tutor_birth_date: form.tutor_birth_date || null, zip_code: form.zip_code.trim(), address_number: form.address_number.trim(), address_reference: form.address_reference.trim(),
           pet_name: form.pet_name.trim(), species: form.species, breed: form.breed.trim(), birth_date: form.birth_date || null,
@@ -134,7 +136,7 @@ function PetModal({ pet, tutorPets = [], plans, subscription, onClose, onSave, o
               <div><label className="inp-label">Cor</label><input className="inp" value={form.color} onChange={(e) => setField('color', e.target.value)} /></div>
               <div className="md:col-span-2"><label className="inp-label">Plano atual</label><select className="inp" value={form.plan_id} onChange={(e) => setField('plan_id', e.target.value)}><option value="">Sem plano ativo</option>{plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {fmtCurrency(plan.price)}</option>)}</select></div>
               {form.plan_id && <div className="md:col-span-2"><label className="inp-label">Status do plano</label><select className="inp" value={form.subscription_status} onChange={(e) => setField('subscription_status', e.target.value)}><option value="active">Ativo</option><option value="paused">Pausado</option></select></div>}
-              <div className="md:col-span-2"><label className="inp-label">Observacoes</label><textarea className="inp h-24 resize-none p-4" value={form.notes} onChange={(e) => setField('notes', e.target.value)} /></div>
+              <div className="md:col-span-2"><label className="inp-label">Observacoes do pet</label><textarea className="inp h-24 resize-none p-4" value={form.notes} onChange={(e) => setField('notes', e.target.value)} /></div>
             </div>
           </div>
           {error && <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400 flex items-center gap-2"><AlertCircle size={14} /> {error}</div>}
@@ -146,7 +148,7 @@ function PetModal({ pet, tutorPets = [], plans, subscription, onClose, onSave, o
   )
 }
 
-function PetDrawer({ pet, tutorPets = [], subscriptions = [], onClose, onEdit, onAddPet, onSelectPet, speciesIcon, serviceLabel, statusBadge }) {
+function PetDrawer({ pet, tutorPets = [], subscriptions = [], historyGroupKey, onClose, onEdit, onAddPet, onSelectPet, speciesIcon, serviceLabel, statusBadge }) {
   const { appointments, load } = useAppointments()
   useEffect(() => { if (pet?.id) load({ date: '' }) }, [pet?.id])
   if (!pet) return null
@@ -178,7 +180,7 @@ function PetDrawer({ pet, tutorPets = [], subscriptions = [], onClose, onEdit, o
       <div className="w-full max-w-lg bg-surface border-l border-[var(--border2)] flex flex-col overflow-hidden shadow-card">
         <div className="modal-header">
           <div className="flex items-center gap-3"><div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center"><Icon size={22} /></div><div><h2 className="font-display font-bold text-lg text-text">{pet.owner_name}</h2><p className="text-sm text-muted">{pet.pet_name || 'Pet sem nome'}{pet.breed ? ` - ${pet.breed}` : ''}</p><span className={`badge ${registrationBadge.cls} mt-2`}>{registrationBadge.label}</span></div></div>
-          <div className="flex items-center gap-2"><button type="button" data-yuisync-add-pet-action aria-label={`Adicionar outro pet para ${pet.owner_name || 'este tutor'}`} onClick={() => onAddPet(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => onEdit(pet)} className="btn btn-secondary btn-sm">Editar</button><button type="button" aria-label="Fechar detalhes" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button></div>
+          <div className="flex items-center gap-2">{historyGroupKey && <button type="button" data-yuisync-client-history={historyGroupKey} className="btn btn-secondary btn-sm"><History size={13}/> Histórico</button>}<button type="button" data-yuisync-add-pet-action aria-label={`Adicionar outro pet para ${pet.owner_name || 'este tutor'}`} onClick={() => onAddPet(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => onEdit(pet)} className="btn btn-secondary btn-sm">Editar</button><button type="button" aria-label="Fechar detalhes" title="Fechar" onClick={onClose} className="text-muted hover:text-text"><X size={18} /></button></div>
         </div>
         <div className="flex-1 overflow-y-auto p-6 space-y-5">
           <div className="rounded-2xl border border-[var(--border)] bg-card p-5"><p className="text-xs uppercase tracking-widest text-muted font-bold">Pets deste cliente</p><div className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-2">{tutorPets.map((item) => (<button key={item.id} type="button" onClick={() => item.id !== pet.id && onSelectPet?.(item)} className={`rounded-xl border p-3 text-left ${item.id === pet.id ? 'border-emerald-500/45 bg-emerald-500/12' : 'border-[var(--border)] hover:border-emerald-500/30'}`}><p className="font-semibold text-text">{item.pet_name || 'Pet sem nome'}</p><p className="mt-1 text-xs text-muted">{item.breed || item.species || 'Sem raca informada'}</p></button>))}</div></div>
@@ -372,6 +374,11 @@ export default function PetsPage() {
     groupPetsByTutor(pets || []).forEach((group) => group.pets.forEach((pet) => map.set(pet.id, group.pets)))
     return map
   }, [pets])
+  const tutorGroupKeyByPetId = useMemo(() => {
+    const map = new Map()
+    groupPetsByTutor(pets || []).forEach((group) => group.pets.forEach((item) => map.set(item.id, group.key)))
+    return map
+  }, [pets])
   const totalPages = Math.max(1, Math.ceil(filteredTutorGroups.length / CLIENTS_PAGE_SIZE))
   const currentPage = Math.min(page, totalPages)
   const pageStart = (currentPage - 1) * CLIENTS_PAGE_SIZE
@@ -388,6 +395,7 @@ export default function PetsPage() {
       owner_cpf: pet.owner_cpf || '',
       phone: pet.phone || '',
       email: pet.email || '',
+      client_notes: pet.client_notes || '',
       owner_address: pet.owner_address || '',
       owner_neighborhood: pet.owner_neighborhood || '',
       owner_city: pet.owner_city || '',
@@ -484,16 +492,16 @@ export default function PetsPage() {
           {visibleTutorGroups.map((group) => { const pet = group.pets[0]; const Icon = speciesIcon(pet.species); const registrationBadge = getRegistrationBadge(pet); const activePackages = group.pets.flatMap((item) => subscriptionsByClient.get(item.id) || []).filter((item) => item.status === 'active'); return (
             <div key={group.key} className="flex min-h-[270px] flex-col rounded-2xl border border-[var(--border)] bg-card p-5 shadow-card transition-all hover:-translate-y-1 hover:border-emerald-500/30"><div className="flex items-start gap-4"><div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-500 flex items-center justify-center flex-shrink-0"><Icon size={24}/></div><div className="min-w-0 flex-1"><h3 className="line-clamp-2 text-base font-bold leading-snug text-text">{formatPersonName(group.owner_name || pet.owner_name)}</h3><p className="mt-1 text-xs font-semibold text-emerald-500">{group.pets.length} {group.pets.length === 1 ? 'pet cadastrado' : 'pets cadastrados'}</p></div><span className={`badge flex-shrink-0 ${registrationBadge.cls}`}>{registrationBadge.label}</span></div>
               <div className="mt-4 space-y-2">{group.pets.map((item) => (<button key={item.id} type="button" onClick={() => setDrawerPet(item)} className="flex w-full items-center justify-between gap-3 rounded-xl border border-[var(--border2)] bg-surface/60 px-3 py-2 text-left hover:border-emerald-500/30"><span className="min-w-0"><strong className="block truncate text-sm text-text">{item.pet_name || 'Pet sem nome'}</strong><span className="block truncate text-xs text-muted">{item.breed || item.species || 'Sem raca informada'}</span></span><span className="text-xs font-semibold text-emerald-500">Abrir</span></button>))}</div>
-              <div className="mt-auto border-t border-[var(--border2)] pt-4"><div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2"><div className="flex min-w-0 items-center gap-2 text-muted"><Phone size={13} className="flex-shrink-0 text-emerald-500"/><span className="truncate">{formatPhone(pet.phone)}</span></div><div className="flex min-w-0 items-center gap-2 text-muted"><PawPrint size={13} className="flex-shrink-0 text-emerald-500"/><span className="truncate">{activePackages.length} pacote(s) ativo(s)</span></div></div><div className="mt-4 flex flex-wrap items-center justify-end gap-2"><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar cliente</button></div></div></div>
+              <div className="mt-auto border-t border-[var(--border2)] pt-4"><div className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2"><div className="flex min-w-0 items-center gap-2 text-muted"><Phone size={13} className="flex-shrink-0 text-emerald-500"/><span className="truncate">{formatPhone(pet.phone)}</span></div><div className="flex min-w-0 items-center gap-2 text-muted"><PawPrint size={13} className="flex-shrink-0 text-emerald-500"/><span className="truncate">{activePackages.length} pacote(s) ativo(s)</span></div></div><div className="mt-4 flex flex-wrap items-center justify-end gap-2"><button type="button" data-yuisync-client-history={group.key} className="btn btn-secondary btn-sm"><History size={13}/> Histórico</button><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar cliente</button></div></div></div>
           )})}
           {filteredTutorGroups.length === 0 && <div className="col-span-full rounded-2xl border border-dashed border-[var(--border)] px-6 py-12 text-center"><p className="text-text font-semibold">Nenhum cadastro encontrado</p></div>}
         </div>
       ) : (
-        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pets</th><th>Telefone</th><th>Pacotes ativos</th><th className="text-right">Acoes</th></tr></thead><tbody>{visibleTutorGroups.map((group) => { const pet = group.pets[0]; const activePackages = group.pets.flatMap((item) => subscriptionsByClient.get(item.id) || []).filter((item) => item.status === 'active'); return <tr key={group.key}><td className="font-semibold text-text">{formatPersonName(group.owner_name || pet.owner_name)}</td><td><div className="flex flex-wrap gap-1">{group.pets.map((item) => <button key={item.id} type="button" onClick={() => setDrawerPet(item)} className="badge badge-green">{item.pet_name || 'Pet'}</button>)}</div></td><td>{formatPhone(pet.phone)}</td><td>{activePackages.length}</td><td className="text-right"><div className="flex justify-end gap-2"><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar</button></div></td></tr>})}{filteredTutorGroups.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
+        <div className="bg-card border border-[var(--border)] rounded-2xl overflow-hidden"><div className="overflow-x-auto"><table className="tbl"><thead><tr><th>Tutor</th><th>Pets</th><th>Telefone</th><th>Pacotes ativos</th><th className="text-right">Acoes</th></tr></thead><tbody>{visibleTutorGroups.map((group) => { const pet = group.pets[0]; const activePackages = group.pets.flatMap((item) => subscriptionsByClient.get(item.id) || []).filter((item) => item.status === 'active'); return <tr key={group.key}><td className="font-semibold text-text">{formatPersonName(group.owner_name || pet.owner_name)}</td><td><div className="flex flex-wrap gap-1">{group.pets.map((item) => <button key={item.id} type="button" onClick={() => setDrawerPet(item)} className="badge badge-green">{item.pet_name || 'Pet'}</button>)}</div></td><td>{formatPhone(pet.phone)}</td><td>{activePackages.length}</td><td className="text-right"><div className="flex justify-end gap-2"><button type="button" data-yuisync-client-history={group.key} className="btn btn-secondary btn-sm"><History size={13}/> Histórico</button><button type="button" data-yuisync-add-pet-action onClick={() => openAddPetForTutor(pet)} className="btn btn-primary btn-sm"><Plus size={13}/> Adicionar pet</button><button onClick={() => setModalPet(pet)} className="btn btn-secondary btn-sm">Editar</button></div></td></tr>})}{filteredTutorGroups.length === 0 && <tr><td colSpan={5} className="text-center text-muted py-10">Nenhum cadastro encontrado.</td></tr>}</tbody></table></div></div>
       )}
 
       {modalPet !== null && <PetModal key={modalPet?.id || (modalPet?.adding_pet_for_tutor ? 'new-pet' : 'new-client')} pet={modalPet} tutorPets={modalPet?.id ? (tutorPetsByPetId.get(modalPet.id) || [modalPet]) : []} plans={plans.filter((plan) => plan.active)} subscription={modalPet?.id ? latestSubscriptionByClient.get(modalPet.id) : null} onSelectPet={setModalPet} onClose={() => setModalPet(null)} onSave={handleSave} />}
-      {drawerPet && <PetDrawer pet={drawerPet} tutorPets={tutorPetsByPetId.get(drawerPet.id) || [drawerPet]} subscriptions={subscriptionsByClient.get(drawerPet.id) || []} onSelectPet={setDrawerPet} onClose={() => setDrawerPet(null)} onAddPet={openAddPetForTutor} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
+      {drawerPet && <PetDrawer pet={drawerPet} historyGroupKey={tutorGroupKeyByPetId.get(drawerPet.id) || ''} tutorPets={tutorPetsByPetId.get(drawerPet.id) || [drawerPet]} subscriptions={subscriptionsByClient.get(drawerPet.id) || []} onSelectPet={setDrawerPet} onClose={() => setDrawerPet(null)} onAddPet={openAddPetForTutor} onEdit={(pet) => { setDrawerPet(null); setModalPet(pet) }} speciesIcon={speciesIcon} serviceLabel={serviceLabel} statusBadge={statusBadge} />}
       {legacyImportModal && <LegacyClientsImportModal moduleId={activeModuleId} tenantId={auth?.activeTenantId} onClose={() => setLegacyImportModal(false)} onDone={reloadAll} />}
     </div>
   )

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { CalendarClock, History, PawPrint, Scissors, ShoppingBag, Truck, X } from 'lucide-react'
+import { CalendarClock, PawPrint, Scissors, ShoppingBag, Truck, X } from 'lucide-react'
 
 import { useAuthCtx } from '../../../context/AuthContext'
 import { useModuleCtx } from '../../../context/ModuleContext'
@@ -41,7 +41,7 @@ function clientGroupKey(client = {}) {
   if (explicit) return `group:${explicit}`
   const phone = phoneDigits(client.phone)
   if (phone) return `phone:${phone}`
-  return `name:${normalize(client.name)}`
+  return `pet:${String(client.id || '').trim()}`
 }
 
 function mapClient(client = {}) {
@@ -76,50 +76,6 @@ function matchingGroup(groups, ownerName, petNames = []) {
     if (!pets.length) return true
     return group.clients.some((client) => pets.includes(normalize(client.pet_name)))
   }) || null
-}
-
-function createHistoryButton(groupKey) {
-  const button = document.createElement('button')
-  button.type = 'button'
-  button.dataset.yuisyncClientHistory = groupKey
-  button.className = 'btn btn-secondary btn-sm'
-  button.innerHTML = '<span aria-hidden="true">↺</span> Histórico'
-  return button
-}
-
-function injectHistoryButtons(groups) {
-  if (!window.location.pathname.endsWith('/pets')) return
-
-  document.querySelectorAll('.page button').forEach((openButton) => {
-    if (normalize(openButton.textContent) !== 'abrir') return
-    const card = openButton.closest('.rounded-2xl.border.bg-card')
-    if (!card || card.querySelector('[data-yuisync-client-history]')) return
-    const owner = card.querySelector('h3')?.textContent || ''
-    const petNames = [...card.querySelectorAll('button strong')].map((node) => node.textContent || '')
-    const group = matchingGroup(groups, owner, petNames)
-    const actions = card.querySelector('[data-yuisync-add-pet-action]')?.parentElement
-    if (group && actions) actions.insertBefore(createHistoryButton(group.key), actions.firstChild)
-  })
-
-  document.querySelectorAll('.page table tbody tr').forEach((row) => {
-    if (row.querySelector('[data-yuisync-client-history]')) return
-    const cells = [...row.children]
-    const owner = cells[0]?.textContent || ''
-    const petNames = [...(cells[1]?.querySelectorAll('button') || [])].map((node) => node.textContent || '')
-    const group = matchingGroup(groups, owner, petNames)
-    const actions = cells.at(-1)?.querySelector('.flex')
-    if (group && actions) actions.insertBefore(createHistoryButton(group.key), actions.firstChild)
-  })
-
-  document.querySelectorAll('.fixed.inset-0.z-50').forEach((drawer) => {
-    if (drawer.querySelector('[data-yuisync-client-history]')) return
-    const owner = drawer.querySelector('.modal-header h2')?.textContent || ''
-    const petLine = drawer.querySelector('.modal-header h2 + p')?.textContent || ''
-    const petName = petLine.split('-')[0]?.trim() || ''
-    const group = matchingGroup(groups, owner, [petName])
-    const headerActions = drawer.querySelector('.modal-header > .flex.items-center.gap-2:last-child')
-    if (group && headerActions) headerActions.insertBefore(createHistoryButton(group.key), headerActions.firstChild)
-  })
 }
 
 function serviceLabel(appointment, serviceMap) {
@@ -183,7 +139,7 @@ async function loadHistory(moduleId, tenantId, group) {
 
   const appointmentQuery = async (includeMachine = true) => tenantQuery(tenantId, async (includeTenant) => {
     const fields = [
-      'id', 'client_id', 'service_type', 'service_items', 'scheduled_at', 'status', 'price', 'source',
+      'id', 'client_id', 'service_type', 'service_items', 'scheduled_at', 'status', 'price', 'source', 'notes',
       'transport_mode', 'transport_label', 'transport_address', 'transport_neighborhood', 'transport_city',
       includeMachine ? 'grooming_machine_no' : null,
     ].filter(Boolean).join(',')
@@ -254,6 +210,7 @@ async function loadHistory(moduleId, tenantId, group) {
       final: FINAL_STATUSES.has(normalize(appointment.status)),
       value: Number(linkedSale?.total_price ?? appointment.price ?? 0),
       delivery: deliveryLabelFromAppointment(appointment),
+      instructions: String(appointment.notes || '').trim(),
       machine: machine || null,
     }
   })
@@ -270,6 +227,7 @@ async function loadHistory(moduleId, tenantId, group) {
       final: FINAL_STATUSES.has(normalize(sale.status)),
       value: Number(sale.total_price || 0),
       delivery: deliveryLabelFromSale(sale),
+      instructions: '',
       machine: null,
     }))
 
@@ -317,6 +275,7 @@ function HistoryModal({ group, rows, loading, error, onClose }) {
                           <div className="text-right"><span className="badge badge-gray">{row.status}</span><p className="mt-1 font-bold text-emerald-400">{fmtMoney(row.value)}</p></div>
                         </div>
                         {row.delivery && <p className="mt-2 flex items-start gap-1 text-xs text-sky-300"><Truck size={12} className="mt-0.5 shrink-0"/> {row.delivery}</p>}
+                        {row.instructions && <p className="mt-2 whitespace-pre-wrap rounded-lg border border-amber-500/20 bg-amber-500/8 px-3 py-2 text-xs text-amber-100"><strong>Instruções do atendimento:</strong> {row.instructions}</p>}
                       </div>
                     </div>
                   </article>
@@ -395,16 +354,6 @@ export function ClientHistoryGroomingEnhancer() {
     return () => { cancelled = true }
   }, [activeModuleId, activeTenantId, loadClients])
 
-  useEffect(() => {
-    if (!groups.size) return undefined
-    let frame = 0
-    const apply = () => { frame = 0; injectHistoryButtons(groups) }
-    const schedule = () => { if (!frame) frame = window.requestAnimationFrame(apply) }
-    const observer = new MutationObserver(schedule)
-    observer.observe(document.body, { childList: true, subtree: true })
-    schedule()
-    return () => { observer.disconnect(); if (frame) window.cancelAnimationFrame(frame) }
-  }, [groups])
 
   const openHistory = useCallback(async (group) => {
     setHistoryGroup(group)

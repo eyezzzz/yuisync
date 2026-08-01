@@ -433,6 +433,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
   const servicePickerRef = useRef(null)
   const serviceSearchRef = useRef(null)
   const searchRequestRef = useRef(0)
+  const petNotesDefaultRef = useRef(isEdit ? String(appt?.notes || '') : '')
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const petSearch = form.pet_search || ''
@@ -517,6 +518,19 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     || (pets || []).find((pet) => pet.id === form.pet_id)
     || (appt?.pets?.id === form.pet_id ? appt.pets : null)
   ), [selectedClient, pets, form.pet_id, appt?.pets])
+  useEffect(() => {
+    if (isEdit) return
+    const petNotes = String(selectedPet?.notes || '').trim()
+    setForm((current) => {
+      const currentNotes = String(current.notes || '')
+      const previousDefault = petNotesDefaultRef.current
+      petNotesDefaultRef.current = petNotes
+      if (currentNotes && currentNotes !== previousDefault) return current
+      if (currentNotes === petNotes) return current
+      return { ...current, notes: petNotes }
+    })
+  }, [isEdit, selectedPet?.id, selectedPet?.notes])
+
   const selectedTutorPets = useMemo(() => {
     if (!form.pet_id) return []
     const unique = new Map()
@@ -1060,7 +1074,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
             </div>
 
             <div>
-              <label className="inp-label">Instrucoes para o profissional</label>
+              <label className="inp-label">Instrucoes e especificacoes para o profissional</label>
               <textarea
                 aria-label="Observacoes do agendamento"
                 className="inp h-24 resize-none p-4"
@@ -1068,6 +1082,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                 value={form.notes}
                 onChange={(event) => set('notes', event.target.value)}
               />
+              {selectedPet?.notes && <p className="mt-2 text-xs text-muted">Pré-preenchido com as observações do pet. Você pode complementar sem alterar o cadastro permanente.</p>}
             </div>
 
             {err && (
@@ -1135,6 +1150,7 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
         </div>
       </div>
       <MotodogAgendaInfo appt={appt}/>
+      {appt.notes && <p className="whitespace-pre-wrap rounded-lg border border-amber-500/20 bg-amber-500/8 px-2.5 py-2 text-xs text-amber-100"><ClipboardList size={12} className="mr-1 inline"/> {appt.notes}</p>}
       <div className="flex items-center justify-between">
         <span className={`badge ${sb.cls} text-[10px]`}>{sb.label}</span>
         <span className="text-xs font-semibold text-emerald-400">{fmtCurrency(appt.price)}</span>
@@ -1235,6 +1251,7 @@ function AgendaTimelineView({
             <p className={`yuisync-card-responsible truncate text-[10px] ${assigned ? "text-muted" : "text-amber-300"}`}>
               {assigned ? `Resp.: ${assigned.name}` : appt.responsible_staff_name ? `Resp.: ${appt.responsible_staff_name}` : 'Sem responsavel'}
             </p>
+            {appt.notes && <p className="yuisync-card-instructions mt-1 line-clamp-3 whitespace-pre-wrap rounded-md border border-amber-500/20 bg-amber-500/8 px-2 py-1 text-[10px] text-amber-100"><strong>Instruções:</strong> {appt.notes}</p>}
           </div>
         </button>
         {appt.status === 'concluido' && (
