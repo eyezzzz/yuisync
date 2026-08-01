@@ -27,6 +27,8 @@ const escapeHtml = (value = '') => String(value ?? '')
   .replace(/"/g, '&quot;')
   .replace(/'/g, '&#039;')
 
+const agendaDurationState = new WeakMap()
+
 function findTodayAgendaTable() {
   const heading = [...document.querySelectorAll('h2')]
     .find((node) => normalizeText(node.textContent) === 'agenda de hoje')
@@ -119,6 +121,57 @@ function enhanceAgendaServiceSearch() {
   if (listbox.firstElementChild !== primaryBath) {
     listbox.insertBefore(primaryBath, listbox.firstElementChild)
   }
+}
+
+function selectedAgendaServiceRows(modal) {
+  return [...(modal?.querySelectorAll('button[aria-label^="Remover "]') || [])]
+    .map((button) => button.parentElement)
+    .filter(Boolean)
+}
+
+function selectedAgendaServiceSignature(modal) {
+  return [...(modal?.querySelectorAll('button[aria-label^="Remover "]') || [])]
+    .map((button) => String(button.getAttribute('aria-label') || '').trim())
+    .join('|')
+}
+
+function durationFromSelectedServiceRow(row) {
+  const matches = [...String(row?.textContent || '').matchAll(/(\d+)\s*min\b/gi)]
+  const value = Number(matches.at(-1)?.[1] || 0)
+  return Number.isFinite(value) ? value : 0
+}
+
+function setReactInputValue(input, value) {
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement?.prototype || {}, 'value')?.set
+  if (setter) setter.call(input, value)
+  else input.value = value
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+}
+
+function enhanceAgendaDurationAfterServiceChange() {
+  document.querySelectorAll('.modal-box').forEach((modal) => {
+    const title = normalizeText(modal.querySelector('h2')?.textContent)
+    if (title !== 'editar agendamento' && title !== 'novo agendamento') return
+
+    const durationInput = modal.querySelector('input[aria-label="Duracao total do agendamento"]')
+    if (!durationInput) return
+
+    const signature = selectedAgendaServiceSignature(modal)
+    const previous = agendaDurationState.get(modal)
+    if (previous === undefined) {
+      agendaDurationState.set(modal, signature)
+      return
+    }
+    if (previous === signature) return
+
+    agendaDurationState.set(modal, signature)
+    const nextDuration = selectedAgendaServiceRows(modal)
+      .reduce((sum, row) => sum + durationFromSelectedServiceRow(row), 0)
+    const nextValue = nextDuration > 0 ? String(nextDuration) : ''
+    if (durationInput.value !== nextValue) setReactInputValue(durationInput, nextValue)
+    durationInput.dataset.yuisyncDurationRecalculated = 'true'
+  })
 }
 
 function findCommissionSummaryTable() {
@@ -285,6 +338,7 @@ export function DashboardAgendaLabelsEnhancer() {
       frame = 0
       enhanceDashboardRows(serviceMap)
       enhanceAgendaServiceSearch()
+      enhanceAgendaDurationAfterServiceChange()
     }
     const schedule = () => {
       if (frame) return
