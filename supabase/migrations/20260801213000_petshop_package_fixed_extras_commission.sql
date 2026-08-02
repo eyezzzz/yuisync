@@ -94,7 +94,7 @@ begin
     select
       plan_item.*,
       greatest(0, coalesce(catalog.default_price, 0))::numeric as catalog_price,
-      lower(concat_ws(' ', plan_item.item_text, catalog.code, catalog.name, catalog.category))
+      lower(concat_ws(' ', plan_item.item_text, catalog.code, catalog.name))
         ~ '(^|[ _-])(banho|tosa|tosagem|groom|trim|trimming|stripping)($|[ _-])' as is_core
     from plan_items plan_item
     left join public.petshop_services catalog
