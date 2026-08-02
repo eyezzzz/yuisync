@@ -1,0 +1,61 @@
+name: Corrigir assinatura exata na comissão de pacotes
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  prepare-fix:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Aplicar correção do snapshot de agendamentos
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs')
+          const assert = require('node:assert/strict')
+
+          const corePath = 'src/modules/petshop/hooks/usePetshopAdvancedCore.js'
+          let core = fs.readFileSync(corePath, 'utf8')
+          const before = 'ready_at,notes,subscription_benefit_used,transport_mode'
+          const after = 'ready_at,notes,subscription_id,subscription_benefit_used,transport_mode'
+          assert.ok(core.includes(before), 'APPT_BASE_SELECT sem o trecho esperado')
+          core = core.replace(before, after)
+          assert.ok(core.includes(after), 'subscription_id não foi adicionado ao snapshot')
+          fs.writeFileSync(corePath, core)
+
+          fs.writeFileSync('test/packageCommissionSnapshotSelect.test.mjs', `import assert from 'node:assert/strict'\nimport { readFile } from 'node:fs/promises'\nimport test from 'node:test'\n\ntest('snapshot de comissões carrega a assinatura exata do agendamento', async () => {\n  const source = await readFile(new URL('../src/modules/petshop/hooks/usePetshopAdvancedCore.js', import.meta.url), 'utf8')\n  assert.match(source, /ready_at,notes,subscription_id,subscription_benefit_used/)\n})\n\ntest('pacote de quatro banhos por 200 mantém unidade inteira de 50', async () => {\n  const { buildPackageCommissionAllocation } = await import('../src/modules/petshop/lib/packageCommissionOperations.js')\n  const allocation = buildPackageCommissionAllocation({\n    plan: {\n      name: 'Pacote 4 banhos',\n      price: 200,\n      services: [{ service_type: 'banho_0_10', service_code: 'banho_0_10', qty_per_cycle: 4 }],\n    },\n    catalogServices: [{ code: 'banho_0_10', default_price: 55 }],\n  })\n  assert.equal(allocation.unit_values.get('banho_0_10'), 50)\n})\n`)
+          NODE
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Testar regressões
+        run: node --test test/packageCommissionSnapshotSelect.test.mjs test/clientHistoryLayoutAndPackageCommissionRuntime.test.mjs test/teamDeliveryAndCommissionSummary.test.mjs
+
+      - name: Validar build
+        run: npm run build
+
+      - name: Publicar branch validada
+        run: |
+          rm -f .github/workflows/fix-exact-package-subscription-commission.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B fix/exact-package-subscription-commission
+          git add -A
+          git commit -m "Usar assinatura exata no cálculo da comissão de pacotes"
+          git push --force-with-lease origin HEAD:fix/exact-package-subscription-commission
