@@ -204,13 +204,15 @@ export function buildCommissionRows(history = [], configuredStaff = []) {
     const key = String(appointment.responsible_staff_key || '').trim()
     if (!key) return
     const row = ensure(key, configuredNames.get(key) || appointment.responsible_staff_name || key)
-    appointmentCommissionLines(appointment).forEach((line) => {
+    const lines = appointmentCommissionLines(appointment)
+    if (lines.some((line) => line.package_covered)) row.package_count += 1
+
+    lines.forEach((line) => {
       row.service_count += 1
       row.service_revenue += line.revenue
       row.total_commission += line.commission
 
       if (line.package_covered) {
-        row.package_count += 1
         row.package_revenue += line.revenue
         row.package_commission += line.commission
         if (line.category === 'bath') row.package_bath_count += 1
