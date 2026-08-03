@@ -203,10 +203,6 @@ function mat4Multiply(a, b) {
   return out
 }
 
-function mat4Identity() {
-  return new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1])
-}
-
 function mat4Translation(x, y, z) {
   const out = mat4Identity()
   out[12] = x
