@@ -45,7 +45,6 @@ import {
 
 const PACKAGE_FIRST_APPOINTMENT_STORAGE_KEY = 'yuisync:package-first-appointment-at'
 const PACKAGE_SCHEDULE_SAVED_EVENT = 'yuisync:subscription-schedule-saved'
-const EDITABLE_PACKAGE_APPOINTMENT_STATUSES = new Set(['agendado', 'confirmado'])
 
 function enrichPlanServices(services, catalogServices) {
   const catalog = catalogServiceMap(catalogServices)
@@ -554,9 +553,9 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
       ...row,
       next_scheduled_at: appointmentDateTimeIso(row.date, row.time),
     }))
-    const invalid = normalized.find((row) => EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status) && !row.next_scheduled_at)
+    const invalid = normalized.find((row) => !row.next_scheduled_at)
     if (invalid) {
-      setError('Preencha data e horário em todos os agendamentos editáveis.')
+      setError('Preencha data e horário em todos os agendamentos do pacote.')
       return
     }
 
@@ -565,7 +564,6 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
     setNotice('')
     try {
       for (const row of normalized) {
-        if (!EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status)) continue
         const before = new Date(row.original_scheduled_at || '').getTime()
         const after = new Date(row.next_scheduled_at || '').getTime()
         if (Number.isFinite(before) && Number.isFinite(after) && before === after) continue
@@ -613,8 +611,6 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
     }
   }
 
-  const editableCount = rows.filter((row) => EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status)).length
-
   return createPortal(
     <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
       <div className="modal-box max-w-4xl">
@@ -628,7 +624,7 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
 
         <div className="modal-body space-y-4">
           <div className="rounded-xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
-            Datas agendadas ou confirmadas podem ser alteradas aqui. Atendimentos concluídos, cancelados ou registrados como no-show ficam bloqueados para preservar o histórico.
+            Todos os agendamentos vinculados ao ciclo são exibidos, incluindo datas futuras e passadas. Qualquer data e horário pode ser ajustado manualmente para controle operacional.
           </div>
 
           {loading ? (
@@ -637,7 +633,6 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
             <div className="space-y-3">
               {rows.map((row, index) => {
                 const metadata = packageAppointmentStatus(row.status)
-                const editable = EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status)
                 return (
                   <div key={row.id} className="rounded-2xl border border-[var(--border2)] bg-surface/70 p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -650,14 +645,14 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
                     <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div>
                         <label className="inp-label">Data</label>
-                        <input type="date" className="inp" disabled={!editable} value={row.date} onChange={(event) => updateRow(row.id, 'date', event.target.value)}/>
+                        <input type="date" className="inp" value={row.date} onChange={(event) => updateRow(row.id, 'date', event.target.value)}/>
                       </div>
                       <div>
                         <label className="inp-label">Horário</label>
-                        <input type="time" className="inp" disabled={!editable} value={row.time} onChange={(event) => updateRow(row.id, 'time', event.target.value)}/>
+                        <input type="time" className="inp" value={row.time} onChange={(event) => updateRow(row.id, 'time', event.target.value)}/>
                       </div>
                     </div>
-                    <p className="mt-2 text-[10px] text-muted">{editable ? 'Data e horário editáveis manualmente.' : 'Histórico preservado; este atendimento não pode mais ser remarcado por esta tela.'}</p>
+                    <p className="mt-2 text-[10px] text-muted">Data e horário disponíveis para conferência ou ajuste manual, independentemente do status.</p>
                   </div>
                 )
               })}
@@ -669,7 +664,7 @@ function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onCl
           {error && <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</p>}
           <div className="flex gap-3">
             <button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Fechar</button>
-            <button type="button" onClick={saveAppointments} disabled={saving || loading || editableCount === 0} className="btn btn-primary flex-1 justify-center"><Save size={15}/> {saving ? 'Salvando...' : 'Salvar datas'}</button>
+            <button type="button" onClick={saveAppointments} disabled={saving || loading || rows.length === 0} className="btn btn-primary flex-1 justify-center"><Save size={15}/> {saving ? 'Salvando...' : 'Salvar datas'}</button>
           </div>
         </div>
       </div>
