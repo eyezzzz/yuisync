@@ -14,6 +14,9 @@
     "api/webhook.ts": {
       "maxDuration": 30
     },
+    "api/meta/whatsapp.ts": {
+      "maxDuration": 30
+    },
     "api/admin/users.ts": {
       "maxDuration": 30
     },
