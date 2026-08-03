@@ -5,7 +5,7 @@ import {
   PETSHOP_DELIVERY_STAFF_TEMPLATE_KEY,
 } from '../../../../shared/petshopOperations'
 
-const motodogModes = new Set(['motodog', 'buscar_e_levar', 'somente_buscar', 'somente_levar'])
+const motodogModes = new Set(['motodog', 'buscar_e_levar', 'buscar_e_levar_fora_muriae', 'somente_buscar', 'somente_levar'])
 
 const dateStart = (value) => `${value}T00:00:00.000Z`
 const dateEnd = (value) => `${value}T23:59:59.999Z`

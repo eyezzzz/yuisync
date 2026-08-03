@@ -50,6 +50,7 @@ const PETBOT_WEEKDAYS = [
 
 const DEFAULT_PET_TRANSPORT_OPTIONS = [
   { id: 'buscar_e_levar', label: 'Buscar e levar', fee: '20.00', maxWeightKg: '10', active: true },
+  { id: 'buscar_e_levar_fora_muriae', label: 'Buscar e levar (fora de Muriaé)', fee: '30.00', maxWeightKg: '10', active: true },
   { id: 'somente_buscar', label: 'Somente buscar', fee: '15.00', maxWeightKg: '10', active: true },
   { id: 'somente_levar', label: 'Somente levar', fee: '15.00', maxWeightKg: '10', active: true },
 ]
@@ -59,7 +60,7 @@ const DEFAULT_MESSAGE_TEMPLATES = {
   appointment_confirmation: 'Olá, [NOME]!\n\nSeu atendimento está agendado para:\n\n📅 **[DATA]**\n🕐 **[HORARIO]**\n\nQualquer dúvida, estamos à disposição! 🐶💚',
   registration_checklist: 'Para realizarmos o cadastro, por gentileza envie:\n\n• Nome completo do tutor\n• Data de nascimento do tutor\n• CPF do tutor\n• CEP\n• Número da residência\n• Ponto de referência\n• Nome do pet\n• Raça do pet\n\nAssim conseguimos concluir o cadastro em nosso sistema. 🐶💚',
   payment_proof_request: 'Assim que realizar o pagamento, por gentileza envie o comprovante para darmos baixa no sistema. 🐶💚',
-  motodog_options: '🚗 **MotoDog**\n\n**Buscar e levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[BUSCAR_E_LEVAR]**\n\n**Somente buscar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_BUSCAR]**\n\n**Somente levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_LEVAR]**',
+  motodog_options: '🚗 **MotoDog**\n\n**Buscar e levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[BUSCAR_E_LEVAR]**\n\n**Somente buscar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_BUSCAR]**\n\n**Somente levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_LEVAR]**\n\n**Buscar e levar (fora de Muriaé)**\nPets de até 10 kg\n💰 **[BUSCAR_E_LEVAR_FORA_MURIAE]**',
   veterinary_consultation: '🩺 **Consulta Veterinária**\n\nO atendimento com a **Dra. Taina Campos** é completo e individualizado.\n\nDurante a consulta, é realizada uma avaliação clínica detalhada, incluindo histórico, comportamento e alimentação. Quando necessário, são solicitados exames complementares e indicado um tratamento específico.\n\nA consulta inclui **1 retorno**, caso seja necessário acompanhamento ou ajuste no tratamento.\n\n💰 **Valor da consulta: [VALOR]**\n\nQual é a sua disponibilidade para agendamento?',
   monthly_plan: '🛁 **Pacote Mensal**\n\n✅ 4 banhos por mês\n✅ 1 banho por semana\n✅ Horário reservado para o seu pet\n✅ Pagamento antecipado\n\n💰 **Valor do pacote: [VALOR]**\n\nQualquer dúvida, estamos à disposição! 🐶💚',
   small_bath_service: '🐶 **Banho - Porte Pequeno (até 10 kg)**\n\n**Serviço incluso:**\n• Banho\n• Corte de unhas\n• Limpeza de ouvidos\n• Tosa higiênica (barriguinha e região do bumbum)\n\n💰 **Valor: [VALOR]**\n\nIndicado para pets de **até 10 kg**.',
@@ -188,12 +189,18 @@ function toBool(value, fallback = false) {
 }
 
 function normalizeTransportOptions(value) {
-  const rows = Array.isArray(value) && value.length ? value : DEFAULT_PET_TRANSPORT_OPTIONS
+  const configured = Array.isArray(value) ? value : []
+  const defaultIds = new Set(DEFAULT_PET_TRANSPORT_OPTIONS.map((item) => item.id))
+  const configuredById = new Map(configured.map((item) => [String(item?.id || ''), item]))
+  const rows = [
+    ...DEFAULT_PET_TRANSPORT_OPTIONS.map((item) => ({ ...item, ...(configuredById.get(item.id) || {}) })),
+    ...configured.filter((item) => !defaultIds.has(String(item?.id || ''))),
+  ]
   return rows.map((item, index) => ({
-    id: item.id || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.id || `opcao_${index + 1}`,
-    label: item.label || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.label || `Opcao ${index + 1}`,
-    fee: String(item.fee ?? DEFAULT_PET_TRANSPORT_OPTIONS[index]?.fee ?? '0.00'),
-    maxWeightKg: String(item.maxWeightKg ?? item.max_weight_kg ?? DEFAULT_PET_TRANSPORT_OPTIONS[index]?.maxWeightKg ?? '10'),
+    id: item.id || `opcao_${index + 1}`,
+    label: item.label || `Opcao ${index + 1}`,
+    fee: String(item.fee ?? '0.00'),
+    maxWeightKg: String(item.maxWeightKg ?? item.max_weight_kg ?? '10'),
     active: item.active !== false,
   }))
 }

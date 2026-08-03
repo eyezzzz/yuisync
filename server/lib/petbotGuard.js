@@ -9,13 +9,14 @@ const DEFAULT_DELIVERY_FEE = 10
 const DEFAULT_PET_TRANSPORT_FEE = 20
 const DEFAULT_PET_TRANSPORT_OPTIONS = [
   { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 20, maxWeightKg: 10, active: true },
+  { id: 'buscar_e_levar_fora_muriae', label: 'Buscar e levar (fora de Muriaé)', fee: 30, maxWeightKg: 10, active: true },
   { id: 'somente_buscar', label: 'Somente buscar', fee: 15, maxWeightKg: 10, active: true },
   { id: 'somente_levar', label: 'Somente levar', fee: 15, maxWeightKg: 10, active: true },
 ]
 const DEFAULT_STANDARD_TEMPLATES = {
   appointment_summary: 'Olá!\n\nSegue o resumo do seu agendamento:\n\n🐶 **Pet:** [PET]\n💰 **Valor:** [VALOR]\n📍 **Local:** [LOJA]\n📌 **Endereço:** [ENDERECO_LOJA]\n📅 **Data:** [DATA]\n🕐 **Horário:** [HORARIO]\n\nAguardamos vocês! 🐶💚',
   appointment_confirmation: 'Olá, [NOME]!\n\nSeu atendimento está agendado para:\n\n📅 **[DATA]**\n🕐 **[HORARIO]**\n\nQualquer dúvida, estamos à disposição! 🐶💚',
-  motodog_options: '🚗 **MotoDog**\n\n**Buscar e levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[BUSCAR_E_LEVAR]**\n\n**Somente buscar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_BUSCAR]**\n\n**Somente levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_LEVAR]**',
+  motodog_options: '🚗 **MotoDog**\n\n**Buscar e levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[BUSCAR_E_LEVAR]**\n\n**Somente buscar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_BUSCAR]**\n\n**Somente levar**\nPets de até 10 kg (dentro de Muriaé)\n💰 **[SOMENTE_LEVAR]**\n\n**Buscar e levar (fora de Muriaé)**\nPets de até 10 kg\n💰 **[BUSCAR_E_LEVAR_FORA_MURIAE]**',
   veterinary_consultation: '🩺 **Consulta Veterinária**\n\nO atendimento com a **Dra. Taina Campos** é completo e individualizado.\n\nA consulta inclui **1 retorno**, caso seja necessário acompanhamento ou ajuste no tratamento.\n\n💰 **Valor da consulta: [VALOR]**\n\nQual é a sua disponibilidade para agendamento?',
 }
 
@@ -200,7 +201,13 @@ function normalizeTransportOptions(settings = {}) {
       raw = null
     }
   }
-  const source = Array.isArray(raw) && raw.length ? raw : DEFAULT_PET_TRANSPORT_OPTIONS
+  const configured = Array.isArray(raw) ? raw : []
+  const defaultIds = new Set(DEFAULT_PET_TRANSPORT_OPTIONS.map((option) => option.id))
+  const configuredById = new Map(configured.map((option) => [clean(option?.id || option?.mode), option]))
+  const source = [
+    ...DEFAULT_PET_TRANSPORT_OPTIONS.map((option) => ({ ...option, ...(configuredById.get(option.id) || {}) })),
+    ...configured.filter((option) => !defaultIds.has(clean(option?.id || option?.mode))),
+  ]
   const normalized = source
     .map((option, index) => ({
       id: clean(option.id || option.mode || DEFAULT_PET_TRANSPORT_OPTIONS[index]?.id || `opcao_${index + 1}`),
@@ -233,6 +240,7 @@ function buildTransportQuestion(settings = {}) {
     BUSCAR_E_LEVAR: money(byId.get('buscar_e_levar')?.fee ?? options[0]?.fee),
     SOMENTE_BUSCAR: money(byId.get('somente_buscar')?.fee ?? options[1]?.fee),
     SOMENTE_LEVAR: money(byId.get('somente_levar')?.fee ?? options[2]?.fee),
+    BUSCAR_E_LEVAR_FORA_MURIAE: money(byId.get('buscar_e_levar_fora_muriae')?.fee ?? 30),
   })
   return `${message}\n\nVocê quer utilizar o MotoDog? Se não quiser transporte, pode dizer "sem transporte".`
 }
@@ -241,8 +249,11 @@ function inferTransportOption(message = '', settings = {}) {
   const lower = norm(message)
   const options = normalizeTransportOptions(settings)
   if (!lower) return null
-  const numeric = lower.match(/\b([123])\b/)
+  const numeric = lower.match(/\b([1-9])\b/)
   if (numeric) return options[Number(numeric[1]) - 1] || null
+  if (/fora (?:de )?muriae|outra cidade|fora da cidade/.test(lower)) {
+    return options.find((option) => option.id === 'buscar_e_levar_fora_muriae') || null
+  }
   if (/(buscar|busca).*(levar|entregar|entrega|trazer|volta)|ida.*volta|leva.*traz/.test(lower)) {
     return options.find((option) => option.id === 'buscar_e_levar') || options[0] || null
   }

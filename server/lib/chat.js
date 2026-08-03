@@ -354,6 +354,7 @@ export function inferExplicitPetTransportMode(message = '', history = []) {
   const previousText = normalizeSearchText(previousAssistant?.content)
   const selectingMotodogOption = /(?:qual modalidade|buscar e levar).*(?:somente buscar).*(?:somente levar)/.test(previousText)
 
+  if (/\bfora (?:de )?muriae\b/.test(answer) && /\b(?:buscar|busca|levar|trazer|motodog)\b/.test(answer)) return 'buscar_e_levar_fora_muriae'
   if (/\b(?:buscar e levar|busca e leva|buscar e trazer|ida e volta|levar e buscar)\b/.test(answer)) return 'buscar_e_levar'
   if (/\b(?:somente buscar|so buscar|apenas buscar|buscar apenas|vir buscar)\b/.test(answer)) return 'somente_buscar'
   if (/\b(?:somente levar|so levar|apenas levar|levar apenas|levar de volta|trazer de volta)\b/.test(answer)) return 'somente_levar'
@@ -367,6 +368,7 @@ export function inferExplicitPetTransportMode(message = '', history = []) {
   if (selectingMotodogOption && /^(?:1|primeira|primeiro|primeira opcao|opcao 1)$/.test(answer)) return 'buscar_e_levar'
   if (selectingMotodogOption && /^(?:2|segunda|segundo|segunda opcao|opcao 2|buscar)$/.test(answer)) return 'somente_buscar'
   if (selectingMotodogOption && /^(?:3|terceira|terceiro|terceira opcao|opcao 3|levar)$/.test(answer)) return 'somente_levar'
+  if (selectingMotodogOption && /^(?:4|quarta|quarto|quarta opcao|opcao 4|fora de muriae)$/.test(answer)) return 'buscar_e_levar_fora_muriae'
   if (/\b(?:motodog|moto dog)\b/.test(answer)) return 'motodog'
   if (/\b(?:vou levar|eu levo|eu vou levar|vou trazer|eu trago|levo ele|levo ela|por conta propria)\b/.test(answer)) {
     return 'cliente_leva'

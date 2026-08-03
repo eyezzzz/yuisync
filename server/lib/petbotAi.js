@@ -11,7 +11,7 @@ const PAYMENTS = new Set(['pix', 'dinheiro', 'cartao'])
 const FULFILLMENTS = new Set(['entrega', 'retirada'])
 const AGES = new Set(['filhote', 'adulto', 'castrado', 'senior'])
 const SIZES = new Set(['pequeno', 'medio', 'grande'])
-const SERVICE_TRANSPORT_MODES = new Set(['cliente_leva', 'motodog', 'buscar_e_levar', 'somente_buscar', 'somente_levar'])
+const SERVICE_TRANSPORT_MODES = new Set(['cliente_leva', 'motodog', 'buscar_e_levar', 'buscar_e_levar_fora_muriae', 'somente_buscar', 'somente_levar'])
 const VETERINARY_RISKS = new Set(['none', 'urgent', 'emergency'])
 const DIALOGUE_ACTS = new Set([
   'inform',
@@ -90,6 +90,7 @@ function normalizeServiceTransportMode(value) {
   const normalized = norm(value).replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
   if (SERVICE_TRANSPORT_MODES.has(normalized)) return normalized
   if (/^(?:vou_levar|eu_levo|eu_vou_levar|vou_trazer|eu_trago|cliente_leva|tutor_leva)$/.test(normalized)) return 'cliente_leva'
+  if (/(?:buscar_e_levar_fora_muriae|fora_de_muriae|fora_muriae)/.test(normalized)) return 'buscar_e_levar_fora_muriae'
   if (/(?:buscar_e_levar|busca_e_leva|buscar_e_trazer|ida_e_volta|levar_e_buscar)/.test(normalized)) return 'buscar_e_levar'
   if (/(?:somente_buscar|so_buscar|apenas_buscar|buscar_apenas|vir_buscar|busca_apenas)/.test(normalized)) return 'somente_buscar'
   if (/(?:somente_levar|so_levar|apenas_levar|levar_apenas|levar_de_volta|trazer_de_volta)/.test(normalized)) return 'somente_levar'
@@ -426,8 +427,8 @@ function buildInterpreterMessages({ message, history = [], state = {}, customerC
         'Quando a pergunta anterior for sobre observacoes do servico, extraia qualquer cuidado informado em service_notes. Se o cliente responder apenas que nao ha observacoes, use service_notes="sem observacao".',
         'Para banho/tosa, quando o cliente disser que ele mesmo vai levar ou trazer o pet, use dialogue_act="select", reply_target="service_transport" e service_transport_mode="cliente_leva".',
         'Quando o cliente apenas perguntar se a loja busca, perguntar pelo MotoDog ou pedir para conhecer as opções sem escolher uma modalidade, use dialogue_act="ask", reply_target="service_transport" e service_transport_mode="motodog". Nunca transforme uma pergunta em buscar_e_levar.',
-        'Quando escolher uma modalidade pelo nome, use dialogue_act="select", reply_target="service_transport" e normalize service_transport_mode como buscar_e_levar, somente_buscar ou somente_levar.',
-        'Quando escolher uma das opções de MotoDog por posição, como primeira, segunda ou terceira, use dialogue_act="select", reply_target="service_transport", option_index com a posição escolhida e deixe service_transport_mode nulo se a modalidade não foi dita pelo nome.',
+        'Quando escolher uma modalidade pelo nome, use dialogue_act="select", reply_target="service_transport" e normalize service_transport_mode como buscar_e_levar, buscar_e_levar_fora_muriae, somente_buscar ou somente_levar.',
+        'Quando escolher uma das opções de MotoDog por posição, como primeira, segunda, terceira ou quarta, use dialogue_act="select", reply_target="service_transport", option_index com a posição escolhida e deixe service_transport_mode nulo se a modalidade não foi dita pelo nome.',
         'Quando o cliente informar o endereço do MotoDog, extraia service_transport_address com rua e número, service_transport_neighborhood, service_transport_city e service_transport_reference. Não use os campos de entrega de produto para esse endereço.',
         'Para banho/tosa, interprete a raca e o peso aproximado quando estiverem presentes na fala, no historico recente ou no estado atual. Nunca deduza peso pela raca.',
         'Separe rigorosamente cliente e pet: "me chamo Ana" informa customer_name; "ele/ela se chama Afonso", "meu cachorro se chama Afonso" ou "o pet se chama Afonso" informa somente pet_name. Nunca copie o nome do pet para customer_name.',
@@ -489,7 +490,7 @@ const PETBOT_INTERPRETATION_SCHEMA = {
       service_type: { type: ['string', 'null'] },
       service_grooming_detail: { type: ['string', 'null'] },
       service_notes: { type: ['string', 'null'] },
-      service_transport_mode: { type: ['string', 'null'], enum: ['cliente_leva', 'motodog', 'buscar_e_levar', 'somente_buscar', 'somente_levar', null] },
+      service_transport_mode: { type: ['string', 'null'], enum: ['cliente_leva', 'motodog', 'buscar_e_levar', 'buscar_e_levar_fora_muriae', 'somente_buscar', 'somente_levar', null] },
       service_transport_label: { type: ['string', 'null'] },
       service_transport_address: { type: ['string', 'null'] },
       service_transport_neighborhood: { type: ['string', 'null'] },

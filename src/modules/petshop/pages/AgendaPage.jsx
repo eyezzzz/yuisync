@@ -1046,6 +1046,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                 >
                   <option value="cliente_leva">Cliente traz e busca</option>
                   <option value="buscar_e_levar">MotoDog - buscar e levar</option>
+                  <option value="buscar_e_levar_fora_muriae">MotoDog - buscar e levar (fora de Muriaé)</option>
                   <option value="somente_buscar">MotoDog - somente buscar</option>
                   <option value="somente_levar">MotoDog - somente levar</option>
                 </select>
@@ -1251,7 +1252,6 @@ function AgendaTimelineView({
             <p className={`yuisync-card-responsible truncate text-[10px] ${assigned ? "text-muted" : "text-amber-300"}`}>
               {assigned ? `Resp.: ${assigned.name}` : appt.responsible_staff_name ? `Resp.: ${appt.responsible_staff_name}` : 'Sem responsavel'}
             </p>
-            {appt.notes && <p className="yuisync-card-instructions mt-1 line-clamp-3 whitespace-pre-wrap rounded-md border border-amber-500/20 bg-amber-500/8 px-2 py-1 text-[10px] text-amber-100"><strong>Instruções:</strong> {appt.notes}</p>}
           </div>
         </button>
         {appt.status === 'concluido' && (

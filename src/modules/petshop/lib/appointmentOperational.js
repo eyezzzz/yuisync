@@ -75,13 +75,14 @@ export function appointmentOccupiesManualSlot(appointment = {}) {
 }
 
 export function isMotodogTransportMode(mode = '') {
-  return ['buscar_e_levar', 'somente_buscar', 'somente_levar', 'motodog'].includes(normalize(mode))
+  return ['buscar_e_levar', 'buscar_e_levar_fora_muriae', 'somente_buscar', 'somente_levar', 'motodog'].includes(normalize(mode))
 }
 
 export function appointmentTransportLabel(mode = '') {
   const normalized = normalize(mode)
   if (normalized === 'cliente_leva') return 'Cliente traz e busca'
   if (normalized === 'buscar_e_levar') return 'MotoDog — buscar e levar'
+  if (normalized === 'buscar_e_levar_fora_muriae') return 'MotoDog — buscar e levar (fora de Muriaé)'
   if (normalized === 'somente_buscar') return 'MotoDog — somente buscar'
   if (normalized === 'somente_levar') return 'MotoDog — somente levar'
   if (normalized === 'motodog') return 'MotoDog'

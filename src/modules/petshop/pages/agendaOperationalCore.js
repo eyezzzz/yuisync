@@ -1,5 +1,6 @@
 export const DEFAULT_TRANSPORT_OPTIONS = [
   { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 20, active: true },
+  { id: 'buscar_e_levar_fora_muriae', label: 'Buscar e levar (fora de Muriaé)', fee: 30, active: true },
   { id: 'somente_buscar', label: 'Somente buscar', fee: 15, active: true },
   { id: 'somente_levar', label: 'Somente levar', fee: 15, active: true },
 ]
@@ -79,7 +80,12 @@ export function normalizeTransportOptions(storeSettings = {}) {
   const configured = Array.isArray(storeSettings?.pet_transport_options)
     ? storeSettings.pet_transport_options
     : []
-  const source = configured.length > 0 ? configured : DEFAULT_TRANSPORT_OPTIONS
+  const defaultIds = new Set(DEFAULT_TRANSPORT_OPTIONS.map((option) => option.id))
+  const configuredById = new Map(configured.map((option) => [String(option?.id || ''), option]))
+  const source = [
+    ...DEFAULT_TRANSPORT_OPTIONS.map((option) => ({ ...option, ...(configuredById.get(option.id) || {}) })),
+    ...configured.filter((option) => !defaultIds.has(String(option?.id || ''))),
+  ]
   return source.map((option, index) => ({
     id: String(option?.id || DEFAULT_TRANSPORT_OPTIONS[index]?.id || ''),
     label: String(option?.label || DEFAULT_TRANSPORT_OPTIONS[index]?.label || 'Transporte'),

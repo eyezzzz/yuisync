@@ -1097,8 +1097,22 @@ function isNoTransport(value = '') {
 }
 
 function normalizeTransportOptions(settings = {}) {
-  const rawOptions = Array.isArray(settings.petTransportOptions) ? settings.petTransportOptions : []
-  const options = rawOptions
+  const configured = Array.isArray(settings.petTransportOptions)
+    ? settings.petTransportOptions
+    : Array.isArray(settings.pet_transport_options) ? settings.pet_transport_options : []
+  const defaults = [
+    { id: 'buscar_e_levar', label: 'Buscar e levar', fee: Number(settings.petTransportFee ?? settings.pet_transport_fee ?? 20), active: true },
+    { id: 'buscar_e_levar_fora_muriae', label: 'Buscar e levar (fora de Muriaé)', fee: 30, active: true },
+    { id: 'somente_buscar', label: 'Somente buscar', fee: 15, active: true },
+    { id: 'somente_levar', label: 'Somente levar', fee: 15, active: true },
+  ]
+  const defaultIds = new Set(defaults.map((option) => option.id))
+  const configuredById = new Map(configured.map((option) => [clean(option?.id || option?.mode), option]))
+  const source = [
+    ...defaults.map((option) => ({ ...option, ...(configuredById.get(option.id) || {}) })),
+    ...configured.filter((option) => !defaultIds.has(clean(option?.id || option?.mode))),
+  ]
+  return source
     .map((option, index) => ({
       id: clean(option.id || option.mode || `opcao_${index + 1}`),
       label: clean(option.label || option.name || `Opção ${index + 1}`),
@@ -1106,11 +1120,6 @@ function normalizeTransportOptions(settings = {}) {
       active: option.active !== false,
     }))
     .filter((option) => option.active && option.id && option.label && Number.isFinite(option.fee) && option.fee >= 0)
-
-  if (options.length) return options
-  const fallbackFee = Number(settings.petTransportFee ?? 0)
-  if (!Number.isFinite(fallbackFee) || fallbackFee <= 0) return []
-  return [{ id: 'buscar_e_levar', label: 'Buscar e levar', fee: fallbackFee, active: true }]
 }
 
 export function listPetTransportOptions(settings = {}) {
