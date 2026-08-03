@@ -137,7 +137,7 @@ export default function PublicHomePage({ isAuthenticated = false }) {
       >
         <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(39,149,255,0.14),transparent_33%),radial-gradient(circle_at_76%_18%,rgba(123,92,255,0.13),transparent_30%),radial-gradient(circle_at_20%_60%,rgba(41,231,164,0.08),transparent_26%)]" />
         <div className="absolute inset-0 opacity-[0.07] [background-image:linear-gradient(rgba(255,255,255,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(circle_at_center,black,transparent_78%)]" />
-        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/35 to-transparent" />
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/40 to-transparent" />
 
         <header className="relative z-50 mx-auto flex max-w-[1500px] items-center justify-between px-5 py-5 sm:px-8 lg:px-10">
           <button
@@ -157,7 +157,7 @@ export default function PublicHomePage({ isAuthenticated = false }) {
             </div>
           </button>
 
-          <nav className="hidden items-center gap-7 text-xs font-semibold uppercase tracking-[0.13em] text-white/55 lg:flex">
+          <nav className="hidden items-center gap-7 text-xs font-semibold uppercase tracking-[0.13em] text-white/60 lg:flex">
             {NAV_ITEMS.map((item) => (
               <button
                 key={item.hash}
@@ -205,7 +205,7 @@ export default function PublicHomePage({ isAuthenticated = false }) {
             className="relative z-30 text-center"
           >
             <SectionTag icon={Zap}>Ecossistema inteligente</SectionTag>
-            <p className="mx-auto mt-3 max-w-xl text-xs leading-6 text-white/45 sm:text-sm">
+            <p className="mx-auto mt-3 max-w-xl text-xs leading-6 text-white/50 sm:text-sm">
               Um núcleo visual para representar a conexão entre negócio, equipe, clientes e automações.
             </p>
           </motion.div>
@@ -287,7 +287,7 @@ export default function PublicHomePage({ isAuthenticated = false }) {
                     <Icon size={18} />
                   </div>
                   <h3 className="mt-5 font-display text-xl font-bold">{item.title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-white/55">{item.text}</p>
+                  <p className="mt-3 text-sm leading-6 text-white/60">{item.text}</p>
                 </motion.div>
               )
             })}
@@ -307,7 +307,7 @@ export default function PublicHomePage({ isAuthenticated = false }) {
               Soluções que compartilham o mesmo núcleo operacional.
             </h2>
           </div>
-          <p className="max-w-xl text-sm leading-7 text-white/55">
+          <p className="max-w-xl text-sm leading-7 text-white/60">
             Cada módulo resolve um contexto específico sem fragmentar dados, equipe ou experiência do cliente.
           </p>
         </div>
