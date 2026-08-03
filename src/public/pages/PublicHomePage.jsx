@@ -7,82 +7,76 @@ import {
   Boxes,
   CheckCircle2,
   Layers3,
-  Orbit,
   ShieldCheck,
   Sparkles,
-  Waves,
   Zap,
 } from 'lucide-react'
 import YuiCoreHero from '../components/YuiCoreHero'
 
 const NAV_ITEMS = [
-  { label: 'Plataforma', hash: '#plataforma' },
-  { label: 'Módulos', hash: '#modulos' },
   { label: 'Soluções', hash: '#solucoes' },
-  { label: 'Suporte', hash: '#suporte' },
+  { label: 'Módulos', hash: '#modulos' },
+  { label: 'Recursos', hash: '#recursos' },
+  { label: 'Integrações', hash: '#integracoes' },
 ]
 
-const QUICK_LINKS = [
-  { label: 'Visão geral', hash: '#hero' },
-  { label: 'Ecossistema', hash: '#plataforma' },
-  { label: 'Módulos', hash: '#modulos' },
-  { label: 'Começar', hash: '#suporte' },
+const HERO_PILLS = [
+  'Sincronização em tempo real',
+  'IA integrada',
+  'Seguro e confiável',
+  'Escalável',
+]
+
+const TRUST_ITEMS = [
+  'Operação centralizada',
+  'Atendimento conectado',
+  'Gestão por módulos',
+  'Automação inteligente',
+  'Dados em contexto',
 ]
 
 const MODULES = [
   {
     title: 'PetShop CRM',
-    text: 'Agenda, atendimento, clientes, serviços, PDV e operação em um fluxo conectado.',
+    text: 'Agenda, clientes, serviços, atendimento, PDV e operação em um único fluxo.',
     icon: Sparkles,
-    accent: 'from-emerald-300/20 via-cyan-300/10 to-transparent',
-    iconClass: 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100',
+    iconClass: 'border-emerald-300/25 bg-emerald-300/10 text-emerald-200',
+    glow: 'from-emerald-300/16 via-cyan-300/8 to-transparent',
   },
   {
     title: 'Gestão Central',
-    text: 'Administração, suporte, permissões e visão macro para crescer com controle.',
+    text: 'Administração, permissões, suporte e visão macro para crescer com controle.',
     icon: Layers3,
-    accent: 'from-violet-300/20 via-sky-300/10 to-transparent',
-    iconClass: 'border-violet-300/25 bg-violet-300/10 text-violet-100',
+    iconClass: 'border-violet-300/25 bg-violet-300/10 text-violet-200',
+    glow: 'from-violet-300/16 via-sky-300/8 to-transparent',
   },
   {
     title: 'Expansão modular',
-    text: 'Base preparada para novos módulos, automações e experiências especializadas.',
+    text: 'Uma base preparada para novos módulos, automações e experiências especializadas.',
     icon: Boxes,
-    accent: 'from-sky-300/20 via-cyan-300/10 to-transparent',
-    iconClass: 'border-sky-300/25 bg-sky-300/10 text-sky-100',
+    iconClass: 'border-sky-300/25 bg-sky-300/10 text-sky-200',
+    glow: 'from-sky-300/16 via-cyan-300/8 to-transparent',
   },
 ]
 
-const PILLARS = [
-  {
-    title: 'Operação sincronizada',
-    text: 'Pessoas, processos e dados compartilham o mesmo contexto operacional.',
-    icon: Orbit,
-  },
-  {
-    title: 'Automação com propósito',
-    text: 'A tecnologia reduz retrabalho sem esconder o que acontece no negócio.',
-    icon: Waves,
-  },
-  {
-    title: 'Arquitetura preparada',
-    text: 'A experiência pública evolui sem adicionar peso desnecessário ao painel interno.',
-    icon: ShieldCheck,
-  },
-]
-
-const BENEFITS = [
-  'Visão central da operação',
-  'Fluxos modulares por negócio',
+const RESOURCES = [
+  'Visão única da operação',
+  'Fluxos auditáveis e confiáveis',
   'Experiência integrada para equipe e clientes',
-  'Base pronta para automações inteligentes',
+  'Arquitetura pronta para novas automações',
 ]
 
-function SectionTag({ icon: Icon, children }) {
+function BrandMark() {
   return (
-    <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.2em] text-cyan-100 sm:text-[11px]">
-      <Icon size={13} />
-      {children}
+    <div className="flex items-center gap-3">
+      <div className="relative flex h-11 w-11 items-center justify-center overflow-hidden rounded-2xl border border-cyan-300/25 bg-cyan-300/10 shadow-[0_0_34px_rgba(58,167,255,0.18)]">
+        <div className="absolute inset-1 rounded-xl border border-violet-300/20" />
+        <Bot size={20} className="relative text-cyan-100" />
+      </div>
+      <div>
+        <p className="font-display text-[22px] font-black tracking-[0.16em] text-white">YUI SYNC</p>
+        <p className="text-[9px] uppercase tracking-[0.3em] text-white/42">Automated ecosystem</p>
+      </div>
     </div>
   )
 }
@@ -96,219 +90,150 @@ export default function PublicHomePage({ isAuthenticated = false }) {
   const smoothScrollToHash = useCallback((hash) => {
     const container = containerRef.current
     if (!container || !hash) return
-
-    const blockKey = hash.replace('#', '')
-    const target =
-      container.querySelector(`[data-scroll-target="${blockKey}"]`)
-      || container.querySelector(hash)
-
+    const target = container.querySelector(hash)
     if (!target) return
-
-    requestAnimationFrame(() => {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    })
+    requestAnimationFrame(() => target.scrollIntoView({ behavior: 'smooth', block: 'start' }))
   }, [])
 
   const goToSection = useCallback((hash) => {
     if (!hash) return
-
     if (location.hash === hash) {
       smoothScrollToHash(hash)
       return
     }
-
     navigate(`${location.pathname}${hash}`, { replace: true })
   }, [location.hash, location.pathname, navigate, smoothScrollToHash])
 
   useEffect(() => {
-    if (!location.hash) return
-    smoothScrollToHash(location.hash)
+    if (location.hash) smoothScrollToHash(location.hash)
   }, [location.hash, smoothScrollToHash])
 
   return (
-    <div
-      ref={containerRef}
-      className="h-screen overflow-y-auto overflow-x-hidden bg-[#030711] font-body text-white"
-    >
-      <section
-        id="hero"
-        data-scroll-target="hero"
-        className="relative min-h-[100svh] overflow-hidden border-b border-white/5"
-      >
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_50%_35%,rgba(39,149,255,0.14),transparent_33%),radial-gradient(circle_at_76%_18%,rgba(123,92,255,0.13),transparent_30%),radial-gradient(circle_at_20%_60%,rgba(41,231,164,0.08),transparent_26%)]" />
-        <div className="absolute inset-0 opacity-[0.07] [background-image:linear-gradient(rgba(255,255,255,0.12)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.12)_1px,transparent_1px)] [background-size:46px_46px] [mask-image:radial-gradient(circle_at_center,black,transparent_78%)]" />
+    <div ref={containerRef} className="h-screen overflow-y-auto overflow-x-hidden bg-[#020611] font-body text-white">
+      <section id="hero" className="relative min-h-[820px] overflow-hidden border-b border-white/5 xl:min-h-[860px]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_70%_30%,rgba(24,115,255,0.18),transparent_34%),radial-gradient(circle_at_87%_18%,rgba(118,79,255,0.13),transparent_30%),radial-gradient(circle_at_12%_68%,rgba(22,203,164,0.08),transparent_28%)]" />
+        <div className="absolute inset-0 opacity-[0.055] [background-image:linear-gradient(rgba(255,255,255,0.13)_1px,transparent_1px),linear-gradient(90deg,rgba(255,255,255,0.13)_1px,transparent_1px)] [background-size:48px_48px] [mask-image:radial-gradient(circle_at_70%_36%,black,transparent_72%)]" />
         <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-200/40 to-transparent" />
 
-        <header className="relative z-50 mx-auto flex max-w-[1500px] items-center justify-between px-5 py-5 sm:px-8 lg:px-10">
-          <button
-            type="button"
-            onClick={() => goToSection('#hero')}
-            className="flex items-center gap-3 text-left"
-            aria-label="Voltar ao início"
-          >
-            <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan-300/25 bg-cyan-300/10 shadow-[0_0_34px_rgba(58,167,255,0.16)]">
-              <Bot size={20} className="text-cyan-100" />
-            </div>
-            <div>
-              <p className="font-display text-xl font-black tracking-[0.18em]">YUI SYNC</p>
-              <p className="text-[9px] uppercase tracking-[0.3em] text-white/40 sm:text-[10px]">
-                Automated ecosystem
-              </p>
-            </div>
+        <header className="relative z-50 mx-auto flex max-w-[1536px] items-center justify-between px-6 py-5 lg:px-10 xl:px-12">
+          <button type="button" onClick={() => goToSection('#hero')} aria-label="Voltar ao início">
+            <BrandMark />
           </button>
 
-          <nav className="hidden items-center gap-7 text-xs font-semibold uppercase tracking-[0.13em] text-white/60 lg:flex">
+          <nav className="hidden items-center gap-9 text-sm font-semibold text-white/65 lg:flex">
             {NAV_ITEMS.map((item) => (
-              <button
-                key={item.hash}
-                type="button"
-                onClick={() => goToSection(item.hash)}
-                className="transition-colors hover:text-white"
-              >
+              <button key={item.hash} type="button" onClick={() => goToSection(item.hash)} className="transition-colors hover:text-white">
                 {item.label}
               </button>
             ))}
+            <Link to="/vendas" className="transition-colors hover:text-white">Preços</Link>
+            <button type="button" onClick={() => goToSection('#sobre')} className="transition-colors hover:text-white">Sobre</button>
           </nav>
 
-          <div className="flex items-center gap-2">
-            <Link to={entryHref} className="btn btn-secondary hidden sm:inline-flex">
-              {isAuthenticated ? 'Abrir painel' : 'Entrar'}
-            </Link>
-            <Link to="/vendas" className="btn btn-primary gap-2">
-              Começar agora
-              <ArrowRight size={14} />
-            </Link>
-          </div>
+          <Link
+            to={entryHref}
+            className="inline-flex items-center gap-3 rounded-xl border border-cyan-300/50 bg-transparent px-5 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-200 hover:bg-cyan-300/10"
+          >
+            {isAuthenticated ? 'Abrir painel' : 'Acessar sistema'}
+            <ArrowRight size={15} />
+          </Link>
         </header>
 
-        <aside className="absolute left-5 top-1/2 z-40 hidden -translate-y-1/2 flex-col gap-2 xl:flex 2xl:left-10">
-          {QUICK_LINKS.map((item, index) => (
-            <button
-              key={item.hash}
-              type="button"
-              onClick={() => goToSection(item.hash)}
-              className="group flex w-[150px] items-center gap-3 rounded-xl border border-white/10 bg-[#081120]/80 px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-[0.15em] text-white/50 shadow-[0_12px_40px_rgba(0,0,0,0.2)] backdrop-blur-md transition hover:border-cyan-200/25 hover:text-white"
-            >
-              <span className="flex h-7 w-7 items-center justify-center rounded-lg border border-white/10 bg-white/[0.04] text-[9px] text-cyan-100/70 transition group-hover:border-cyan-200/25 group-hover:bg-cyan-200/10">
-                {String(index + 1).padStart(2, '0')}
-              </span>
-              {item.label}
-            </button>
-          ))}
-        </aside>
-
-        <main className="relative z-20 mx-auto flex min-h-[calc(100svh-86px)] max-w-[1500px] flex-col items-center justify-center px-4 pb-12 pt-4 sm:px-8 lg:px-10">
+        <div className="relative z-20 mx-auto grid max-w-[1536px] grid-cols-1 items-center gap-3 px-6 pb-5 pt-5 lg:grid-cols-[0.78fr_1.22fr] lg:px-10 xl:min-h-[625px] xl:px-12">
           <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.65, ease: 'easeOut' }}
-            className="relative z-30 text-center"
+            initial={{ opacity: 0, x: -24 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ duration: 0.72, ease: 'easeOut' }}
+            className="relative z-30 max-w-[560px] py-8 lg:py-2"
           >
-            <SectionTag icon={Zap}>Ecossistema inteligente</SectionTag>
-            <p className="mx-auto mt-3 max-w-xl text-xs leading-6 text-white/50 sm:text-sm">
-              Um núcleo visual para representar a conexão entre negócio, equipe, clientes e automações.
-            </p>
-          </motion.div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-violet-300/25 bg-violet-300/10 px-3 py-1.5 text-[11px] font-semibold uppercase tracking-[0.18em] text-violet-100">
+              <Zap size={13} className="text-cyan-200" />
+              Ecossistema inteligente
+            </div>
 
-          <YuiCoreHero />
-
-          <motion.div
-            initial={{ opacity: 0, y: 18 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.7, delay: 0.18, ease: 'easeOut' }}
-            className="relative z-30 -mt-2 max-w-3xl text-center sm:-mt-5"
-          >
-            <h1 className="font-display text-3xl font-black leading-tight sm:text-4xl lg:text-5xl">
-              Tudo conectado.{' '}
-              <span className="bg-gradient-to-r from-cyan-200 via-sky-300 to-emerald-200 bg-clip-text text-transparent">
-                Tudo em movimento.
+            <h1 className="mt-6 font-display text-5xl font-black leading-[0.98] tracking-[-0.035em] text-white sm:text-6xl xl:text-[74px]">
+              Conecte.
+              <br />
+              Automatize.
+              <br />
+              <span className="bg-gradient-to-r from-cyan-300 via-sky-400 to-emerald-300 bg-clip-text text-transparent">
+                Evolua.
               </span>
             </h1>
-            <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
-              O YuiSync centraliza operação, automação e atendimento em uma plataforma preparada para evoluir com o negócio.
+
+            <p className="mt-6 max-w-[520px] text-base leading-8 text-white/66 xl:text-[17px]">
+              O YuiSync une pessoas, processos e tecnologia em um único fluxo inteligente. Uma plataforma modular para operar melhor hoje e crescer sem reconstruir tudo amanhã.
             </p>
-            <div className="mt-6 flex flex-wrap justify-center gap-3">
-              <button type="button" onClick={() => goToSection('#plataforma')} className="btn btn-primary gap-2">
-                Conheça o ecossistema
-                <ArrowRight size={15} />
+
+            <div className="mt-8 flex flex-wrap gap-3">
+              <button
+                type="button"
+                onClick={() => goToSection('#modulos')}
+                className="inline-flex items-center gap-3 rounded-xl bg-gradient-to-r from-blue-600 via-cyan-500 to-emerald-400 px-6 py-3.5 text-sm font-bold text-white shadow-[0_14px_45px_rgba(34,197,224,0.24)] transition hover:brightness-110"
+              >
+                Explorar módulos
+                <ArrowRight size={16} />
               </button>
-              <Link to={entryHref} className="btn btn-secondary">
-                {isAuthenticated ? 'Ir para o sistema' : 'Acessar plataforma'}
+              <Link
+                to="/vendas"
+                className="inline-flex items-center gap-3 rounded-xl border border-white/18 bg-white/[0.025] px-6 py-3.5 text-sm font-semibold text-white/88 transition hover:border-cyan-200/35 hover:bg-white/[0.05]"
+              >
+                Agendar demonstração
               </Link>
             </div>
-          </motion.div>
-        </main>
-      </section>
 
-      <section
-        id="plataforma"
-        data-scroll-target="plataforma"
-        className="relative mx-auto max-w-7xl scroll-mt-6 px-6 py-20"
-      >
-        <div className="absolute inset-x-20 top-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1fr_1.15fr]">
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            whileInView={{ opacity: 1, y: 0 }}
-            viewport={{ once: true, margin: '-100px' }}
-            transition={{ duration: 0.55 }}
-            className="rounded-[32px] border border-white/10 bg-white/[0.025] p-7 backdrop-blur-sm sm:p-9"
-          >
-            <SectionTag icon={Orbit}>Plataforma YuiSync</SectionTag>
-            <h2 className="mt-5 font-display text-3xl font-black leading-tight sm:text-4xl">
-              Uma experiência que mostra como o produto funciona.
-            </h2>
-            <p className="mt-4 text-sm leading-7 text-white/60 sm:text-base">
-              A nova home deixa de ser apenas uma vitrine. O Yui Core comunica visualmente sincronização, contexto compartilhado e evolução modular — exatamente os princípios da plataforma.
-            </p>
-            <div className="mt-6 grid grid-cols-1 gap-3 sm:grid-cols-2">
-              {BENEFITS.map((item) => (
-                <div key={item} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-black/15 px-4 py-3.5">
-                  <CheckCircle2 size={16} className="mt-0.5 flex-shrink-0 text-emerald-200" />
-                  <p className="text-sm text-white/70">{item}</p>
+            <div className="mt-7 grid max-w-[570px] grid-cols-2 gap-2 xl:grid-cols-4">
+              {HERO_PILLS.map((item) => (
+                <div key={item} className="flex min-h-[42px] items-center gap-2 rounded-lg border border-white/8 bg-[#07101c]/65 px-3 py-2 text-[11px] leading-4 text-white/62 backdrop-blur-sm">
+                  <CheckCircle2 size={13} className="flex-shrink-0 text-emerald-300" />
+                  {item}
                 </div>
               ))}
             </div>
           </motion.div>
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-            {PILLARS.map((item, index) => {
-              const Icon = item.icon
-              return (
-                <motion.div
-                  key={item.title}
-                  initial={{ opacity: 0, y: 20 }}
-                  whileInView={{ opacity: 1, y: 0 }}
-                  viewport={{ once: true, margin: '-80px' }}
-                  transition={{ duration: 0.5, delay: index * 0.08 }}
-                  className="rounded-[28px] border border-white/10 bg-[#07101d] p-5 shadow-[0_20px_60px_rgba(0,0,0,0.18)]"
-                >
-                  <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-cyan-300/20 bg-cyan-300/10 text-cyan-100">
-                    <Icon size={18} />
-                  </div>
-                  <h3 className="mt-5 font-display text-xl font-bold">{item.title}</h3>
-                  <p className="mt-3 text-sm leading-6 text-white/60">{item.text}</p>
-                </motion.div>
-              )
-            })}
+          <motion.div
+            initial={{ opacity: 0, scale: 0.96, x: 20 }}
+            animate={{ opacity: 1, scale: 1, x: 0 }}
+            transition={{ duration: 0.85, delay: 0.08, ease: 'easeOut' }}
+            className="relative -mr-4 min-w-0 lg:-mr-14 xl:-mr-20"
+          >
+            <YuiCoreHero />
+          </motion.div>
+        </div>
+
+        <div className="relative z-30 mx-auto max-w-[1536px] px-6 pb-7 lg:px-10 xl:px-12">
+          <div className="mb-5 flex items-center gap-5">
+            <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/10 to-white/5" />
+            <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-white/38">Um ecossistema para toda a operação</p>
+            <div className="h-px flex-1 bg-gradient-to-r from-white/5 via-white/10 to-transparent" />
+          </div>
+          <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
+            {TRUST_ITEMS.map((item, index) => (
+              <div key={item} className="flex items-center justify-center gap-2.5 rounded-xl border border-white/6 bg-white/[0.018] px-3 py-3 text-xs font-semibold text-white/42">
+                <span className="flex h-6 w-6 items-center justify-center rounded-lg border border-white/8 bg-white/[0.025] text-[10px] text-cyan-200/65">
+                  {String(index + 1).padStart(2, '0')}
+                </span>
+                {item}
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      <section
-        id="modulos"
-        data-scroll-target="modulos"
-        className="mx-auto max-w-7xl scroll-mt-6 px-6 pb-20"
-      >
-        <div className="mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+      <section id="modulos" className="relative mx-auto max-w-[1536px] scroll-mt-6 px-6 py-16 lg:px-10 xl:px-12">
+        <div className="mb-8 grid grid-cols-1 gap-5 lg:grid-cols-[0.8fr_1.2fr] lg:items-end">
           <div>
-            <SectionTag icon={Layers3}>Módulos conectados</SectionTag>
-            <h2 className="mt-4 max-w-3xl font-display text-3xl font-black leading-tight sm:text-4xl">
-              Soluções que compartilham o mesmo núcleo operacional.
+            <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/8 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-cyan-100">
+              <Layers3 size={13} />
+              Módulos YuiSync
+            </div>
+            <h2 className="mt-4 max-w-[620px] font-display text-3xl font-black leading-tight sm:text-4xl">
+              Soluções que se conectam, resultados que se <span className="text-emerald-300">multiplicam.</span>
             </h2>
           </div>
-          <p className="max-w-xl text-sm leading-7 text-white/60">
-            Cada módulo resolve um contexto específico sem fragmentar dados, equipe ou experiência do cliente.
+          <p className="max-w-2xl justify-self-end text-sm leading-7 text-white/56">
+            Comece pelo módulo que resolve seu problema atual e expanda a plataforma conforme a operação evolui.
           </p>
         </div>
 
@@ -318,26 +243,21 @@ export default function PublicHomePage({ isAuthenticated = false }) {
             return (
               <motion.article
                 key={item.title}
-                initial={{ opacity: 0, y: 22 }}
+                initial={{ opacity: 0, y: 20 }}
                 whileInView={{ opacity: 1, y: 0 }}
                 viewport={{ once: true, margin: '-80px' }}
-                transition={{ duration: 0.52, delay: index * 0.08 }}
-                className="group relative overflow-hidden rounded-[30px] border border-white/10 bg-[#07101d] p-6"
+                transition={{ duration: 0.5, delay: index * 0.08 }}
+                className="group relative overflow-hidden rounded-[26px] border border-white/10 bg-[#07101d] p-6 shadow-[0_18px_60px_rgba(0,0,0,0.22)]"
               >
-                <div className={`absolute inset-0 bg-gradient-to-br ${item.accent} opacity-70 transition duration-500 group-hover:opacity-100`} />
+                <div className={`pointer-events-none absolute inset-0 bg-gradient-to-br ${item.glow} opacity-70`} />
                 <div className="relative z-10">
                   <div className={`flex h-12 w-12 items-center justify-center rounded-2xl border ${item.iconClass}`}>
                     <Icon size={20} />
                   </div>
-                  <h3 className="mt-6 font-display text-2xl font-bold">{item.title}</h3>
-                  <p className="mt-3 text-sm leading-7 text-white/60">{item.text}</p>
-                  <button
-                    type="button"
-                    onClick={() => goToSection('#suporte')}
-                    className="mt-7 inline-flex items-center gap-2 text-sm font-semibold text-cyan-100 transition hover:text-white"
-                  >
-                    Explorar solução
-                    <ArrowRight size={14} />
+                  <h3 className="mt-5 font-display text-xl font-bold">{item.title}</h3>
+                  <p className="mt-3 text-sm leading-6 text-white/58">{item.text}</p>
+                  <button type="button" className="mt-6 inline-flex items-center gap-2 text-sm font-semibold text-cyan-200 transition group-hover:text-white">
+                    Saiba mais <ArrowRight size={14} />
                   </button>
                 </div>
               </motion.article>
@@ -346,83 +266,48 @@ export default function PublicHomePage({ isAuthenticated = false }) {
         </div>
       </section>
 
-      <section
-        id="solucoes"
-        data-scroll-target="solucoes"
-        className="mx-auto max-w-7xl scroll-mt-6 px-6 pb-20"
-      >
-        <div className="overflow-hidden rounded-[34px] border border-white/10 bg-[linear-gradient(135deg,rgba(50,163,255,0.09),rgba(119,91,255,0.08),rgba(41,231,164,0.05))] p-7 sm:p-9">
-          <div className="grid grid-cols-1 gap-8 lg:grid-cols-[1.05fr_1fr] lg:items-center">
-            <motion.div
-              initial={{ opacity: 0, x: -18 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true, margin: '-80px' }}
-              transition={{ duration: 0.55 }}
-            >
-              <SectionTag icon={Waves}>Experiência viva</SectionTag>
-              <h2 className="mt-5 font-display text-3xl font-black leading-tight sm:text-4xl">
-                Movimento com propósito, sem comprometer o produto.
-              </h2>
-              <p className="mt-4 text-sm leading-7 text-white/60 sm:text-base">
-                Órbitas, partículas e resposta ao cursor reforçam a sensação de fluxo. A animação respeita redução de movimento e permanece isolada na home pública.
-              </p>
-            </motion.div>
-
-            <motion.div
-              initial={{ opacity: 0, x: 18 }}
-              whileInView={{ opacity: 1, x: 0 }}
-              viewport={{ once: true, margin: '-80px' }}
-              transition={{ duration: 0.55, delay: 0.08 }}
-              className="grid grid-cols-1 gap-3 sm:grid-cols-2"
-            >
-              {[
-                'Hero orbital interativo',
-                'Cartões conectados ao ecossistema',
-                'Fallback visual documentado',
-                'Base pronta para evolução 3D',
-              ].map((item) => (
-                <div key={item} className="rounded-2xl border border-white/10 bg-black/20 px-4 py-4">
-                  <CheckCircle2 size={17} className="text-cyan-100" />
-                  <p className="mt-3 text-sm font-semibold text-white/75">{item}</p>
-                </div>
-              ))}
-            </motion.div>
+      <section id="recursos" className="mx-auto max-w-[1536px] scroll-mt-6 px-6 pb-16 lg:px-10 xl:px-12">
+        <div className="grid grid-cols-1 gap-6 rounded-[30px] border border-white/10 bg-[linear-gradient(135deg,rgba(35,116,255,0.08),rgba(118,79,255,0.08),rgba(22,203,164,0.05))] p-7 lg:grid-cols-[0.9fr_1.1fr] lg:p-9">
+          <div>
+            <div className="inline-flex items-center gap-2 rounded-full border border-violet-300/20 bg-violet-300/10 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-violet-100">
+              <ShieldCheck size={13} />
+              Plataforma preparada
+            </div>
+            <h2 className="mt-5 font-display text-3xl font-black leading-tight sm:text-4xl">Tecnologia com presença visual, sem comprometer o produto.</h2>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-white/58">
+              A experiência orbital fica isolada na home pública. O painel interno continua leve, previsível e focado na operação.
+            </p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {RESOURCES.map((item) => (
+              <div key={item} className="flex items-start gap-3 rounded-2xl border border-white/10 bg-black/15 px-4 py-4">
+                <CheckCircle2 size={17} className="mt-0.5 flex-shrink-0 text-emerald-300" />
+                <p className="text-sm leading-6 text-white/68">{item}</p>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      <section
-        id="suporte"
-        data-scroll-target="suporte"
-        className="mx-auto max-w-7xl scroll-mt-6 px-6 pb-20"
-      >
-        <div className="rounded-[36px] border border-cyan-300/15 bg-[#06101d] px-7 py-12 text-center shadow-[0_0_70px_rgba(58,167,255,0.08)] sm:px-10">
-          <SectionTag icon={Bot}>Comece pelo núcleo</SectionTag>
-          <h2 className="mx-auto mt-5 max-w-3xl font-display text-3xl font-black leading-tight sm:text-4xl">
-            Centralize a operação hoje e evolua sem trocar de base amanhã.
-          </h2>
-          <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/60 sm:text-base">
-            Conheça os planos, acesse o sistema ou fale com a equipe para entender a melhor configuração para o seu negócio.
-          </p>
-          <div className="mt-8 flex flex-wrap justify-center gap-3">
-            <Link to="/vendas" className="btn btn-primary gap-2">
-              Ver planos
-              <ArrowRight size={15} />
-            </Link>
-            <Link to={entryHref} className="btn btn-secondary">
-              {isAuthenticated ? 'Abrir painel' : 'Entrar na plataforma'}
-            </Link>
+      <section id="integracoes" className="mx-auto max-w-[1536px] scroll-mt-6 px-6 pb-16 lg:px-10 xl:px-12">
+        <div className="rounded-[30px] border border-cyan-300/14 bg-[#06101c] p-8 text-center shadow-[0_0_70px_rgba(38,143,255,0.08)]">
+          <p className="text-[10px] font-semibold uppercase tracking-[0.24em] text-cyan-200">Comece pelo núcleo</p>
+          <h2 className="mx-auto mt-4 max-w-3xl font-display text-3xl font-black leading-tight sm:text-4xl">Centralize a operação hoje e evolua sem trocar de base amanhã.</h2>
+          <p className="mx-auto mt-4 max-w-2xl text-sm leading-7 text-white/56">Escolha os planos, acesse o sistema ou converse com nossa equipe para montar a melhor configuração para seu negócio.</p>
+          <div className="mt-7 flex flex-wrap justify-center gap-3">
+            <Link to="/vendas" className="btn btn-primary gap-2">Ver planos <ArrowRight size={15} /></Link>
+            <Link to={entryHref} className="btn btn-secondary">{isAuthenticated ? 'Abrir painel' : 'Entrar na plataforma'}</Link>
           </div>
         </div>
       </section>
 
-      <footer className="border-t border-white/5 bg-black/15">
-        <div className="mx-auto flex max-w-7xl flex-col gap-4 px-6 py-8 text-xs text-white/40 sm:flex-row sm:items-center sm:justify-between">
+      <footer id="sobre" className="border-t border-white/6 px-6 py-6 text-xs text-white/38">
+        <div className="mx-auto flex max-w-[1536px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <p>© 2026 YuiSync. Ecossistema operacional inteligente.</p>
-          <div className="flex flex-wrap gap-4">
-            <Link to="/privacidade" className="transition hover:text-white">Privacidade</Link>
-            <Link to="/termos" className="transition hover:text-white">Termos</Link>
-            <Link to="/exclusao-de-dados" className="transition hover:text-white">Exclusão de dados</Link>
+          <div className="flex gap-5">
+            <Link to="/privacidade" className="hover:text-white">Privacidade</Link>
+            <Link to="/termos" className="hover:text-white">Termos</Link>
+            <Link to="/exclusao-de-dados" className="hover:text-white">Exclusão de dados</Link>
           </div>
         </div>
       </footer>
