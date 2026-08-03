@@ -3,7 +3,7 @@ import {
   LayoutDashboard, Calendar, ShoppingCart, Package,
   PawPrint, MessageSquare, Users, Settings, TrendingUp,
   FileText, CreditCard, Shield, Trophy, Megaphone,
-  Wallet, ClipboardList,
+  Wallet, ClipboardList, Webhook,
 } from 'lucide-react'
 import { DashboardServiceKpiEnhancer } from '../modules/petshop/components/DashboardServiceKpiEnhancer'
 import { ClientHistoryGroomingEnhancer } from '../modules/petshop/components/ClientHistoryGroomingEnhancer'
@@ -24,6 +24,7 @@ const GrowthPage = lazy(() => import('../modules/petshop/pages/GrowthPage'))
 const PetshopReportsPage = lazy(() => import('../modules/petshop/pages/PetshopReportsPage'))
 const UsersPage = lazy(() => import('../shared/pages/UsersPage'))
 const SettingsPage = lazy(() => import('../shared/pages/SettingsIntegratedPage'))
+const MetaWhatsappPage = lazy(() => import('../shared/pages/MetaWhatsappPage'))
 const BillingPage = lazy(() => import('../shared/pages/BillingPage'))
 const LogsPage = lazy(() => import('../shared/pages/LogsPage'))
 const SupportHubPage = lazy(() => import('../shared/pages/SupportHubPage'))
@@ -134,6 +135,7 @@ export const MODULES = {
         items: [
           { id: 'usuarios', label: 'Usuarios & Cargos', icon: Users, roles: ['admin_pet'] },
           { id: 'equipe', label: 'Equipe & Comissoes', icon: Users, roles: ['admin_pet'] },
+          { id: 'meta-whatsapp', label: 'Meta / WhatsApp', icon: Webhook, roles: ['admin_pet'] },
           { id: 'config', label: 'Configuracoes', icon: Settings, roles: ['admin_pet'] },
           { id: 'logs', label: 'Logs', icon: FileText, roles: ['admin_pet'] },
         ],
@@ -157,6 +159,7 @@ export const MODULES = {
       equipe: EquipePage,
       relatorios: PetshopReportsPage,
       financeiro: BillingPage,
+      'meta-whatsapp': MetaWhatsappPage,
       config: SettingsPage,
       logs: LogsPage,
     },

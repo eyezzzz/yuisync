@@ -2,7 +2,7 @@ import React, { useEffect } from 'react'
 import { Link } from 'react-router-dom'
 
 const CONTACT_EMAIL = 'gabrielboalento3004@gmail.com'
-const LAST_UPDATED = '27 de julho de 2026'
+const LAST_UPDATED = '3 de agosto de 2026'
 
 const documents = {
   privacidade: {
@@ -30,7 +30,8 @@ const documents = {
         'Cada empresa cliente é responsável por informar seus próprios clientes sobre o tratamento realizado em seu atendimento e por obter consentimentos quando exigidos.',
       ]],
       ['5. WhatsApp Business e Meta', [
-        'Quando uma empresa conecta sua conta do WhatsApp Business ao YuiSync, recebemos os eventos autorizados pela Meta e processamos as mensagens para exibição, resposta, automação, suporte e registro do atendimento.',
+        'Quando uma empresa conecta sua conta do WhatsApp Business ao YuiSync, inclusive pelo Cadastro Incorporado hospedado pela Meta, recebemos somente os ativos e eventos autorizados necessários para operar a integração.',
+        'O YuiSync processa mensagens para exibição, resposta, automação, suporte e registro do atendimento. O token operacional da integração é mantido no servidor e não é exposto no navegador.',
         'O YuiSync não vende dados pessoais para anunciantes. O compartilhamento com a Meta ocorre somente conforme a integração ativada, as configurações do cliente e os recursos necessários ao funcionamento do WhatsApp Business Platform.',
       ]],
       ['6. Inteligência artificial', [
@@ -97,7 +98,7 @@ const documents = {
   },
   exclusao: {
     title: 'Exclusão de Dados do Usuário',
-    intro: 'Esta página explica como solicitar a exclusão de dados associados ao YuiSync e às integrações autorizadas, incluindo dados recebidos pelo login da Meta e pelo WhatsApp Business Platform.',
+    intro: 'Esta página explica como solicitar a exclusão de dados associados ao YuiSync e às integrações autorizadas, incluindo dados recebidos por meio do Cadastro Incorporado e do WhatsApp Business Platform da Meta.',
     sections: [
       ['1. Como solicitar', [
         `Envie um e-mail para ${CONTACT_EMAIL} com o assunto “Exclusão de dados — YuiSync”.`,
@@ -112,7 +113,7 @@ const documents = {
         'Quando aplicável, forneceremos confirmação da exclusão ou explicaremos os dados que precisam ser mantidos e a respectiva justificativa.',
       ]],
       ['4. O que pode ser excluído', [
-        'Dados de perfil, identificadores vinculados à Meta, históricos de conversa, arquivos, sessões, preferências e outros registros associados ao usuário podem ser excluídos ou anonimizados quando não houver obrigação de retenção.',
+        'Dados de perfil do YuiSync, identificadores de ativos vinculados à Meta, históricos de conversa, arquivos, sessões, preferências e outros registros associados ao usuário podem ser excluídos ou anonimizados quando não houver obrigação de retenção.',
       ]],
       ['5. Dados que podem ser preservados', [
         'Registros fiscais, financeiros, antifraude, segurança, auditoria, exercício de direitos e cumprimento de obrigação legal podem ser preservados pelo período exigido.',
