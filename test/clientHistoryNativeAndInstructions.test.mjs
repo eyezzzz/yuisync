@@ -15,7 +15,8 @@ test('historico de Clientes e Pets e renderizado no JSX nativo', async () => {
   assert.doesNotMatch(modules, /ClientHistoryButtonVisibilityFix/)
   assert.doesNotMatch(enhancer, /MutationObserver/)
   assert.doesNotMatch(enhancer, /createElement\('button'\)/)
-  assert.match(enhancer, /explicitGroupByIdentity/)
+  assert.match(enhancer, /groupClients/)
+  assert.match(enhancer, /groupPetsByTutor/)
   assert.match(enhancer, /document,phone,details/)
 })
 
