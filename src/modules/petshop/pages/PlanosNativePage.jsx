@@ -43,6 +43,10 @@ import {
   subscriptionMatchesSearch,
 } from '../lib/subscriptionUsageAdmin'
 
+const PACKAGE_FIRST_APPOINTMENT_STORAGE_KEY = 'yuisync:package-first-appointment-at'
+const PACKAGE_SCHEDULE_SAVED_EVENT = 'yuisync:subscription-schedule-saved'
+const EDITABLE_PACKAGE_APPOINTMENT_STATUSES = new Set(['agendado', 'confirmado'])
+
 function enrichPlanServices(services, catalogServices) {
   const catalog = catalogServiceMap(catalogServices)
   return normalizeCatalogPlanServices(services).map((service) => {
@@ -105,6 +109,56 @@ function statusMeta(status) {
     paused: { label: 'Pausado', cls: 'badge-gray' },
     cancelled: { label: 'Cancelado', cls: 'badge-red' },
     pending_payment: { label: 'Aguardando pagamento', cls: 'badge-amber' },
+  }[status] || { label: status || 'Indefinido', cls: 'badge-gray' }
+}
+
+function localDateValue(value) {
+  const date = value instanceof Date ? value : new Date(value || '')
+  if (Number.isNaN(date.getTime())) return ''
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
+}
+
+function renewalStartDate(subscription = {}, pendingSubscription = null) {
+  if (pendingSubscription?.first_appointment_at) return localDateValue(pendingSubscription.first_appointment_at)
+  const firstAppointment = new Date(subscription.first_appointment_at || '')
+  if (!Number.isNaN(firstAppointment.getTime())) {
+    firstAppointment.setDate(firstAppointment.getDate() + 28)
+    return localDateValue(firstAppointment)
+  }
+  if (subscription.next_billing_date) return String(subscription.next_billing_date).slice(0, 10)
+  return localDateValue(new Date())
+}
+
+function appointmentInputParts(value) {
+  const date = new Date(value || '')
+  if (Number.isNaN(date.getTime())) return { date: '', time: '' }
+  return {
+    date: localDateValue(date),
+    time: `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`,
+  }
+}
+
+function appointmentDateTimeIso(dateValue, timeValue) {
+  if (!dateValue || !timeValue) return ''
+  const date = new Date(`${dateValue}T${timeValue}:00`)
+  return Number.isNaN(date.getTime()) ? '' : date.toISOString()
+}
+
+function packageAppointmentServiceLabel(appointment = {}) {
+  const items = Array.isArray(appointment.service_items) ? appointment.service_items : []
+  return items.map((item) => item?.name).filter(Boolean).join(' + ')
+    || appointment.service_type
+    || 'Serviço do pacote'
+}
+
+function packageAppointmentStatus(status) {
+  return {
+    agendado: { label: 'Agendado', cls: 'badge-amber' },
+    confirmado: { label: 'Confirmado', cls: 'badge-blue' },
+    em_andamento: { label: 'Em andamento', cls: 'badge-purple' },
+    concluido: { label: 'Concluído', cls: 'badge-green' },
+    cancelado: { label: 'Cancelado', cls: 'badge-red' },
+    no_show: { label: 'No-show', cls: 'badge-gray' },
   }[status] || { label: status || 'Indefinido', cls: 'badge-gray' }
 }
 
@@ -347,16 +401,25 @@ function ClientPicker({ clients, selectedId, onSelect, onManagePets }) {
   )
 }
 
-function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave, onManagePets }) {
-  const [form, setForm] = useState({
-    plan_id: plans[0]?.id || '',
-    client_id: '',
-    status: 'active',
-    started_at: new Date().toISOString().slice(0, 10),
-  })
+function SubscriptionModal({ plans, clients, catalogServices, context, onClose, onSave, onManagePets }) {
+  const renewalOf = context?.renewalOf || null
+  const pendingSubscription = context?.pendingSubscription || null
+  const renewal = Boolean(renewalOf)
+  const fixedPlanId = pendingSubscription?.plan_id || renewalOf?.plan_id || ''
+  const fixedClientId = pendingSubscription?.client_id || renewalOf?.client_id || ''
+  const [form, setForm] = useState(() => ({
+    id: pendingSubscription?.id,
+    plan_id: fixedPlanId || plans[0]?.id || '',
+    client_id: fixedClientId,
+    status: pendingSubscription ? 'pending_payment' : 'active',
+    started_at: renewal
+      ? renewalStartDate(renewalOf, pendingSubscription)
+      : localDateValue(new Date()),
+  }))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const selectedPlan = plans.find((plan) => plan.id === form.plan_id)
+  const selectedClient = clients.find((client) => client.id === form.client_id)
 
   async function submit() {
     if (!form.client_id) return setError('Selecione o pet que receberá o pacote.')
@@ -378,24 +441,38 @@ function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave, o
         <div className="modal-header">
           <div>
             <h2 className="font-display text-xl font-bold text-text">Vender pacote ao cliente</h2>
-            <p className="mt-1 text-sm text-muted">A assinatura só ficará ativa depois da confirmação do pagamento.</p>
+            <p className="mt-1 text-sm text-muted">{renewal ? 'Revise a primeira data e o horário antes de gerar ou abrir o pagamento da renovação.' : 'A assinatura só ficará ativa depois da confirmação do pagamento.'}</p>
           </div>
           <button type="button" aria-label="Fechar assinatura" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
         </div>
 
         <div className="modal-body space-y-5">
           <div className="rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-sm text-amber-100">
-            Ao continuar, o pacote irá para Ordens / Entrega → Banho & Tosa. Os benefícios serão liberados somente após o recebimento no caixa.
+            {renewal
+              ? pendingSubscription
+                ? 'Esta renovação já está aguardando pagamento. Informe a agenda que faltou para liberar o recebimento.'
+                : 'A renovação só será enviada para pagamento depois que a primeira data e o horário do novo ciclo forem informados.'
+              : 'Ao continuar, o pacote irá para Ordens / Entrega → Banho & Tosa. Os benefícios serão liberados somente após o recebimento no caixa.'}
           </div>
           <div>
             <label className="inp-label">Pacote</label>
-            <select className="inp" value={form.plan_id} onChange={(event) => setForm((current) => ({ ...current, plan_id: event.target.value }))}>
+            <select className="inp" disabled={renewal} value={form.plan_id} onChange={(event) => setForm((current) => ({ ...current, plan_id: event.target.value }))}>
               {plans.map((plan) => <option key={plan.id} value={plan.id}>{plan.name} - {fmtCurrency(plan.price)}</option>)}
             </select>
           </div>
-          <ClientPicker clients={clients} selectedId={form.client_id} onSelect={(clientId) => setForm((current) => ({ ...current, client_id: clientId }))} onManagePets={onManagePets}/>
+          {renewal ? (
+            <div>
+              <label className="inp-label">Pet que receberá a renovação</label>
+              <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/8 px-4 py-3">
+                <span className="block font-bold text-text">{selectedClient?.pet_name || renewalOf?.client?.pet_name || 'Pet não informado'}</span>
+                <span className="mt-1 block text-xs text-muted">{selectedClient?.owner_name || renewalOf?.client?.owner_name || 'Tutor não informado'}</span>
+              </div>
+            </div>
+          ) : (
+            <ClientPicker clients={clients} selectedId={form.client_id} onSelect={(clientId) => setForm((current) => ({ ...current, client_id: clientId }))} onManagePets={onManagePets}/>
+          )}
           <div>
-            <label className="inp-label">Início previsto do ciclo</label>
+            <label className="inp-label">{renewal ? 'Primeiro atendimento do novo ciclo' : 'Início previsto do ciclo'}</label>
             <input className="inp" type="date" value={form.started_at} onChange={(event) => setForm((current) => ({ ...current, started_at: event.target.value }))}/>
           </div>
 
@@ -419,7 +496,180 @@ function SubscriptionModal({ plans, clients, catalogServices, onClose, onSave, o
           {error && <p className="text-sm text-red-400">{error}</p>}
           <div className="flex gap-3">
             <button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button>
-            <button type="button" onClick={submit} disabled={saving || !plans.length} className="btn btn-primary flex-1 justify-center"><CreditCard size={15}/> {saving ? 'Preparando...' : 'Continuar para pagamento'}</button>
+            <button type="button" onClick={submit} disabled={saving || !plans.length} className="btn btn-primary flex-1 justify-center"><CreditCard size={15}/> {saving ? 'Preparando...' : pendingSubscription ? 'Salvar agenda e abrir pagamento' : 'Continuar para pagamento'}</button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+function PackageAppointmentsModal({ subscription, activeTenantId, moduleId, onClose, onChanged }) {
+  const [rows, setRows] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const runScoped = useMemo(() => (runner) => runWithTenantFallback(activeTenantId, runner), [activeTenantId])
+
+  async function loadAppointments() {
+    setLoading(true)
+    setError('')
+    try {
+      const response = await runScoped(async (includeTenant) => {
+        let query = supabase
+          .from('appointments')
+          .select('id,scheduled_at,status,service_type,service_items,notes,source')
+          .eq('module_id', moduleId)
+          .eq('subscription_id', subscription.id)
+          .order('scheduled_at', { ascending: true })
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query
+      })
+      if (response.error) throw response.error
+      setRows((response.data || []).map((appointment) => ({
+        ...appointment,
+        ...appointmentInputParts(appointment.scheduled_at),
+        original_scheduled_at: appointment.scheduled_at,
+      })))
+    } catch (loadError) {
+      setError(loadError?.message || 'Não foi possível carregar os agendamentos do pacote.')
+      setRows([])
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    void loadAppointments()
+  }, [subscription.id])
+
+  function updateRow(id, key, value) {
+    setRows((current) => current.map((row) => row.id === id ? { ...row, [key]: value } : row))
+  }
+
+  async function saveAppointments() {
+    const normalized = rows.map((row) => ({
+      ...row,
+      next_scheduled_at: appointmentDateTimeIso(row.date, row.time),
+    }))
+    const invalid = normalized.find((row) => EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status) && !row.next_scheduled_at)
+    if (invalid) {
+      setError('Preencha data e horário em todos os agendamentos editáveis.')
+      return
+    }
+
+    setSaving(true)
+    setError('')
+    setNotice('')
+    try {
+      for (const row of normalized) {
+        if (!EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status)) continue
+        const before = new Date(row.original_scheduled_at || '').getTime()
+        const after = new Date(row.next_scheduled_at || '').getTime()
+        if (Number.isFinite(before) && Number.isFinite(after) && before === after) continue
+
+        const response = await supabase.rpc('update_petshop_appointment_transaction', {
+          p_appointment_id: row.id,
+          p_payload: {
+            tenant_id: activeTenantId,
+            module_id: moduleId,
+            scheduled_at: row.next_scheduled_at,
+            source: row.source || 'package_activation',
+          },
+        })
+        if (response.error) throw response.error
+      }
+
+      const firstAt = normalized
+        .map((row) => row.next_scheduled_at || row.original_scheduled_at)
+        .filter(Boolean)
+        .sort((left, right) => new Date(left) - new Date(right))[0]
+
+      if (firstAt) {
+        const response = await runScoped(async (includeTenant) => {
+          let query = supabase
+            .from('client_subscriptions')
+            .update({ first_appointment_at: firstAt, updated_at: new Date().toISOString() })
+            .eq('id', subscription.id)
+            .eq('module_id', moduleId)
+          query = applyTenantFilter(query, activeTenantId, includeTenant)
+          return query.select('id,first_appointment_at').single()
+        })
+        if (response.error) throw response.error
+      }
+
+      await loadAppointments()
+      await onChanged?.()
+      setNotice('Datas do pacote atualizadas com sucesso.')
+    } catch (saveError) {
+      const message = String(saveError?.message || '')
+      setError(message.includes('update_petshop_appointment_transaction')
+        ? 'A infraestrutura de edição da Agenda ainda não foi aplicada no banco.'
+        : message || 'Não foi possível atualizar os agendamentos do pacote.')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const editableCount = rows.filter((row) => EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status)).length
+
+  return createPortal(
+    <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
+      <div className="modal-box max-w-4xl">
+        <div className="modal-header">
+          <div>
+            <h2 className="font-display text-xl font-bold text-text">Agendamentos do pacote</h2>
+            <p className="mt-1 text-sm text-muted">{subscription.client?.pet_name || subscription.client?.owner_name} · {subscription.subscription_plans?.name}</p>
+          </div>
+          <button type="button" aria-label="Fechar agendamentos" onClick={onClose} className="text-muted hover:text-text"><X size={18}/></button>
+        </div>
+
+        <div className="modal-body space-y-4">
+          <div className="rounded-xl border border-sky-500/25 bg-sky-500/10 px-4 py-3 text-sm text-sky-100">
+            Datas agendadas ou confirmadas podem ser alteradas aqui. Atendimentos concluídos, cancelados ou registrados como no-show ficam bloqueados para preservar o histórico.
+          </div>
+
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-10 text-sm text-muted"><RefreshCw size={15} className="animate-spin"/> Carregando agendamentos...</div>
+          ) : (
+            <div className="space-y-3">
+              {rows.map((row, index) => {
+                const metadata = packageAppointmentStatus(row.status)
+                const editable = EDITABLE_PACKAGE_APPOINTMENT_STATUSES.has(row.status)
+                return (
+                  <div key={row.id} className="rounded-2xl border border-[var(--border2)] bg-surface/70 p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div>
+                        <p className="text-[10px] font-bold uppercase tracking-widest text-muted">Atendimento {index + 1}</p>
+                        <p className="mt-1 font-semibold text-text">{packageAppointmentServiceLabel(row)}</p>
+                      </div>
+                      <span className={`badge ${metadata.cls}`}>{metadata.label}</span>
+                    </div>
+                    <div className="mt-4 grid grid-cols-1 gap-3 sm:grid-cols-2">
+                      <div>
+                        <label className="inp-label">Data</label>
+                        <input type="date" className="inp" disabled={!editable} value={row.date} onChange={(event) => updateRow(row.id, 'date', event.target.value)}/>
+                      </div>
+                      <div>
+                        <label className="inp-label">Horário</label>
+                        <input type="time" className="inp" disabled={!editable} value={row.time} onChange={(event) => updateRow(row.id, 'time', event.target.value)}/>
+                      </div>
+                    </div>
+                    <p className="mt-2 text-[10px] text-muted">{editable ? 'Data e horário editáveis manualmente.' : 'Histórico preservado; este atendimento não pode mais ser remarcado por esta tela.'}</p>
+                  </div>
+                )
+              })}
+              {!rows.length && <p className="rounded-xl border border-amber-500/20 bg-amber-500/8 px-4 py-5 text-center text-sm text-amber-200">Nenhum agendamento vinculado foi encontrado para este ciclo.</p>}
+            </div>
+          )}
+
+          {notice && <p className="rounded-xl border border-emerald-500/20 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-300">{notice}</p>}
+          {error && <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</p>}
+          <div className="flex gap-3">
+            <button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Fechar</button>
+            <button type="button" onClick={saveAppointments} disabled={saving || loading || editableCount === 0} className="btn btn-primary flex-1 justify-center"><Save size={15}/> {saving ? 'Salvando...' : 'Salvar datas'}</button>
           </div>
         </div>
       </div>
@@ -541,10 +791,10 @@ export default function PlanosNativePage({ setPage }) {
   const [error, setError] = useState('')
   const [search, setSearch] = useState('')
   const [planModal, setPlanModal] = useState(null)
-  const [subscriptionModal, setSubscriptionModal] = useState(false)
+  const [subscriptionModal, setSubscriptionModal] = useState(null)
   const [editingUsage, setEditingUsage] = useState(null)
+  const [managingAppointments, setManagingAppointments] = useState(null)
   const [cancelling, setCancelling] = useState(null)
-  const [renewingId, setRenewingId] = useState('')
   const runScoped = useMemo(() => (runner) => runWithTenantFallback(activeTenantId, runner), [activeTenantId])
 
   const activeSubscriptions = subscriptions.filter((subscription) => (
@@ -601,15 +851,44 @@ export default function PlanosNativePage({ setPage }) {
     setPage?.('ordens')
   }
 
+  async function persistPendingSchedule(subscription) {
+    if (subscription?.status !== 'pending_payment') return subscription
+    const firstAt = window.sessionStorage.getItem(PACKAGE_FIRST_APPOINTMENT_STORAGE_KEY)
+      || subscription.first_appointment_at
+    if (!firstAt) throw new Error('Informe a primeira data e o horário fixo antes de abrir o pagamento.')
+
+    const response = await runScoped(async (includeTenant) => {
+      let query = supabase
+        .from('client_subscriptions')
+        .update({
+          first_appointment_at: firstAt,
+          recurring_appointments_created_at: null,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', subscription.id)
+        .eq('module_id', moduleId)
+      query = applyTenantFilter(query, activeTenantId, includeTenant)
+      return query.select('id,first_appointment_at').single()
+    })
+    if (response.error) throw response.error
+
+    window.sessionStorage.removeItem(PACKAGE_FIRST_APPOINTMENT_STORAGE_KEY)
+    window.dispatchEvent(new CustomEvent(PACKAGE_SCHEDULE_SAVED_EVENT, {
+      detail: { subscriptionId: subscription.id, firstAppointmentAt: firstAt },
+    }))
+    return { ...subscription, first_appointment_at: firstAt }
+  }
+
   async function handleSaveSubscription(payload) {
-    const subscription = await saveSubscription(payload)
+    let subscription = await saveSubscription(payload)
+    subscription = await persistPendingSchedule(subscription)
     await reload()
     if (subscription?.status === 'pending_payment') {
       focusSubscriptionPayment(subscription.id)
     }
   }
 
-  async function renewSubscription(subscription) {
+  function renewSubscription(subscription) {
     if (!activeTenantId) {
       setError('Selecione uma empresa ativa antes de renovar o pacote.')
       return
@@ -629,31 +908,16 @@ export default function PlanosNativePage({ setPage }) {
       && candidate.client_id === subscription.client_id
       && candidate.status === 'pending_payment'
     ))
-    if (pendingRenewal) {
+    if (pendingRenewal?.first_appointment_at) {
       focusSubscriptionPayment(pendingRenewal.id)
       return
     }
 
-    setRenewingId(subscription.id)
     setError('')
-    try {
-      const renewal = await saveSubscription({
-        plan_id: subscription.plan_id,
-        client_id: subscription.client_id,
-        status: 'active',
-        started_at: new Date().toISOString().slice(0, 10),
-        billing_cycle: subscription.subscription_plans?.billing_cycle,
-        plan: subscription.subscription_plans,
-      })
-      await reload()
-      if (renewal?.status === 'pending_payment') {
-        focusSubscriptionPayment(renewal.id)
-      }
-    } catch (renewError) {
-      setError(renewError?.message || 'Não foi possível renovar o pacote.')
-    } finally {
-      setRenewingId('')
-    }
+    setSubscriptionModal({
+      renewalOf: subscription,
+      pendingSubscription: pendingRenewal || null,
+    })
   }
 
   async function saveUsage(subscription, requested) {
@@ -697,7 +961,7 @@ export default function PlanosNativePage({ setPage }) {
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={reload} className="btn btn-secondary"><RefreshCw size={15}/> Atualizar</button>
           <button type="button" onClick={() => setPage?.('pets')} className="btn btn-secondary"><PawPrint size={15}/> Clientes & Pets</button>
-          <button type="button" onClick={() => setSubscriptionModal(true)} className="btn btn-secondary"><Repeat2 size={15}/> Vender pacote</button>
+          <button type="button" onClick={() => setSubscriptionModal({})} className="btn btn-secondary"><Repeat2 size={15}/> Vender pacote</button>
           <button type="button" onClick={() => setPlanModal({})} className="btn btn-primary"><Plus size={15}/> Novo pacote</button>
         </div>
       </div>
@@ -710,7 +974,7 @@ export default function PlanosNativePage({ setPage }) {
 
       <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-5 py-4">
         <p className="flex items-center gap-2 text-sm font-semibold text-text"><PackageCheck size={16} className="text-emerald-400"/> Fluxo financeiro do pacote</p>
-        <p className="mt-1 text-sm text-muted">Ao consumir todos os serviços do ciclo, o pacote fica concluído. A renovação abre uma nova cobrança e preserva o ciclo anterior no histórico.</p>
+        <p className="mt-1 text-sm text-muted">Ao consumir todos os serviços do ciclo, o pacote fica concluído. A renovação solicita a nova agenda antes de abrir a cobrança e preserva o ciclo anterior no histórico.</p>
       </div>
 
       {error && <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</p>}
@@ -749,7 +1013,7 @@ export default function PlanosNativePage({ setPage }) {
           </label>
         </div>
         <div className="overflow-x-auto">
-          <table className="tbl min-w-[1100px]">
+          <table className="tbl min-w-[1280px]">
             <thead><tr><th>Pet / Tutor</th><th>Pacote</th><th>Uso no ciclo</th><th>Renovação</th><th>Status</th><th>Ações</th></tr></thead>
             <tbody>
               {filteredSubscriptions.map((subscription) => {
@@ -767,9 +1031,10 @@ export default function PlanosNativePage({ setPage }) {
                     <td><span className={`badge ${meta.cls}`}>{meta.label}</span></td>
                     <td>
                       <div className="flex flex-wrap gap-2">
+                        {subscription.status === 'active' && <button type="button" onClick={() => setManagingAppointments(subscription)} className="btn btn-secondary btn-sm whitespace-nowrap"><CalendarClock size={13}/> Agendamentos</button>}
                         <button type="button" disabled={!editable} onClick={() => setEditingUsage(subscription)} className="btn btn-secondary btn-sm whitespace-nowrap" title={editable ? 'Editar consumo do ciclo' : 'Disponível após ativação'}><PencilLine size={13}/> Editar consumo</button>
                         {completed ? (
-                          <button type="button" disabled={renewingId === subscription.id} onClick={() => renewSubscription(subscription)} className="btn btn-primary btn-sm whitespace-nowrap"><Repeat2 size={13}/> {renewingId === subscription.id ? 'Renovando...' : 'Renovar pacote'}</button>
+                          <button type="button" onClick={() => renewSubscription(subscription)} className="btn btn-primary btn-sm whitespace-nowrap"><Repeat2 size={13}/> Renovar pacote</button>
                         ) : (
                           <button type="button" disabled={!cancellable} onClick={() => setCancelling(subscription)} className="btn btn-danger btn-sm whitespace-nowrap"><Ban size={13}/> Cancelar</button>
                         )}
@@ -785,7 +1050,8 @@ export default function PlanosNativePage({ setPage }) {
       </section>
 
       {planModal !== null && <PlanModal plan={planModal.id ? planModal : null} catalogServices={catalogServices} onClose={() => setPlanModal(null)} onSave={handleSavePlan}/>} 
-      {subscriptionModal && <SubscriptionModal plans={plans.filter((plan) => plan.active)} clients={clients} catalogServices={catalogServices} onClose={() => setSubscriptionModal(false)} onSave={handleSaveSubscription} onManagePets={() => { setSubscriptionModal(false); setPage?.('pets') }}/>} 
+      {subscriptionModal && <SubscriptionModal plans={plans.filter((plan) => plan.active)} clients={clients} catalogServices={catalogServices} context={subscriptionModal} onClose={() => setSubscriptionModal(null)} onSave={handleSaveSubscription} onManagePets={() => { setSubscriptionModal(null); setPage?.('pets') }}/>} 
+      {managingAppointments && <PackageAppointmentsModal subscription={managingAppointments} activeTenantId={activeTenantId} moduleId={moduleId} onClose={() => setManagingAppointments(null)} onChanged={reload}/>} 
       {editingUsage && <UsageEditModal subscription={editingUsage} onClose={() => setEditingUsage(null)} onSave={saveUsage}/>} 
       {cancelling && <CancelSubscriptionModal subscription={cancelling} onClose={() => setCancelling(null)} onConfirm={cancelSubscription}/>} 
     </div>
