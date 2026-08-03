@@ -7,52 +7,73 @@ const CALLOUTS = [
     title: 'Empresa',
     text: 'Gestão completa do negócio',
     icon: Building2,
-    className: 'left-0 top-12 xl:-left-8',
-    accent: 'text-cyan-200 border-cyan-300/25 bg-cyan-300/10',
+    position: 'left-0 top-[12%]',
+    line: 'left-[22%] top-[23%] w-[18%] bg-gradient-to-r from-cyan-200/55 to-transparent',
+    accent: 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100',
   },
   {
     title: 'Equipe',
     text: 'Colaboração e produtividade',
     icon: Users2,
-    className: 'right-0 top-8 xl:-right-10',
-    accent: 'text-violet-200 border-violet-300/25 bg-violet-300/10',
+    position: 'right-0 top-[9%]',
+    line: 'right-[22%] top-[22%] w-[18%] bg-gradient-to-l from-emerald-200/55 to-transparent',
+    accent: 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100',
   },
   {
     title: 'Clientes',
-    text: 'Experiência integrada e fluida',
+    text: 'Experiência integrada e personalizada',
     icon: Bot,
-    className: 'bottom-16 left-4 xl:-left-4',
-    accent: 'text-emerald-200 border-emerald-300/25 bg-emerald-300/10',
+    position: 'bottom-[9%] left-[2%]',
+    line: 'bottom-[23%] left-[24%] w-[18%] bg-gradient-to-r from-violet-200/50 to-transparent',
+    accent: 'border-violet-300/25 bg-violet-300/10 text-violet-100',
   },
   {
     title: 'Automações',
     text: 'Processos inteligentes em movimento',
     icon: Workflow,
-    className: 'bottom-12 right-0 xl:-right-12',
-    accent: 'text-sky-200 border-sky-300/25 bg-sky-300/10',
+    position: 'bottom-[8%] right-0',
+    line: 'bottom-[22%] right-[23%] w-[18%] bg-gradient-to-l from-sky-200/50 to-transparent',
+    accent: 'border-sky-300/25 bg-sky-300/10 text-sky-100',
   },
 ]
 
-const PARTICLES = Array.from({ length: 22 }, (_, index) => ({
+const PARTICLES = Array.from({ length: 30 }, (_, index) => ({
   id: index,
-  top: `${7 + ((index * 19) % 84)}%`,
-  left: `${5 + ((index * 23) % 88)}%`,
-  delay: index * 0.16,
-  duration: 2.8 + (index % 5) * 0.42,
-  size: 2 + (index % 3),
+  top: `${8 + ((index * 29) % 82)}%`,
+  left: `${7 + ((index * 19) % 86)}%`,
+  delay: index * 0.11,
+  duration: 2.4 + (index % 6) * 0.38,
+  size: 2 + (index % 4),
 }))
 
-function Orbit({ className, duration, reverse = false, reducedMotion = false }) {
+function OrbitTrack({
+  width,
+  height,
+  tilt,
+  duration,
+  reverse = false,
+  className,
+  foreground = false,
+  reducedMotion = false,
+}) {
   return (
-    <motion.div
-      className={`absolute rounded-full border ${className}`}
-      animate={reducedMotion ? undefined : { rotate: reverse ? -360 : 360 }}
-      transition={{ duration, repeat: Infinity, ease: 'linear' }}
-    >
-      <span className="absolute -top-1.5 left-1/2 h-3 w-3 -translate-x-1/2 rounded-full bg-white shadow-[0_0_20px_rgba(255,255,255,0.95)]" />
-      <span className="absolute left-7 top-1/2 h-2.5 w-2.5 -translate-y-1/2 rounded-full bg-cyan-200 shadow-[0_0_20px_rgba(103,232,249,0.95)]" />
-      <span className="absolute bottom-7 right-12 h-3 w-3 rounded-full bg-emerald-200 shadow-[0_0_22px_rgba(110,231,183,0.9)]" />
-    </motion.div>
+    <div className={`pointer-events-none absolute inset-0 flex items-center justify-center ${foreground ? 'z-30' : 'z-10'}`}>
+      <motion.div
+        className="relative"
+        style={{ width, height }}
+        animate={reducedMotion ? undefined : { rotate: reverse ? -360 : 360 }}
+        transition={{ duration, repeat: Infinity, ease: 'linear' }}
+      >
+        <div
+          className={`absolute inset-0 rounded-[50%] border ${className}`}
+          style={{ transform: `rotate(${tilt}deg)` }}
+        >
+          <span className="absolute left-[12%] top-[18%] h-2.5 w-2.5 rounded-full bg-cyan-100 shadow-[0_0_20px_rgba(165,243,252,0.95)]" />
+          <span className="absolute right-[9%] top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-sky-300 shadow-[0_0_24px_rgba(125,211,252,0.95)]" />
+          <span className="absolute bottom-[12%] left-[54%] h-2 w-2 rounded-full bg-white shadow-[0_0_18px_rgba(255,255,255,0.95)]" />
+        </div>
+      </motion.div>
+    </div>
   )
 }
 
@@ -60,22 +81,25 @@ function CalloutCard({ item }) {
   const Icon = item.icon
 
   return (
-    <motion.div
-      initial={{ opacity: 0, y: 18 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.6, ease: 'easeOut', delay: 0.25 }}
-      className={`absolute z-30 hidden w-[220px] rounded-2xl border border-white/10 bg-[#07101f]/90 px-4 py-3 shadow-[0_18px_55px_rgba(0,0,0,0.35)] backdrop-blur-xl xl:block ${item.className}`}
-    >
-      <div className="flex items-center gap-3">
-        <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border ${item.accent}`}>
-          <Icon size={18} />
+    <>
+      <div className={`pointer-events-none absolute z-0 hidden h-px xl:block ${item.line}`} />
+      <motion.div
+        initial={{ opacity: 0, y: 14 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.55, delay: 0.18, ease: 'easeOut' }}
+        className={`absolute z-40 hidden w-[205px] rounded-2xl border border-white/10 bg-[#07101e]/90 px-4 py-3 shadow-[0_20px_60px_rgba(0,0,0,0.36)] backdrop-blur-xl xl:block ${item.position}`}
+      >
+        <div className="flex items-center gap-3">
+          <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border ${item.accent}`}>
+            <Icon size={18} />
+          </div>
+          <div>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/85">{item.title}</p>
+            <p className="mt-1 text-xs leading-5 text-white/55">{item.text}</p>
+          </div>
         </div>
-        <div>
-          <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/80">{item.title}</p>
-          <p className="mt-1 text-xs leading-5 text-white/60">{item.text}</p>
-        </div>
-      </div>
-    </motion.div>
+      </motion.div>
+    </>
   )
 }
 
@@ -88,81 +112,100 @@ export default function YuiCoreHero() {
     const rect = event.currentTarget.getBoundingClientRect()
     const relativeX = (event.clientX - rect.left) / rect.width
     const relativeY = (event.clientY - rect.top) / rect.height
+
     setTilt({
-      x: (relativeX - 0.5) * 14,
-      y: (relativeY - 0.5) * -12,
+      x: (relativeX - 0.5) * 10,
+      y: (relativeY - 0.5) * -8,
     })
   }
 
   return (
-    <div className="relative mx-auto w-full max-w-[920px] py-3 sm:py-6">
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[72%] w-[72%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(37,170,255,0.15),rgba(115,79,255,0.08)_42%,transparent_72%)] blur-3xl" />
-
-      <div className="pointer-events-none absolute left-[14%] top-[30%] hidden h-px w-[26%] bg-gradient-to-r from-cyan-300/50 to-transparent xl:block" />
-      <div className="pointer-events-none absolute right-[14%] top-[29%] hidden h-px w-[26%] bg-gradient-to-l from-violet-300/40 to-transparent xl:block" />
-      <div className="pointer-events-none absolute bottom-[29%] left-[15%] hidden h-px w-[25%] bg-gradient-to-r from-emerald-300/40 to-transparent xl:block" />
-      <div className="pointer-events-none absolute bottom-[28%] right-[14%] hidden h-px w-[27%] bg-gradient-to-l from-sky-300/40 to-transparent xl:block" />
+    <div className="relative mx-auto h-[500px] w-full max-w-[860px] sm:h-[580px] xl:h-[640px]">
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[72%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(31,142,255,0.2),rgba(89,58,218,0.1)_40%,transparent_72%)] blur-3xl" />
+      <div className="pointer-events-none absolute bottom-[7%] left-1/2 h-[12%] w-[62%] -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
 
       {CALLOUTS.map((item) => <CalloutCard key={item.title} item={item} />)}
 
       <motion.div
-        animate={reducedMotion ? undefined : { y: [0, -8, 0] }}
-        transition={{ duration: 6.5, repeat: Infinity, ease: 'easeInOut' }}
-        className="relative z-20 mx-auto flex aspect-square w-[92vw] max-w-[440px] items-center justify-center sm:max-w-[540px] lg:max-w-[620px]"
+        className="absolute inset-[4%] z-20"
+        animate={reducedMotion ? undefined : { y: [0, -6, 0] }}
+        transition={{ duration: 6.2, repeat: Infinity, ease: 'easeInOut' }}
       >
         <div
           onPointerMove={handlePointerMove}
           onPointerLeave={() => setTilt({ x: 0, y: 0 })}
-          className="relative flex h-full w-full items-center justify-center transition-transform duration-300 ease-out"
-          style={{ transform: `perspective(1400px) rotateX(${tilt.y}deg) rotateY(${tilt.x}deg)` }}
+          className="relative h-full w-full transition-transform duration-300 ease-out"
+          style={{ transform: `perspective(1500px) rotateX(${tilt.y}deg) rotateY(${tilt.x}deg)` }}
         >
-          <div className="absolute inset-[4%] rounded-full border border-cyan-200/10 bg-[radial-gradient(circle_at_50%_50%,rgba(53,185,255,0.04),transparent_67%)] shadow-[0_0_80px_rgba(37,170,255,0.12)]" />
-
-          <Orbit
-            className="inset-[9%] border-cyan-200/40 shadow-[0_0_32px_rgba(103,232,249,0.24)]"
-            duration={20}
+          <OrbitTrack
+            width="92%"
+            height="36%"
+            tilt={12}
+            duration={17}
+            className="border-sky-300/55 shadow-[0_0_22px_rgba(56,189,248,0.32),inset_0_0_18px_rgba(56,189,248,0.12)]"
             reducedMotion={reducedMotion}
           />
-          <Orbit
-            className="inset-[14%] border-emerald-200/30 shadow-[0_0_34px_rgba(110,231,183,0.18)]"
-            duration={25}
+          <OrbitTrack
+            width="78%"
+            height="43%"
+            tilt={-31}
+            duration={21}
             reverse
+            className="border-emerald-300/50 shadow-[0_0_24px_rgba(110,231,183,0.28),inset_0_0_18px_rgba(110,231,183,0.1)]"
             reducedMotion={reducedMotion}
           />
-          <Orbit
-            className="inset-[19%] border-violet-200/30 shadow-[0_0_36px_rgba(196,181,253,0.2)]"
-            duration={30}
+          <OrbitTrack
+            width="88%"
+            height="29%"
+            tilt={58}
+            duration={25}
+            className="border-violet-300/45 shadow-[0_0_25px_rgba(196,181,253,0.28),inset_0_0_20px_rgba(196,181,253,0.1)]"
             reducedMotion={reducedMotion}
           />
 
-          <motion.div
-            className="absolute inset-[23%] rounded-full border border-white/15 bg-[radial-gradient(circle_at_34%_28%,rgba(255,255,255,0.34),rgba(47,162,255,0.2)_28%,rgba(27,54,116,0.72)_62%,rgba(4,9,24,0.96)_100%)] shadow-[0_0_85px_rgba(58,167,255,0.4),inset_0_0_55px_rgba(255,255,255,0.11)]"
-            animate={reducedMotion ? undefined : {
-              boxShadow: [
-                '0 0 70px rgba(58,167,255,0.3), inset 0 0 45px rgba(255,255,255,0.08)',
-                '0 0 105px rgba(58,167,255,0.48), inset 0 0 64px rgba(255,255,255,0.14)',
-                '0 0 70px rgba(58,167,255,0.3), inset 0 0 45px rgba(255,255,255,0.08)',
-              ],
-            }}
-            transition={{ duration: 4.2, repeat: Infinity, ease: 'easeInOut' }}
+          <div className="absolute inset-0 z-10 flex items-center justify-center">
+            <motion.div
+              className="relative h-[240px] w-[240px] rounded-full border border-white/20 bg-[radial-gradient(circle_at_32%_25%,rgba(255,255,255,0.42),rgba(54,171,255,0.32)_22%,rgba(28,83,180,0.72)_48%,rgba(8,20,62,0.96)_78%,rgba(2,7,22,1)_100%)] shadow-[0_0_75px_rgba(48,145,255,0.55),inset_0_0_48px_rgba(255,255,255,0.12)] sm:h-[290px] sm:w-[290px] xl:h-[330px] xl:w-[330px]"
+              animate={reducedMotion ? undefined : {
+                boxShadow: [
+                  '0 0 65px rgba(48,145,255,0.42), inset 0 0 42px rgba(255,255,255,0.1)',
+                  '0 0 105px rgba(48,145,255,0.68), inset 0 0 58px rgba(255,255,255,0.16)',
+                  '0 0 65px rgba(48,145,255,0.42), inset 0 0 42px rgba(255,255,255,0.1)',
+                ],
+              }}
+              transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
+            >
+              <div className="absolute inset-[7%] rounded-full border border-cyan-100/10" />
+              <div className="absolute left-[19%] top-[12%] h-[28%] w-[46%] -rotate-[24deg] rounded-[50%] bg-white/15 blur-md" />
+              <div className="absolute inset-0 rounded-full bg-[linear-gradient(125deg,transparent_20%,rgba(255,255,255,0.08)_45%,transparent_62%)]" />
+
+              <motion.div
+                className="absolute inset-0 flex items-center justify-center"
+                animate={reducedMotion ? undefined : { scale: [1, 1.035, 1] }}
+                transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
+              >
+                <span className="select-none bg-gradient-to-b from-white via-cyan-100 to-sky-300 bg-clip-text font-display text-[98px] font-black leading-none text-transparent drop-shadow-[0_0_30px_rgba(255,255,255,0.6)] sm:text-[122px] xl:text-[148px]">
+                  Y
+                </span>
+              </motion.div>
+            </motion.div>
+          </div>
+
+          <OrbitTrack
+            width="96%"
+            height="25%"
+            tilt={-9}
+            duration={19}
+            reverse
+            foreground
+            className="border-cyan-100/65 shadow-[0_0_24px_rgba(103,232,249,0.45),inset_0_0_18px_rgba(103,232,249,0.12)]"
+            reducedMotion={reducedMotion}
           />
-
-          <div className="absolute inset-[28%] rounded-full border border-cyan-100/10 bg-[radial-gradient(circle_at_40%_34%,rgba(255,255,255,0.12),rgba(51,117,224,0.12),rgba(2,6,23,0.72))]" />
-
-          <motion.div
-            className="absolute inset-[32%] flex items-center justify-center rounded-full"
-            animate={reducedMotion ? undefined : { scale: [1, 1.035, 1] }}
-            transition={{ duration: 3.8, repeat: Infinity, ease: 'easeInOut' }}
-          >
-            <span className="select-none bg-gradient-to-b from-white via-cyan-100 to-sky-300 bg-clip-text font-display text-[92px] font-black leading-none text-transparent drop-shadow-[0_0_28px_rgba(255,255,255,0.45)] sm:text-[118px] lg:text-[140px]">
-              Y
-            </span>
-          </motion.div>
 
           {PARTICLES.map((particle) => (
             <motion.span
               key={particle.id}
-              className="absolute rounded-full bg-cyan-100 shadow-[0_0_14px_rgba(165,243,252,0.95)]"
+              className="absolute z-40 rounded-full bg-cyan-100 shadow-[0_0_14px_rgba(165,243,252,0.95)]"
               style={{
                 top: particle.top,
                 left: particle.left,
@@ -170,8 +213,8 @@ export default function YuiCoreHero() {
                 height: particle.size,
               }}
               animate={reducedMotion ? undefined : {
-                opacity: [0.18, 0.95, 0.25],
-                scale: [1, 1.65, 1],
+                opacity: [0.18, 0.95, 0.24],
+                scale: [1, 1.55, 1],
               }}
               transition={{
                 duration: particle.duration,
@@ -181,43 +224,30 @@ export default function YuiCoreHero() {
               }}
             />
           ))}
-
-          <div className="absolute left-1/2 top-1/2 h-px w-[106%] -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-transparent via-cyan-100/20 to-transparent" />
-          <div className="absolute left-1/2 top-1/2 h-[106%] w-px -translate-x-1/2 -translate-y-1/2 bg-gradient-to-b from-transparent via-violet-100/12 to-transparent" />
-
-          <div className="absolute right-[15%] top-[15%] rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.22em] text-cyan-100 sm:text-[10px]">
-            Fluxo inteligente
-          </div>
-          <div className="absolute left-[15%] top-[18%] rounded-full border border-emerald-300/20 bg-emerald-300/10 px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.22em] text-emerald-100 sm:text-[10px]">
-            Modular
-          </div>
-          <div className="absolute bottom-[16%] right-[15%] rounded-full border border-violet-300/20 bg-violet-300/10 px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.22em] text-violet-100 sm:text-[10px]">
-            Interativo
-          </div>
-
-          <motion.div
-            className="absolute bottom-[7%] left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-[#06101f]/70 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-white/60 backdrop-blur-md sm:text-xs"
-            animate={reducedMotion ? undefined : { opacity: [0.66, 1, 0.66] }}
-            transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
-          >
-            <Sparkles size={13} className="text-cyan-200" />
-            Yui Core · ecossistema em movimento
-          </motion.div>
         </div>
       </motion.div>
 
-      <div className="mt-2 grid grid-cols-2 gap-3 px-4 xl:hidden">
+      <motion.div
+        className="absolute bottom-[2%] left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-[#07101e]/80 px-4 py-2 text-[9px] uppercase tracking-[0.2em] text-white/55 backdrop-blur-md sm:text-[10px]"
+        animate={reducedMotion ? undefined : { opacity: [0.65, 1, 0.65] }}
+        transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }}
+      >
+        <Sparkles size={13} className="text-cyan-200" />
+        Yui Core · ecossistema sincronizado
+      </motion.div>
+
+      <div className="absolute inset-x-3 bottom-4 z-50 grid grid-cols-2 gap-2 xl:hidden">
         {CALLOUTS.map((item) => {
           const Icon = item.icon
           return (
-            <div key={item.title} className="rounded-2xl border border-white/10 bg-white/[0.035] p-3 backdrop-blur-md">
+            <div key={item.title} className="rounded-xl border border-white/10 bg-[#07101e]/85 p-2.5 backdrop-blur-md">
               <div className="flex items-center gap-2">
-                <div className={`flex h-9 w-9 items-center justify-center rounded-xl border ${item.accent}`}>
-                  <Icon size={15} />
+                <div className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg border ${item.accent}`}>
+                  <Icon size={14} />
                 </div>
                 <div>
-                  <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/80">{item.title}</p>
-                  <p className="mt-0.5 text-[11px] leading-4 text-white/50">{item.text}</p>
+                  <p className="text-[9px] font-bold uppercase tracking-[0.15em] text-white/80">{item.title}</p>
+                  <p className="mt-0.5 line-clamp-1 text-[10px] text-white/45">{item.text}</p>
                 </div>
               </div>
             </div>
