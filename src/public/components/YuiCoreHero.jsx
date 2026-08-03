@@ -71,8 +71,8 @@ function CalloutCard({ item }) {
           <Icon size={18} />
         </div>
         <div>
-          <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/85">{item.title}</p>
-          <p className="mt-1 text-xs leading-5 text-white/58">{item.text}</p>
+          <p className="text-[11px] font-bold uppercase tracking-[0.2em] text-white/80">{item.title}</p>
+          <p className="mt-1 text-xs leading-5 text-white/60">{item.text}</p>
         </div>
       </div>
     </motion.div>
@@ -99,16 +99,16 @@ export default function YuiCoreHero() {
       <div className="pointer-events-none absolute left-1/2 top-1/2 h-[72%] w-[72%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(37,170,255,0.15),rgba(115,79,255,0.08)_42%,transparent_72%)] blur-3xl" />
 
       <div className="pointer-events-none absolute left-[14%] top-[30%] hidden h-px w-[26%] bg-gradient-to-r from-cyan-300/50 to-transparent xl:block" />
-      <div className="pointer-events-none absolute right-[14%] top-[29%] hidden h-px w-[26%] bg-gradient-to-l from-violet-300/45 to-transparent xl:block" />
-      <div className="pointer-events-none absolute bottom-[29%] left-[15%] hidden h-px w-[25%] bg-gradient-to-r from-emerald-300/45 to-transparent xl:block" />
-      <div className="pointer-events-none absolute bottom-[28%] right-[14%] hidden h-px w-[27%] bg-gradient-to-l from-sky-300/45 to-transparent xl:block" />
+      <div className="pointer-events-none absolute right-[14%] top-[29%] hidden h-px w-[26%] bg-gradient-to-l from-violet-300/40 to-transparent xl:block" />
+      <div className="pointer-events-none absolute bottom-[29%] left-[15%] hidden h-px w-[25%] bg-gradient-to-r from-emerald-300/40 to-transparent xl:block" />
+      <div className="pointer-events-none absolute bottom-[28%] right-[14%] hidden h-px w-[27%] bg-gradient-to-l from-sky-300/40 to-transparent xl:block" />
 
       {CALLOUTS.map((item) => <CalloutCard key={item.title} item={item} />)}
 
       <motion.div
         animate={reducedMotion ? undefined : { y: [0, -8, 0] }}
         transition={{ duration: 6.5, repeat: Infinity, ease: 'easeInOut' }}
-        className="relative z-20 mx-auto flex h-[440px] w-[440px] items-center justify-center sm:h-[540px] sm:w-[540px] lg:h-[620px] lg:w-[620px]"
+        className="relative z-20 mx-auto flex aspect-square w-[92vw] max-w-[440px] items-center justify-center sm:max-w-[540px] lg:max-w-[620px]"
       >
         <div
           onPointerMove={handlePointerMove}
@@ -119,18 +119,18 @@ export default function YuiCoreHero() {
           <div className="absolute inset-[4%] rounded-full border border-cyan-200/10 bg-[radial-gradient(circle_at_50%_50%,rgba(53,185,255,0.04),transparent_67%)] shadow-[0_0_80px_rgba(37,170,255,0.12)]" />
 
           <Orbit
-            className="inset-[9%] border-cyan-200/35 shadow-[0_0_32px_rgba(103,232,249,0.24)]"
+            className="inset-[9%] border-cyan-200/40 shadow-[0_0_32px_rgba(103,232,249,0.24)]"
             duration={20}
             reducedMotion={reducedMotion}
           />
           <Orbit
-            className="inset-[14%] border-emerald-200/28 shadow-[0_0_34px_rgba(110,231,183,0.18)]"
+            className="inset-[14%] border-emerald-200/30 shadow-[0_0_34px_rgba(110,231,183,0.18)]"
             duration={25}
             reverse
             reducedMotion={reducedMotion}
           />
           <Orbit
-            className="inset-[19%] border-violet-200/28 shadow-[0_0_36px_rgba(196,181,253,0.2)]"
+            className="inset-[19%] border-violet-200/30 shadow-[0_0_36px_rgba(196,181,253,0.2)]"
             duration={30}
             reducedMotion={reducedMotion}
           />
@@ -182,7 +182,7 @@ export default function YuiCoreHero() {
             />
           ))}
 
-          <div className="absolute left-1/2 top-1/2 h-px w-[106%] -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-transparent via-cyan-100/18 to-transparent" />
+          <div className="absolute left-1/2 top-1/2 h-px w-[106%] -translate-x-1/2 -translate-y-1/2 bg-gradient-to-r from-transparent via-cyan-100/20 to-transparent" />
           <div className="absolute left-1/2 top-1/2 h-[106%] w-px -translate-x-1/2 -translate-y-1/2 bg-gradient-to-b from-transparent via-violet-100/12 to-transparent" />
 
           <div className="absolute right-[15%] top-[15%] rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-[9px] font-semibold uppercase tracking-[0.22em] text-cyan-100 sm:text-[10px]">
@@ -196,7 +196,7 @@ export default function YuiCoreHero() {
           </div>
 
           <motion.div
-            className="absolute bottom-[7%] left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-[#06101f]/70 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-white/65 backdrop-blur-md sm:text-xs"
+            className="absolute bottom-[7%] left-1/2 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-[#06101f]/70 px-4 py-2 text-[10px] uppercase tracking-[0.18em] text-white/60 backdrop-blur-md sm:text-xs"
             animate={reducedMotion ? undefined : { opacity: [0.66, 1, 0.66] }}
             transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
           >
@@ -217,7 +217,7 @@ export default function YuiCoreHero() {
                 </div>
                 <div>
                   <p className="text-[10px] font-bold uppercase tracking-[0.16em] text-white/80">{item.title}</p>
-                  <p className="mt-0.5 text-[11px] leading-4 text-white/52">{item.text}</p>
+                  <p className="mt-0.5 text-[11px] leading-4 text-white/50">{item.text}</p>
                 </div>
               </div>
             </div>
