@@ -92,42 +92,44 @@ void main() {
   vec3 V = normalize(uCamera - vWorld);
   vec3 L = normalize(uLight - vWorld);
   float diffuse = max(dot(N, L), 0.0);
-  float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.0);
-  float specular = pow(max(dot(reflect(-L, N), V), 0.0), 78.0);
+  float fresnel = pow(1.0 - max(dot(N, V), 0.0), 3.2);
+  float specular = pow(max(dot(reflect(-L, N), V), 0.0), 96.0);
 
   if (uMaterial < 0.5) {
-    float plasma = noise3(vWorld * 2.6 + vec3(uTime * .14, -uTime * .1, uTime * .08));
-    float veins = smoothstep(.48, .86, plasma);
-    vec3 deep = vec3(.006, .025, .105);
-    vec3 lit = uColor * (.24 + diffuse * .42 + veins * .46);
-    vec3 color = mix(deep, lit, .72);
-    color += vec3(.08, .45, 1.0) * fresnel * 1.72;
-    color += vec3(.9, .98, 1.0) * specular * 2.45;
-    color += vec3(.03, .2, .78) * plasma * .5;
+    float cloudA = noise3(vWorld * 2.4 + vec3(uTime * .08, -uTime * .06, uTime * .05));
+    float cloudB = noise3(vWorld * 5.2 + vec3(-uTime * .12, uTime * .09, uTime * .04));
+    float veins = smoothstep(.58, .88, cloudB);
+    vec3 deep = vec3(.004, .018, .075);
+    vec3 mid = mix(vec3(.018, .08, .31), uColor, .55 + cloudA * .25);
+    vec3 color = mix(deep, mid, .62 + diffuse * .18);
+    color += vec3(.02, .22, .88) * cloudA * .42;
+    color += vec3(.12, .72, 1.0) * veins * .38;
+    color += vec3(.08, .5, 1.0) * fresnel * 1.52;
+    color += vec3(.92, .98, 1.0) * specular * 2.8;
     outColor = vec4(color, uOpacity);
     return;
   }
 
   if (uMaterial < 1.5) {
-    float flow = noise3(vWorld * 5.4 + vec3(-uTime * .24, uTime * .14, uTime * .08));
-    float pulse = .8 + .2 * sin(uTime * 1.55 + vWorld.x * 2.4 + vWorld.z * 2.1);
-    vec3 color = uColor * (1.15 + flow * .64 + fresnel * .56) * pulse;
-    color += vec3(.65, .94, 1.0) * specular * 1.9;
+    float flow = noise3(vWorld * 6.0 + vec3(-uTime * .2, uTime * .11, uTime * .07));
+    float pulse = .82 + .16 * sin(uTime * 1.25 + vWorld.x * 2.1 + vWorld.z * 1.8);
+    vec3 color = uColor * (1.08 + flow * .5 + fresnel * .6) * pulse;
+    color += vec3(.78, .97, 1.0) * specular * 2.1;
     outColor = vec4(color, uOpacity);
     return;
   }
 
   if (uMaterial < 2.5) {
-    float pulse = .92 + .08 * sin(uTime * 2.0 + vWorld.y * 3.0);
-    vec3 color = mix(uColor, vec3(1.0), .72 + specular * .2);
-    color *= 1.72 * pulse;
-    color += vec3(.16, .76, 1.0) * fresnel * 1.45;
+    float pulse = .93 + .07 * sin(uTime * 1.7 + vWorld.y * 2.6);
+    vec3 color = mix(uColor, vec3(1.0), .76 + specular * .16);
+    color *= 1.46 * pulse;
+    color += vec3(.14, .68, 1.0) * fresnel * 1.1;
     outColor = vec4(color, uOpacity);
     return;
   }
 
-  vec3 glass = uColor * (.12 + fresnel * 1.7 + specular * 2.2);
-  outColor = vec4(glass, uOpacity * (.18 + fresnel * .82));
+  vec3 glass = uColor * (.08 + fresnel * 1.65 + specular * 2.4);
+  outColor = vec4(glass, uOpacity * (.12 + fresnel * .88));
 }`
 
 const POINT_VERTEX = `#version 300 es
@@ -136,27 +138,33 @@ layout(location=0) in vec3 aPosition;
 layout(location=1) in float aSize;
 uniform mat4 uViewProjection;
 uniform float uTime;
+uniform float uMotion;
 out float vGlow;
 void main() {
   vec3 p = aPosition;
-  p.x += sin(uTime * .16 + aPosition.y * 1.9) * .055;
-  p.y += cos(uTime * .13 + aPosition.x * 1.7) * .04;
+  p.x += sin(uTime * .13 + aPosition.y * 1.7) * .035 * uMotion;
+  p.y += cos(uTime * .11 + aPosition.x * 1.5) * .028 * uMotion;
   vec4 clip = uViewProjection * vec4(p, 1.0);
   gl_Position = clip;
-  gl_PointSize = aSize * (11.0 / max(1.0, clip.w));
-  vGlow = .55 + .45 * sin(uTime * 1.45 + aPosition.x * 4.4 + aPosition.y * 3.1);
+  gl_PointSize = aSize * (7.5 / max(1.0, clip.w));
+  vGlow = .52 + .48 * sin(uTime * 1.2 + aPosition.x * 4.1 + aPosition.y * 2.7);
 }`
 
 const POINT_FRAGMENT = `#version 300 es
 precision highp float;
 in float vGlow;
+uniform vec3 uColorA;
+uniform vec3 uColorB;
+uniform float uAlpha;
 out vec4 outColor;
 void main() {
   vec2 uv = gl_PointCoord * 2.0 - 1.0;
   float d = dot(uv, uv);
   if (d > 1.0) discard;
-  float alpha = smoothstep(1.0, 0.0, d) * (.3 + .7 * vGlow);
-  vec3 color = mix(vec3(.12, .55, 1.0), vec3(.78, 1.0, .92), vGlow);
+  float core = smoothstep(.32, 0.0, d);
+  float halo = smoothstep(1.0, .05, d);
+  float alpha = (core + halo * .34) * (.45 + .55 * vGlow) * uAlpha;
+  vec3 color = mix(uColorA, uColorB, vGlow);
   outColor = vec4(color, alpha);
 }`
 
@@ -311,7 +319,7 @@ function createSphere(radius = 1, latitude = 40, longitude = 56) {
   return { positions, normals, indices }
 }
 
-function createTorus(major = 2.2, minor = 0.03, radial = 18, tubular = 180) {
+function createTorus(major = 2.2, minor = 0.02, radial = 14, tubular = 180) {
   const positions = []
   const normals = []
   const indices = []
@@ -337,7 +345,7 @@ function createTorus(major = 2.2, minor = 0.03, radial = 18, tubular = 180) {
   return { positions, normals, indices }
 }
 
-function createCylinder(radial = 28) {
+function createCylinder(radial = 24) {
   const positions = []
   const normals = []
   const indices = []
@@ -387,14 +395,26 @@ function createMesh(gl, geometry) {
   }
 }
 
-function createParticles(gl, count = 220) {
+function createParticleCloud(gl, count, mode) {
   const data = []
   for (let index = 0; index < count; index += 1) {
     const angle = index * 2.399963
-    const radius = 2.0 + ((index * 13) % 29) / 29 * 2.5
-    const y = ((index * 37) % 100) / 100 * 5.6 - 2.8
-    const z = Math.sin(angle * 1.7) * 1.85 + ((index % 11) - 5) * 0.08
-    data.push(Math.cos(angle) * radius, y, z, 6 + (index % 6) * 2.6)
+    if (mode === 'inner') {
+      const radius = 0.16 + (((index * 17) % 97) / 97) * 0.98
+      const y = ((((index * 29) % 100) / 100) * 2 - 1) * 0.86
+      const radial = Math.sqrt(Math.max(0, 1 - y * y)) * radius
+      data.push(
+        Math.cos(angle) * radial,
+        y,
+        Math.sin(angle) * radial,
+        2.4 + (index % 4) * 0.7,
+      )
+    } else {
+      const radius = 2.1 + (((index * 13) % 41) / 41) * 2.35
+      const y = ((((index * 37) % 100) / 100) * 2 - 1) * 2.65
+      const z = Math.sin(angle * 1.6) * 1.5 + ((index % 9) - 4) * 0.08
+      data.push(Math.cos(angle) * radius, y, z, 3.4 + (index % 5) * 0.9)
+    }
   }
 
   const vao = gl.createVertexArray()
@@ -407,7 +427,6 @@ function createParticles(gl, count = 220) {
   gl.enableVertexAttribArray(1)
   gl.vertexAttribPointer(1, 1, gl.FLOAT, false, 16, 12)
   gl.bindVertexArray(null)
-
   return { vao, buffer, count }
 }
 
@@ -418,10 +437,10 @@ function CalloutCard({ item }) {
       <div className={`pointer-events-none absolute z-0 hidden h-px xl:block ${item.line}`} />
       <span className={`pointer-events-none absolute z-10 hidden h-1.5 w-1.5 rounded-full xl:block ${item.anchor}`} />
       <motion.div
-        initial={{ opacity: 0, y: 14 }}
+        initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.55, delay: 0.18, ease: 'easeOut' }}
-        className={`pointer-events-none absolute z-40 hidden w-[210px] select-none rounded-2xl border border-white/12 bg-[#06101f]/95 px-4 py-3 shadow-[0_22px_65px_rgba(0,0,0,0.46)] backdrop-blur-xl xl:block ${item.position}`}
+        transition={{ duration: 0.5, delay: 0.16, ease: 'easeOut' }}
+        className={`pointer-events-none absolute z-40 hidden w-[210px] select-none rounded-2xl border border-white/12 bg-[#06101f]/94 px-4 py-3 shadow-[0_22px_65px_rgba(0,0,0,0.46)] backdrop-blur-xl xl:block ${item.position}`}
       >
         <div className="flex items-center gap-3">
           <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border ${item.accent}`}>
@@ -471,16 +490,55 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
     }
 
     const sphere = createMesh(gl, createSphere())
-    const nodeSphere = createMesh(gl, createSphere(1, 20, 28))
+    const nodeSphere = createMesh(gl, createSphere(1, 16, 22))
     const cylinder = createMesh(gl, createCylinder())
-    const orbitMeshes = [
-      createMesh(gl, createTorus(2.44, 0.052)),
-      createMesh(gl, createTorus(2.18, 0.042)),
-      createMesh(gl, createTorus(2.64, 0.03)),
-      createMesh(gl, createTorus(2.32, 0.026)),
-      createMesh(gl, createTorus(2.78, 0.018)),
+
+    const orbitDefinitions = [
+      {
+        major: 2.3,
+        core: createMesh(gl, createTorus(2.3, 0.018)),
+        halo: createMesh(gl, createTorus(2.3, 0.052)),
+        color: [0.04, 0.78, 1],
+        speed: 0.08,
+        rotation: [0.42, 0.08, 0.14],
+        opacity: 0.9,
+        phases: [0.3, 2.2, 4.65],
+      },
+      {
+        major: 2.12,
+        core: createMesh(gl, createTorus(2.12, 0.015)),
+        halo: createMesh(gl, createTorus(2.12, 0.045)),
+        color: [0.18, 0.92, 0.72],
+        speed: -0.065,
+        rotation: [-0.62, 0.22, 0.86],
+        opacity: 0.78,
+        phases: [1.15, 3.6, 5.2],
+      },
+      {
+        major: 2.48,
+        core: createMesh(gl, createTorus(2.48, 0.013)),
+        halo: createMesh(gl, createTorus(2.48, 0.04)),
+        color: [0.56, 0.3, 1],
+        speed: 0.052,
+        rotation: [0.92, -0.22, -0.46],
+        opacity: 0.7,
+        phases: [0.8, 2.95, 5.55],
+      },
+      {
+        major: 2.58,
+        core: createMesh(gl, createTorus(2.58, 0.012)),
+        halo: createMesh(gl, createTorus(2.58, 0.036)),
+        color: [0.12, 0.62, 1],
+        speed: -0.042,
+        rotation: [0.24, 0.36, 1.12],
+        opacity: 0.62,
+        phases: [1.8, 4.3],
+        front: true,
+      },
     ]
-    const particles = createParticles(gl)
+
+    const outerParticles = createParticleCloud(gl, 150, 'outer')
+    const innerParticles = createParticleCloud(gl, 76, 'inner')
 
     const meshUniforms = {
       model: gl.getUniformLocation(meshProgram, 'uModel'),
@@ -496,6 +554,10 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
     const pointUniforms = {
       viewProjection: gl.getUniformLocation(pointProgram, 'uViewProjection'),
       time: gl.getUniformLocation(pointProgram, 'uTime'),
+      motion: gl.getUniformLocation(pointProgram, 'uMotion'),
+      colorA: gl.getUniformLocation(pointProgram, 'uColorA'),
+      colorB: gl.getUniformLocation(pointProgram, 'uColorB'),
+      alpha: gl.getUniformLocation(pointProgram, 'uAlpha'),
     }
 
     gl.enable(gl.DEPTH_TEST)
@@ -504,26 +566,14 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
     gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     gl.clearColor(0, 0, 0, 0)
 
-    const camera = [0, 0, 7.6]
-    const light = [-3.8, 4.6, 5.8]
+    const camera = [0, 0, 7.8]
+    const light = [-3.4, 4.4, 5.8]
     const colors = {
-      core: [0.055, 0.27, 0.92],
-      shell: [0.18, 0.72, 1],
-      cyan: [0.08, 0.85, 1],
-      blue: [0.16, 0.52, 1],
-      green: [0.18, 0.96, 0.72],
-      violet: [0.62, 0.34, 1],
-      ice: [0.68, 0.96, 1],
-      glyph: [0.34, 0.86, 1],
+      core: [0.035, 0.24, 0.9],
+      shell: [0.16, 0.7, 1],
+      glyph: [0.36, 0.84, 1],
+      warm: [1, 0.55, 0.24],
     }
-
-    const orbitDefinitions = [
-      { mesh: orbitMeshes[0], color: colors.cyan, speed: 0.11, x: 0.72, y: 0.12, z: 0.18, opacity: 0.95, nodes: [0.08, 1.74, 3.58, 5.22], major: 2.44 },
-      { mesh: orbitMeshes[1], color: colors.green, speed: -0.085, x: -0.82, y: 0.45, z: 0.92, opacity: 0.88, nodes: [0.7, 2.8, 4.74], major: 2.18 },
-      { mesh: orbitMeshes[2], color: colors.violet, speed: 0.065, x: 1.08, y: -0.34, z: -0.38, opacity: 0.74, nodes: [1.2, 3.24, 5.6], major: 2.64 },
-      { mesh: orbitMeshes[3], color: colors.blue, speed: -0.13, x: 0.28, y: 1.02, z: 0.16, opacity: 0.78, nodes: [0.42, 2.2, 4.3], major: 2.32 },
-      { mesh: orbitMeshes[4], color: colors.ice, speed: 0.045, x: -0.18, y: 0.62, z: 1.2, opacity: 0.56, nodes: [1.6, 4.86], major: 2.78 },
-    ]
 
     function resize() {
       const rect = canvas.getBoundingClientRect()
@@ -548,39 +598,56 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
       gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0)
     }
 
+    function drawParticles(cloud, viewProjection, time, palette) {
+      gl.useProgram(pointProgram)
+      gl.uniformMatrix4fv(pointUniforms.viewProjection, false, viewProjection)
+      gl.uniform1f(pointUniforms.time, time)
+      gl.uniform1f(pointUniforms.motion, reducedMotion ? 0 : palette.motion)
+      gl.uniform3fv(pointUniforms.colorA, palette.colorA)
+      gl.uniform3fv(pointUniforms.colorB, palette.colorB)
+      gl.uniform1f(pointUniforms.alpha, palette.alpha)
+      gl.bindVertexArray(cloud.vao)
+      gl.drawArrays(gl.POINTS, 0, cloud.count)
+      gl.bindVertexArray(null)
+    }
+
     let rootRotation = mat4Identity()
 
     function orbitModel(definition, spin) {
+      const [x, y, z] = definition.rotation
       return mat4Multiply(
         rootRotation,
         mat4Multiply(
           mat4RotationY(spin * definition.speed),
-          mat4Multiply(
-            mat4RotationX(definition.x),
-            mat4Multiply(mat4RotationY(definition.y), mat4RotationZ(definition.z)),
-          ),
+          mat4Multiply(mat4RotationX(x), mat4Multiply(mat4RotationY(y), mat4RotationZ(z))),
         ),
       )
     }
 
-    function drawOrbitNodes(definition, model, time) {
-      const pulse = 0.095 + Math.sin(time * 2.0) * 0.008
-      definition.nodes.forEach((phase, index) => {
-        const angle = phase + time * definition.speed * (index % 2 === 0 ? 1.5 : -1.15)
+    function drawOrbit(definition, model, time) {
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
+      gl.depthMask(false)
+      drawMesh(definition.halo, model, definition.color, 1, definition.opacity * 0.12)
+      drawMesh(definition.core, model, definition.color, 1, definition.opacity)
+
+      definition.phases.forEach((phase, index) => {
+        const angle = phase + time * definition.speed * (index % 2 === 0 ? 1.4 : -1.1)
         const local = mat4Translation(
           Math.cos(angle) * definition.major,
-          Math.sin(angle * 1.7) * 0.04,
+          Math.sin(angle * 1.6) * 0.025,
           Math.sin(angle) * definition.major,
         )
-        const size = pulse * (1 + (index % 3) * 0.18)
+        const size = 0.035 + (index % 3) * 0.012
         drawMesh(
           nodeSphere,
           mat4Multiply(model, mat4Multiply(local, mat4Scale(size, size, size))),
-          definition.color,
-          2,
-          0.98,
+          index === 1 && definition.front ? colors.warm : definition.color,
+          1,
+          0.84,
         )
       })
+      gl.depthMask(true)
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
     }
 
     const observer = new ResizeObserver(resize)
@@ -591,16 +658,16 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
 
       const time = now * 0.001
       const aspect = resize()
-      const projection = mat4Perspective(Math.PI / 4.15, aspect, 0.1, 100)
+      const projection = mat4Perspective(Math.PI / 4.1, aspect, 0.1, 100)
       const viewProjection = mat4Multiply(projection, mat4Translation(0, 0, -camera[2]))
       const pointer = pointerRef.current
-      pointer.x += (pointer.targetX - pointer.x) * 0.04
-      pointer.y += (pointer.targetY - pointer.y) * 0.04
+      pointer.x += (pointer.targetX - pointer.x) * 0.035
+      pointer.y += (pointer.targetY - pointer.y) * 0.035
       rootRotation = mat4Multiply(
-        mat4RotationY(pointer.x * 0.22),
-        mat4RotationX(pointer.y * 0.16),
+        mat4RotationY(pointer.x * 0.18),
+        mat4RotationX(pointer.y * 0.12),
       )
-      const breathing = reducedMotion ? 1 : 1 + Math.sin(time * 0.95) * 0.012
+      const breathing = reducedMotion ? 1 : 1 + Math.sin(time * 0.8) * 0.009
       const spin = reducedMotion ? 0 : time
 
       gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT)
@@ -611,84 +678,86 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
       gl.uniform3fv(meshUniforms.light, light)
       gl.uniform1f(meshUniforms.time, time)
 
-      gl.useProgram(pointProgram)
-      gl.uniformMatrix4fv(pointUniforms.viewProjection, false, viewProjection)
-      gl.uniform1f(pointUniforms.time, time)
       gl.depthMask(false)
-      gl.bindVertexArray(particles.vao)
-      gl.drawArrays(gl.POINTS, 0, particles.count)
-      gl.bindVertexArray(null)
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
+      drawParticles(outerParticles, viewProjection, time, {
+        colorA: [0.08, 0.45, 1],
+        colorB: [0.55, 1, 0.84],
+        alpha: 0.5,
+        motion: 1,
+      })
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
       gl.depthMask(true)
 
-      orbitDefinitions.slice(0, 4).forEach((definition) => {
-        const model = orbitModel(definition, spin)
-        drawMesh(definition.mesh, model, definition.color, 1, definition.opacity)
-        drawOrbitNodes(definition, model, time)
+      orbitDefinitions.filter((item) => !item.front).forEach((definition) => {
+        drawOrbit(definition, orbitModel(definition, spin), time)
       })
 
       drawMesh(
         sphere,
-        mat4Multiply(rootRotation, mat4Scale(1.36 * breathing, 1.36 * breathing, 1.36 * breathing)),
+        mat4Multiply(rootRotation, mat4Scale(1.17 * breathing, 1.17 * breathing, 1.17 * breathing)),
         colors.core,
         0,
-        0.86,
+        0.64,
+      )
+      drawMesh(
+        sphere,
+        mat4Multiply(rootRotation, mat4Scale(0.83 * breathing, 0.83 * breathing, 0.83 * breathing)),
+        [0.04, 0.42, 1],
+        0,
+        0.42,
       )
 
       gl.depthMask(false)
       drawMesh(
         sphere,
-        mat4Multiply(rootRotation, mat4Scale(1.49 * breathing, 1.49 * breathing, 1.49 * breathing)),
+        mat4Multiply(rootRotation, mat4Scale(1.28 * breathing, 1.28 * breathing, 1.28 * breathing)),
         colors.shell,
         3,
-        0.42,
+        0.27,
       )
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
+      drawParticles(innerParticles, viewProjection, time, {
+        colorA: [0.16, 0.62, 1],
+        colorB: [0.88, 0.98, 1],
+        alpha: 0.58,
+        motion: 0.25,
+      })
+      gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
       gl.depthMask(true)
 
       gl.disable(gl.DEPTH_TEST)
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE)
 
-      const glyphRoot = mat4Multiply(rootRotation, mat4Translation(0, -0.04, 1.68))
-      const joint = [0, 0.12, 0]
-      const upperLeft = [-0.6, 0.76, 0]
-      const upperRight = [0.6, 0.76, 0]
-      const lower = [0, -0.86, 0]
-      const segments = [upperLeft, upperRight, lower]
-      const pulseRadius = reducedMotion ? 0.11 : 0.11 + Math.sin(time * 1.9) * 0.004
+      const glyphRoot = mat4Multiply(rootRotation, mat4Translation(0, -0.015, 1.15))
+      const joint = [0, 0.08, 0]
+      const upperLeft = [-0.34, 0.5, 0]
+      const upperRight = [0.34, 0.5, 0]
+      const lower = [0, -0.52, 0]
+      const ends = [upperLeft, upperRight, lower]
+      const radius = reducedMotion ? 0.055 : 0.055 + Math.sin(time * 1.6) * 0.0015
 
-      segments.forEach((end) => {
-        drawMesh(cylinder, mat4Multiply(glyphRoot, mat4Segment(joint, end, pulseRadius * 1.85)), colors.cyan, 2, 0.16)
+      ends.forEach((end) => {
+        drawMesh(cylinder, mat4Multiply(glyphRoot, mat4Segment(joint, end, radius * 1.8)), colors.glyph, 2, 0.11)
+      })
+      ends.forEach((end) => {
+        drawMesh(cylinder, mat4Multiply(glyphRoot, mat4Segment(joint, end, radius)), colors.glyph, 2, 0.92)
       })
       ;[joint, upperLeft, upperRight, lower].forEach((point) => {
         drawMesh(
           nodeSphere,
-          mat4Multiply(glyphRoot, mat4Multiply(mat4Translation(...point), mat4Scale(0.24, 0.24, 0.24))),
-          colors.cyan,
-          2,
-          0.12,
-        )
-      })
-
-      segments.forEach((end) => {
-        drawMesh(cylinder, mat4Multiply(glyphRoot, mat4Segment(joint, end, pulseRadius)), colors.glyph, 2, 1)
-      })
-      ;[joint, upperLeft, upperRight, lower].forEach((point) => {
-        drawMesh(
-          nodeSphere,
-          mat4Multiply(glyphRoot, mat4Multiply(mat4Translation(...point), mat4Scale(0.15, 0.15, 0.15))),
+          mat4Multiply(glyphRoot, mat4Multiply(mat4Translation(...point), mat4Scale(0.068, 0.068, 0.068))),
           colors.glyph,
           2,
-          1,
+          0.92,
         )
       })
 
-      const frontDefinition = orbitDefinitions[4]
-      const frontModel = orbitModel(frontDefinition, spin)
-      drawMesh(frontDefinition.mesh, frontModel, frontDefinition.color, 1, frontDefinition.opacity)
-      drawOrbitNodes(frontDefinition, frontModel, time)
+      gl.enable(gl.DEPTH_TEST)
+      const frontOrbit = orbitDefinitions.find((item) => item.front)
+      drawOrbit(frontOrbit, orbitModel(frontOrbit, spin), time)
 
       gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA)
-      gl.enable(gl.DEPTH_TEST)
-
       frameId = requestAnimationFrame(render)
     }
 
@@ -700,12 +769,16 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
       observer.disconnect()
       gl.deleteProgram(meshProgram)
       gl.deleteProgram(pointProgram)
-      ;[sphere, nodeSphere, cylinder, ...orbitMeshes].forEach((mesh) => {
+      const meshes = [sphere, nodeSphere, cylinder]
+      orbitDefinitions.forEach((definition) => meshes.push(definition.core, definition.halo))
+      meshes.forEach((mesh) => {
         gl.deleteVertexArray(mesh.vao)
         mesh.buffers.forEach((buffer) => gl.deleteBuffer(buffer))
       })
-      gl.deleteVertexArray(particles.vao)
-      gl.deleteBuffer(particles.buffer)
+      ;[outerParticles, innerParticles].forEach((cloud) => {
+        gl.deleteVertexArray(cloud.vao)
+        gl.deleteBuffer(cloud.buffer)
+      })
     }
   }, [onUnavailable, reducedMotion])
 
@@ -725,7 +798,7 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
         pointerRef.current.targetY = 0
       }}
       className="absolute inset-0 h-full w-full cursor-default"
-      aria-label="Yui Core tridimensional com núcleo vítreo, órbitas tubulares e partículas"
+      aria-label="Yui Core tridimensional com núcleo vítreo, órbitas luminosas e partículas"
     />
   )
 }
@@ -733,8 +806,8 @@ function WebGLCore({ reducedMotion, onUnavailable }) {
 function StaticFallback() {
   return (
     <div className="absolute inset-0 flex items-center justify-center">
-      <div className="relative h-[330px] w-[330px] rounded-full border border-cyan-100/25 bg-[radial-gradient(circle_at_30%_22%,rgba(255,255,255,.28),rgba(36,126,255,.36)_30%,rgba(4,16,56,.96)_76%)] shadow-[0_0_100px_rgba(41,137,255,.55),inset_0_0_64px_rgba(255,255,255,.1)]">
-        <span className="absolute inset-0 flex items-center justify-center font-display text-[148px] font-black text-cyan-50 drop-shadow-[0_0_30px_rgba(125,220,255,.9)]">
+      <div className="relative h-[300px] w-[300px] rounded-full border border-cyan-100/25 bg-[radial-gradient(circle_at_30%_22%,rgba(255,255,255,.26),rgba(36,126,255,.3)_30%,rgba(4,16,56,.94)_76%)] shadow-[0_0_100px_rgba(41,137,255,.5),inset_0_0_64px_rgba(255,255,255,.1)]">
+        <span className="absolute inset-0 flex items-center justify-center font-display text-[112px] font-black text-cyan-50 drop-shadow-[0_0_24px_rgba(125,220,255,.8)]">
           Y
         </span>
       </div>
@@ -749,7 +822,7 @@ export default function YuiCoreHero() {
 
   return (
     <div className="relative mx-auto h-[500px] w-full max-w-[840px] select-none sm:h-[570px] xl:h-[615px]">
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[80%] w-[84%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(34,145,255,.24),rgba(77,52,205,.11)_42%,transparent_72%)] blur-3xl" />
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[80%] w-[84%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(34,145,255,.22),rgba(77,52,205,.1)_42%,transparent_72%)] blur-3xl" />
       {CALLOUTS.map((item) => <CalloutCard key={item.title} item={item} />)}
       <div className="absolute inset-[1%] z-20">
         {unavailable
@@ -757,9 +830,9 @@ export default function YuiCoreHero() {
           : <WebGLCore reducedMotion={reducedMotion} onUnavailable={markUnavailable} />}
       </div>
       <motion.div
-        className="pointer-events-none absolute bottom-[6%] left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/12 bg-[#06101f]/88 px-4 py-2 text-[9px] uppercase tracking-[0.2em] text-white/64 shadow-[0_12px_36px_rgba(0,0,0,0.32)] backdrop-blur-md sm:text-[10px]"
-        animate={reducedMotion ? undefined : { opacity: [0.72, 1, 0.72] }}
-        transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }}
+        className="pointer-events-none absolute bottom-[6%] left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/12 bg-[#06101f]/86 px-4 py-2 text-[9px] uppercase tracking-[0.2em] text-white/62 shadow-[0_12px_36px_rgba(0,0,0,0.3)] backdrop-blur-md sm:text-[10px]"
+        animate={reducedMotion ? undefined : { opacity: [0.76, 1, 0.76] }}
+        transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
       >
         <Sparkles size={13} className="text-cyan-200" />
         Yui Core · núcleo orbital tridimensional
