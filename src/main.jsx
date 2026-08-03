@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import './index.css'
 import './performance.css'
 import './petshopClientCards.css'
+import './metaWhatsappReview.css'
 import App from './App'
 import { SiteLegalFooterPortal } from './public/components/SiteLegalFooterPortal'
 
