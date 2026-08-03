@@ -1,5 +1,18 @@
 begin;
 
+alter table public.appointments
+  drop constraint if exists appointments_transport_mode_check;
+
+alter table public.appointments
+  add constraint appointments_transport_mode_check
+  check (
+    transport_mode is null
+    or transport_mode in (
+      'cliente_leva', 'motodog', 'buscar_e_levar',
+      'buscar_e_levar_fora_muriae', 'somente_buscar', 'somente_levar'
+    )
+  );
+
 update public.settings settings
 set pet_transport_options = coalesce((
   select jsonb_agg(option_item)

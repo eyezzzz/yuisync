@@ -19,7 +19,7 @@ export {
 // getDateBounds(startDate).start, getDateBounds(endDate).end e
 // .is('responsible_staff_key', null). Esta fachada substitui somente o
 // carregamento do catálogo de serviços usado pela Agenda.
-const VALID_SERVICE_GROUPS = new Set(['banho_tosa', 'veterinaria', 'outro'])
+const VALID_SERVICE_GROUPS = new Set(['banho_tosa', 'veterinaria', 'motoboy', 'outro'])
 
 const normalizeCatalogText = (value = '') => String(value || '')
   .normalize('NFD')
@@ -60,6 +60,7 @@ const inferCatalogServiceGroup = (service = {}) => {
     service.code,
   ].filter(Boolean).join(' '))
 
+  if (/motodog|moto dog|motoboy|entrega|transporte|retirada|buscar|levar|delivery|frete/.test(text)) return 'motoboy'
   if (/vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao|hemograma|radiograf|raio[ -]?x|coleta|sorolog|odontolog|anestesia|medicacao|eletrocard|ecocard|emergencia|procedimento/.test(text)) return 'veterinaria'
   if (/banho|tosa|tosagem|tosar|trim|trimming|stripping|acabamento|penteado|desembolo|desembarac|escovac|hidrat|higien|groom|perfume|spa|unha|ouvido|orelha/.test(text)) return 'banho_tosa'
   return 'outro'
@@ -175,7 +176,9 @@ export function usePetshopAdvanced() {
           icon: linked.icon || (
             groupType === 'veterinaria'
               ? 'stethoscope'
-              : groupType === 'banho_tosa' ? 'droplets' : 'paw'
+              : groupType === 'banho_tosa'
+                ? 'droplets'
+                : groupType === 'motoboy' ? 'bike' : 'paw'
           ),
           source_product_id: product.id,
           service_source: 'product',

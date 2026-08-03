@@ -15,6 +15,7 @@ const EstoquePage = lazy(() => import('../modules/petshop/pages/EstoquePage'))
 const PetsPage = lazy(() => import('../modules/petshop/pages/PetsPage'))
 const ChatPage = lazy(() => import('../modules/petshop/pages/ChatPage'))
 const PlanosPage = lazy(() => import('../modules/petshop/pages/PlanosCheckoutIntegratedPage'))
+const ServicosPage = lazy(() => import('../modules/petshop/pages/ServicosPage'))
 const FidelidadePage = lazy(() => import('../modules/petshop/pages/FidelidadePage'))
 const EquipePage = lazy(() => import('../modules/petshop/pages/EquipePage'))
 const CampanhasPage = lazy(() => import('../modules/petshop/pages/CampanhasPage'))
@@ -122,6 +123,7 @@ export const MODULES = {
         title: 'Estoque',
         items: [
           { id: 'estoque', label: 'Estoque', icon: Package, roles: ['admin_pet'] },
+          { id: 'servicos', label: 'Serviços', icon: ClipboardList, roles: ['admin_pet'] },
         ],
       },
       {
@@ -149,6 +151,7 @@ export const MODULES = {
       ordens: OrdensEntregaPage,
       growth: GrowthPage,
       estoque: EstoquePage,
+      servicos: ServicosPage,
       pets: PetsWithClientHistory,
       fidelidade: FidelidadePage,
       chat: ChatPage,
