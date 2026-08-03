@@ -1,0 +1,61 @@
+.planos-responsive-shell,
+.planos-responsive-shell > *,
+.planos-responsive-shell .page {
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.planos-responsive-shell {
+  overflow-x: clip;
+}
+
+.planos-responsive-shell section {
+  min-width: 0;
+  max-width: 100%;
+}
+
+.planos-responsive-shell section > .overflow-x-auto {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
+  scrollbar-gutter: stable;
+}
+
+.planos-responsive-shell .tbl {
+  width: 100%;
+  min-width: 1080px !important;
+}
+
+.planos-responsive-shell .tbl th:last-child,
+.planos-responsive-shell .tbl td:last-child {
+  width: 310px;
+  min-width: 310px;
+}
+
+.planos-responsive-shell .tbl td:last-child > div {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.5rem;
+}
+
+.planos-responsive-shell .tbl td:last-child .btn {
+  width: 100%;
+  min-width: 0;
+  justify-content: center;
+  white-space: normal;
+  text-align: center;
+}
+
+@media (max-width: 900px) {
+  .planos-responsive-shell .tbl {
+    min-width: 960px !important;
+  }
+
+  .planos-responsive-shell .tbl th:last-child,
+  .planos-responsive-shell .tbl td:last-child {
+    width: 280px;
+    min-width: 280px;
+  }
+}
