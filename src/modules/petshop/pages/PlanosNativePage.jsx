@@ -84,9 +84,24 @@ function clientMatches(client, query) {
   return terms.every((term) => haystack.includes(term))
 }
 
+function subscriptionIsCompleted(subscription = {}) {
+  if (subscription.status !== 'active') return false
+  const usage = buildEditableUsage(subscription)
+  return usage.length > 0 && usage.every((item) => (
+    item.total > 0
+    && item.used >= item.total
+    && item.reserved === 0
+  ))
+}
+
+function effectiveSubscriptionStatus(subscription = {}) {
+  return subscriptionIsCompleted(subscription) ? 'completed' : subscription.status
+}
+
 function statusMeta(status) {
   return {
     active: { label: 'Ativo', cls: 'badge-green' },
+    completed: { label: 'Concluído', cls: 'badge-blue' },
     paused: { label: 'Pausado', cls: 'badge-gray' },
     cancelled: { label: 'Cancelado', cls: 'badge-red' },
     pending_payment: { label: 'Aguardando pagamento', cls: 'badge-amber' },
@@ -529,18 +544,27 @@ export default function PlanosNativePage({ setPage }) {
   const [subscriptionModal, setSubscriptionModal] = useState(false)
   const [editingUsage, setEditingUsage] = useState(null)
   const [cancelling, setCancelling] = useState(null)
+  const [renewingId, setRenewingId] = useState('')
   const runScoped = useMemo(() => (runner) => runWithTenantFallback(activeTenantId, runner), [activeTenantId])
 
-  const activeSubscriptions = subscriptions.filter((subscription) => subscription.status === 'active')
+  const activeSubscriptions = subscriptions.filter((subscription) => (
+    subscription.status === 'active' && !subscriptionIsCompleted(subscription)
+  ))
   const activeByPlan = useMemo(() => activeSubscriptions.reduce((map, subscription) => {
     map[subscription.plan_id] = (map[subscription.plan_id] || 0) + 1
     return map
   }, {}), [activeSubscriptions])
   const filteredSubscriptions = useMemo(
-    () => subscriptions.filter((subscription) => subscriptionMatchesSearch(subscription, search)),
+    () => subscriptions.filter((subscription) => subscriptionMatchesSearch({
+      ...subscription,
+      status: effectiveSubscriptionStatus(subscription),
+    }, search)),
     [subscriptions, search],
   )
-  const renewalsToday = subscriptions.filter((subscription) => subscription.next_billing_date === new Date().toISOString().slice(0, 10)).length
+  const renewalsToday = subscriptions.filter((subscription) => (
+    !subscriptionIsCompleted(subscription)
+    && subscription.next_billing_date === new Date().toISOString().slice(0, 10)
+  )).length
 
   async function reload() {
     setLoading(true)
@@ -571,13 +595,64 @@ export default function PlanosNativePage({ setPage }) {
     await reload()
   }
 
+  function focusSubscriptionPayment(subscriptionId) {
+    window.sessionStorage.setItem('yuisync:orders-tab', 'banho_tosa')
+    window.sessionStorage.setItem('yuisync:subscription-focus', subscriptionId)
+    setPage?.('ordens')
+  }
+
   async function handleSaveSubscription(payload) {
     const subscription = await saveSubscription(payload)
     await reload()
     if (subscription?.status === 'pending_payment') {
-      window.sessionStorage.setItem('yuisync:orders-tab', 'banho_tosa')
-      window.sessionStorage.setItem('yuisync:subscription-focus', subscription.id)
-      setPage?.('ordens')
+      focusSubscriptionPayment(subscription.id)
+    }
+  }
+
+  async function renewSubscription(subscription) {
+    if (!activeTenantId) {
+      setError('Selecione uma empresa ativa antes de renovar o pacote.')
+      return
+    }
+    if (!subscriptionIsCompleted(subscription)) {
+      setError('Este pacote ainda possui serviços disponíveis e não pode ser renovado como concluído.')
+      return
+    }
+    if (subscription.subscription_plans?.active === false) {
+      setError('Este pacote foi desativado. Reative o pacote antes de renovar.')
+      return
+    }
+
+    const pendingRenewal = subscriptions.find((candidate) => (
+      candidate.id !== subscription.id
+      && candidate.plan_id === subscription.plan_id
+      && candidate.client_id === subscription.client_id
+      && candidate.status === 'pending_payment'
+    ))
+    if (pendingRenewal) {
+      focusSubscriptionPayment(pendingRenewal.id)
+      return
+    }
+
+    setRenewingId(subscription.id)
+    setError('')
+    try {
+      const renewal = await saveSubscription({
+        plan_id: subscription.plan_id,
+        client_id: subscription.client_id,
+        status: 'active',
+        started_at: new Date().toISOString().slice(0, 10),
+        billing_cycle: subscription.subscription_plans?.billing_cycle,
+        plan: subscription.subscription_plans,
+      })
+      await reload()
+      if (renewal?.status === 'pending_payment') {
+        focusSubscriptionPayment(renewal.id)
+      }
+    } catch (renewError) {
+      setError(renewError?.message || 'Não foi possível renovar o pacote.')
+    } finally {
+      setRenewingId('')
     }
   }
 
@@ -617,7 +692,7 @@ export default function PlanosNativePage({ setPage }) {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="page-title flex items-center gap-2"><CreditCard size={22} className="text-emerald-400"/> Planos de Assinatura</h1>
-          <p className="page-sub">Venda, ativação, consumo e cancelamento dos pacotes.</p>
+          <p className="page-sub">Venda, ativação, consumo, conclusão e renovação dos pacotes.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={reload} className="btn btn-secondary"><RefreshCw size={15}/> Atualizar</button>
@@ -635,7 +710,7 @@ export default function PlanosNativePage({ setPage }) {
 
       <div className="rounded-2xl border border-emerald-500/20 bg-emerald-500/10 px-5 py-4">
         <p className="flex items-center gap-2 text-sm font-semibold text-text"><PackageCheck size={16} className="text-emerald-400"/> Fluxo financeiro do pacote</p>
-        <p className="mt-1 text-sm text-muted">A assinatura aguarda pagamento; após o recebimento, o pacote fica disponível na Agenda e os atendimentos apenas consomem o saldo.</p>
+        <p className="mt-1 text-sm text-muted">Ao consumir todos os serviços do ciclo, o pacote fica concluído. A renovação abre uma nova cobrança e preserva o ciclo anterior no histórico.</p>
       </div>
 
       {error && <p className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">{error}</p>}
@@ -670,7 +745,7 @@ export default function PlanosNativePage({ setPage }) {
         <div className="border-b border-[var(--border2)] px-5 py-3">
           <label className="relative block">
             <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-muted"/>
-            <input className="inp pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por tutor, pet, telefone ou pacote..." aria-label="Pesquisar assinantes"/>
+            <input className="inp pl-9" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por tutor, pet, telefone, pacote ou status..." aria-label="Pesquisar assinantes"/>
           </label>
         </div>
         <div className="overflow-x-auto">
@@ -679,20 +754,25 @@ export default function PlanosNativePage({ setPage }) {
             <tbody>
               {filteredSubscriptions.map((subscription) => {
                 const usage = buildCatalogUsageSummary(subscription, catalogServices)
-                const meta = statusMeta(subscription.status)
+                const completed = subscriptionIsCompleted(subscription)
+                const meta = statusMeta(effectiveSubscriptionStatus(subscription))
                 const editable = ['active', 'paused'].includes(subscription.status)
-                const cancellable = !['cancelled'].includes(subscription.status)
+                const cancellable = !completed && subscription.status !== 'cancelled'
                 return (
-                  <tr key={subscription.id} className={subscription.status === 'active' ? 'bg-emerald-500/5' : ''}>
+                  <tr key={subscription.id} className={completed ? 'bg-sky-500/5' : subscription.status === 'active' ? 'bg-emerald-500/5' : ''}>
                     <td><p className="font-semibold text-text">{subscription.client?.pet_name || subscription.client?.owner_name}</p><p className="text-xs text-muted">{subscription.client?.owner_name}</p></td>
                     <td><p className="font-semibold text-text">{subscription.subscription_plans?.name || '-'}</p><p className="text-xs text-muted">{fmtCurrency(subscription.subscription_plans?.price || 0)}</p></td>
                     <td><div className="flex max-w-xl flex-wrap gap-2">{usage.map((item) => <span key={`${subscription.id}-${item.service_type}`} className={`badge ${item.remaining > 0 ? 'badge-blue' : 'badge-gray'}`}>{item.label}: {item.used}/{item.total}</span>)}</div></td>
-                    <td><div className="flex items-center gap-2"><CalendarClock size={14} className="text-amber-400"/><span className="text-sm text-text">{subscription.next_billing_date || '-'}</span></div></td>
+                    <td><div className="flex items-center gap-2"><CalendarClock size={14} className={completed ? 'text-sky-400' : 'text-amber-400'}/><span className="text-sm text-text">{completed ? 'Ciclo concluído' : subscription.next_billing_date || '-'}</span></div></td>
                     <td><span className={`badge ${meta.cls}`}>{meta.label}</span></td>
                     <td>
                       <div className="flex flex-wrap gap-2">
                         <button type="button" disabled={!editable} onClick={() => setEditingUsage(subscription)} className="btn btn-secondary btn-sm whitespace-nowrap" title={editable ? 'Editar consumo do ciclo' : 'Disponível após ativação'}><PencilLine size={13}/> Editar consumo</button>
-                        <button type="button" disabled={!cancellable} onClick={() => setCancelling(subscription)} className="btn btn-danger btn-sm whitespace-nowrap"><Ban size={13}/> Cancelar</button>
+                        {completed ? (
+                          <button type="button" disabled={renewingId === subscription.id} onClick={() => renewSubscription(subscription)} className="btn btn-primary btn-sm whitespace-nowrap"><Repeat2 size={13}/> {renewingId === subscription.id ? 'Renovando...' : 'Renovar pacote'}</button>
+                        ) : (
+                          <button type="button" disabled={!cancellable} onClick={() => setCancelling(subscription)} className="btn btn-danger btn-sm whitespace-nowrap"><Ban size={13}/> Cancelar</button>
+                        )}
                       </div>
                     </td>
                   </tr>
