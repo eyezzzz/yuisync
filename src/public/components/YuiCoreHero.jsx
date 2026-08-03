@@ -7,43 +7,54 @@ const CALLOUTS = [
     title: 'Empresa',
     text: 'Gestão completa do negócio',
     icon: Building2,
-    position: 'left-0 top-[12%]',
-    line: 'left-[22%] top-[23%] w-[18%] bg-gradient-to-r from-cyan-200/55 to-transparent',
-    accent: 'border-cyan-300/25 bg-cyan-300/10 text-cyan-100',
+    position: 'left-0 top-[14%]',
+    line: 'left-[22%] top-[25%] w-[22%] bg-gradient-to-r from-cyan-200/70 via-cyan-200/35 to-transparent',
+    anchor: 'left-[43.2%] top-[24.45%] bg-cyan-200 shadow-[0_0_14px_rgba(165,243,252,0.95)]',
+    accent: 'border-cyan-300/30 bg-cyan-300/12 text-cyan-100',
   },
   {
     title: 'Equipe',
     text: 'Colaboração e produtividade',
     icon: Users2,
-    position: 'right-0 top-[9%]',
-    line: 'right-[22%] top-[22%] w-[18%] bg-gradient-to-l from-emerald-200/55 to-transparent',
-    accent: 'border-emerald-300/25 bg-emerald-300/10 text-emerald-100',
+    position: 'right-0 top-[12%]',
+    line: 'right-[22%] top-[24%] w-[22%] bg-gradient-to-l from-emerald-200/70 via-emerald-200/35 to-transparent',
+    anchor: 'right-[43.2%] top-[23.45%] bg-emerald-200 shadow-[0_0_14px_rgba(167,243,208,0.95)]',
+    accent: 'border-emerald-300/30 bg-emerald-300/12 text-emerald-100',
   },
   {
     title: 'Clientes',
     text: 'Experiência integrada e personalizada',
     icon: Bot,
-    position: 'bottom-[9%] left-[2%]',
-    line: 'bottom-[23%] left-[24%] w-[18%] bg-gradient-to-r from-violet-200/50 to-transparent',
-    accent: 'border-violet-300/25 bg-violet-300/10 text-violet-100',
+    position: 'bottom-[14%] left-[2%]',
+    line: 'bottom-[27%] left-[24%] w-[21%] bg-gradient-to-r from-violet-200/65 via-violet-200/32 to-transparent',
+    anchor: 'bottom-[26.45%] left-[44.2%] bg-violet-200 shadow-[0_0_14px_rgba(221,214,254,0.9)]',
+    accent: 'border-violet-300/30 bg-violet-300/12 text-violet-100',
   },
   {
     title: 'Automações',
     text: 'Processos inteligentes em movimento',
     icon: Workflow,
-    position: 'bottom-[8%] right-0',
-    line: 'bottom-[22%] right-[23%] w-[18%] bg-gradient-to-l from-sky-200/50 to-transparent',
-    accent: 'border-sky-300/25 bg-sky-300/10 text-sky-100',
+    position: 'bottom-[13%] right-0',
+    line: 'bottom-[26%] right-[23%] w-[21%] bg-gradient-to-l from-sky-200/65 via-sky-200/32 to-transparent',
+    anchor: 'bottom-[25.45%] right-[43.2%] bg-sky-200 shadow-[0_0_14px_rgba(186,230,253,0.9)]',
+    accent: 'border-sky-300/30 bg-sky-300/12 text-sky-100',
   },
 ]
 
-const PARTICLES = Array.from({ length: 30 }, (_, index) => ({
+const PARTICLES = Array.from({ length: 34 }, (_, index) => ({
   id: index,
-  top: `${8 + ((index * 29) % 82)}%`,
-  left: `${7 + ((index * 19) % 86)}%`,
-  delay: index * 0.11,
-  duration: 2.4 + (index % 6) * 0.38,
+  top: `${7 + ((index * 29) % 84)}%`,
+  left: `${6 + ((index * 19) % 88)}%`,
+  delay: index * 0.1,
+  duration: 2.3 + (index % 6) * 0.38,
   size: 2 + (index % 4),
+}))
+
+const STATIC_STARS = Array.from({ length: 24 }, (_, index) => ({
+  id: index,
+  top: `${9 + ((index * 37) % 78)}%`,
+  left: `${8 + ((index * 31) % 84)}%`,
+  opacity: 0.14 + (index % 4) * 0.09,
 }))
 
 function OrbitTrack({
@@ -83,19 +94,20 @@ function CalloutCard({ item }) {
   return (
     <>
       <div className={`pointer-events-none absolute z-0 hidden h-px xl:block ${item.line}`} />
+      <span className={`pointer-events-none absolute z-10 hidden h-1.5 w-1.5 rounded-full xl:block ${item.anchor}`} />
       <motion.div
         initial={{ opacity: 0, y: 14 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.55, delay: 0.18, ease: 'easeOut' }}
-        className={`absolute z-40 hidden w-[205px] rounded-2xl border border-white/10 bg-[#07101e]/90 px-4 py-3 shadow-[0_20px_60px_rgba(0,0,0,0.36)] backdrop-blur-xl xl:block ${item.position}`}
+        className={`pointer-events-none absolute z-40 hidden w-[210px] select-none rounded-2xl border border-white/12 bg-[#06101f]/95 px-4 py-3 shadow-[0_22px_65px_rgba(0,0,0,0.46)] backdrop-blur-xl xl:block ${item.position}`}
       >
         <div className="flex items-center gap-3">
           <div className={`flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl border ${item.accent}`}>
             <Icon size={18} />
           </div>
           <div>
-            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/85">{item.title}</p>
-            <p className="mt-1 text-xs leading-5 text-white/55">{item.text}</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.2em] text-white/90">{item.title}</p>
+            <p className="mt-1 text-xs leading-5 text-white/62">{item.text}</p>
           </div>
         </div>
       </motion.div>
@@ -114,21 +126,29 @@ export default function YuiCoreHero() {
     const relativeY = (event.clientY - rect.top) / rect.height
 
     setTilt({
-      x: (relativeX - 0.5) * 10,
-      y: (relativeY - 0.5) * -8,
+      x: (relativeX - 0.5) * 9,
+      y: (relativeY - 0.5) * -7,
     })
   }
 
   return (
-    <div className="relative mx-auto h-[500px] w-full max-w-[860px] sm:h-[580px] xl:h-[640px]">
-      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[72%] w-[78%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(31,142,255,0.2),rgba(89,58,218,0.1)_40%,transparent_72%)] blur-3xl" />
-      <div className="pointer-events-none absolute bottom-[7%] left-1/2 h-[12%] w-[62%] -translate-x-1/2 rounded-full bg-cyan-400/10 blur-3xl" />
+    <div className="relative mx-auto h-[500px] w-full max-w-[840px] select-none sm:h-[570px] xl:h-[615px]">
+      <div className="pointer-events-none absolute left-1/2 top-1/2 h-[75%] w-[80%] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[radial-gradient(circle,rgba(34,145,255,0.25),rgba(77,52,205,0.12)_42%,transparent_72%)] blur-3xl" />
+      <div className="pointer-events-none absolute bottom-[10%] left-1/2 h-[11%] w-[58%] -translate-x-1/2 rounded-full bg-cyan-400/12 blur-3xl" />
+
+      {STATIC_STARS.map((star) => (
+        <span
+          key={star.id}
+          className="pointer-events-none absolute z-0 h-1 w-1 rounded-full bg-cyan-100"
+          style={{ top: star.top, left: star.left, opacity: star.opacity }}
+        />
+      ))}
 
       {CALLOUTS.map((item) => <CalloutCard key={item.title} item={item} />)}
 
       <motion.div
         className="absolute inset-[4%] z-20"
-        animate={reducedMotion ? undefined : { y: [0, -6, 0] }}
+        animate={reducedMotion ? undefined : { y: [0, -5, 0] }}
         transition={{ duration: 6.2, repeat: Infinity, ease: 'easeInOut' }}
       >
         <div
@@ -142,7 +162,7 @@ export default function YuiCoreHero() {
             height="36%"
             tilt={12}
             duration={17}
-            className="border-sky-300/55 shadow-[0_0_22px_rgba(56,189,248,0.32),inset_0_0_18px_rgba(56,189,248,0.12)]"
+            className="border-sky-200/70 shadow-[0_0_26px_rgba(56,189,248,0.42),inset_0_0_18px_rgba(56,189,248,0.14)]"
             reducedMotion={reducedMotion}
           />
           <OrbitTrack
@@ -151,7 +171,7 @@ export default function YuiCoreHero() {
             tilt={-31}
             duration={21}
             reverse
-            className="border-emerald-300/50 shadow-[0_0_24px_rgba(110,231,183,0.28),inset_0_0_18px_rgba(110,231,183,0.1)]"
+            className="border-emerald-200/62 shadow-[0_0_27px_rgba(110,231,183,0.36),inset_0_0_18px_rgba(110,231,183,0.12)]"
             reducedMotion={reducedMotion}
           />
           <OrbitTrack
@@ -159,32 +179,35 @@ export default function YuiCoreHero() {
             height="29%"
             tilt={58}
             duration={25}
-            className="border-violet-300/45 shadow-[0_0_25px_rgba(196,181,253,0.28),inset_0_0_20px_rgba(196,181,253,0.1)]"
+            className="border-violet-200/58 shadow-[0_0_28px_rgba(196,181,253,0.34),inset_0_0_20px_rgba(196,181,253,0.12)]"
             reducedMotion={reducedMotion}
           />
 
           <div className="absolute inset-0 z-10 flex items-center justify-center">
             <motion.div
-              className="relative h-[240px] w-[240px] rounded-full border border-white/20 bg-[radial-gradient(circle_at_32%_25%,rgba(255,255,255,0.42),rgba(54,171,255,0.32)_22%,rgba(28,83,180,0.72)_48%,rgba(8,20,62,0.96)_78%,rgba(2,7,22,1)_100%)] shadow-[0_0_75px_rgba(48,145,255,0.55),inset_0_0_48px_rgba(255,255,255,0.12)] sm:h-[290px] sm:w-[290px] xl:h-[330px] xl:w-[330px]"
+              className="relative h-[240px] w-[240px] overflow-hidden rounded-full border border-white/25 bg-[radial-gradient(circle_at_29%_22%,rgba(255,255,255,0.55),rgba(80,191,255,0.38)_20%,rgba(34,103,220,0.78)_46%,rgba(10,30,86,0.98)_74%,rgba(2,7,24,1)_100%)] shadow-[0_0_78px_rgba(48,145,255,0.62),inset_0_0_52px_rgba(255,255,255,0.16)] sm:h-[290px] sm:w-[290px] xl:h-[330px] xl:w-[330px]"
               animate={reducedMotion ? undefined : {
                 boxShadow: [
-                  '0 0 65px rgba(48,145,255,0.42), inset 0 0 42px rgba(255,255,255,0.1)',
-                  '0 0 105px rgba(48,145,255,0.68), inset 0 0 58px rgba(255,255,255,0.16)',
-                  '0 0 65px rgba(48,145,255,0.42), inset 0 0 42px rgba(255,255,255,0.1)',
+                  '0 0 68px rgba(48,145,255,0.5), inset 0 0 44px rgba(255,255,255,0.12)',
+                  '0 0 112px rgba(48,145,255,0.76), inset 0 0 62px rgba(255,255,255,0.2)',
+                  '0 0 68px rgba(48,145,255,0.5), inset 0 0 44px rgba(255,255,255,0.12)',
                 ],
               }}
               transition={{ duration: 4, repeat: Infinity, ease: 'easeInOut' }}
             >
-              <div className="absolute inset-[7%] rounded-full border border-cyan-100/10" />
-              <div className="absolute left-[19%] top-[12%] h-[28%] w-[46%] -rotate-[24deg] rounded-[50%] bg-white/15 blur-md" />
-              <div className="absolute inset-0 rounded-full bg-[linear-gradient(125deg,transparent_20%,rgba(255,255,255,0.08)_45%,transparent_62%)]" />
+              <div className="absolute inset-[7%] rounded-full border border-cyan-100/14" />
+              <div className="absolute inset-[17%] rounded-full border border-blue-200/10" />
+              <div className="absolute left-[16%] top-[9%] h-[31%] w-[52%] -rotate-[24deg] rounded-[50%] bg-white/22 blur-md" />
+              <div className="absolute -right-[16%] bottom-[3%] h-[56%] w-[60%] rounded-full bg-blue-950/50 blur-xl" />
+              <div className="absolute inset-0 bg-[linear-gradient(126deg,transparent_18%,rgba(255,255,255,0.12)_43%,transparent_61%)]" />
+              <div className="absolute inset-0 rounded-full bg-[radial-gradient(circle_at_65%_72%,rgba(24,84,205,0.22),transparent_40%)]" />
 
               <motion.div
                 className="absolute inset-0 flex items-center justify-center"
                 animate={reducedMotion ? undefined : { scale: [1, 1.035, 1] }}
                 transition={{ duration: 3.6, repeat: Infinity, ease: 'easeInOut' }}
               >
-                <span className="select-none bg-gradient-to-b from-white via-cyan-100 to-sky-300 bg-clip-text font-display text-[98px] font-black leading-none text-transparent drop-shadow-[0_0_30px_rgba(255,255,255,0.6)] sm:text-[122px] xl:text-[148px]">
+                <span className="select-none bg-gradient-to-b from-white via-cyan-50 to-sky-300 bg-clip-text font-display text-[98px] font-black leading-none text-transparent drop-shadow-[0_0_34px_rgba(255,255,255,0.78)] sm:text-[122px] xl:text-[148px]">
                   Y
                 </span>
               </motion.div>
@@ -198,14 +221,14 @@ export default function YuiCoreHero() {
             duration={19}
             reverse
             foreground
-            className="border-cyan-100/65 shadow-[0_0_24px_rgba(103,232,249,0.45),inset_0_0_18px_rgba(103,232,249,0.12)]"
+            className="border-cyan-50/82 shadow-[0_0_28px_rgba(103,232,249,0.58),inset_0_0_20px_rgba(103,232,249,0.16)]"
             reducedMotion={reducedMotion}
           />
 
           {PARTICLES.map((particle) => (
             <motion.span
               key={particle.id}
-              className="absolute z-40 rounded-full bg-cyan-100 shadow-[0_0_14px_rgba(165,243,252,0.95)]"
+              className="pointer-events-none absolute z-40 rounded-full bg-cyan-50 shadow-[0_0_16px_rgba(165,243,252,0.98)]"
               style={{
                 top: particle.top,
                 left: particle.left,
@@ -213,8 +236,8 @@ export default function YuiCoreHero() {
                 height: particle.size,
               }}
               animate={reducedMotion ? undefined : {
-                opacity: [0.18, 0.95, 0.24],
-                scale: [1, 1.55, 1],
+                opacity: [0.16, 1, 0.22],
+                scale: [1, 1.6, 1],
               }}
               transition={{
                 duration: particle.duration,
@@ -228,8 +251,8 @@ export default function YuiCoreHero() {
       </motion.div>
 
       <motion.div
-        className="absolute bottom-[2%] left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/10 bg-[#07101e]/80 px-4 py-2 text-[9px] uppercase tracking-[0.2em] text-white/55 backdrop-blur-md sm:text-[10px]"
-        animate={reducedMotion ? undefined : { opacity: [0.65, 1, 0.65] }}
+        className="pointer-events-none absolute bottom-[6%] left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 whitespace-nowrap rounded-full border border-white/12 bg-[#06101f]/88 px-4 py-2 text-[9px] uppercase tracking-[0.2em] text-white/64 shadow-[0_12px_36px_rgba(0,0,0,0.32)] backdrop-blur-md sm:text-[10px]"
+        animate={reducedMotion ? undefined : { opacity: [0.7, 1, 0.7] }}
         transition={{ duration: 3.4, repeat: Infinity, ease: 'easeInOut' }}
       >
         <Sparkles size={13} className="text-cyan-200" />
