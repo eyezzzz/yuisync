@@ -201,15 +201,16 @@ export function searchProductImages({ name, barcode, category, brand, moduleId, 
 
 export function getMetaWhatsappReview({ tenantId, moduleId = 'petshop', includeTemplates = false }) {
   const params = new URLSearchParams({
+    integration: 'meta-whatsapp',
     tenant_id: tenantId,
     module_id: moduleId,
   })
   if (includeTemplates) params.set('include_templates', '1')
-  return apiRequest(`/meta/whatsapp?${params.toString()}`, { method: 'GET' })
+  return apiRequest(`/chat/respond?${params.toString()}`, { method: 'GET' })
 }
 
 function metaWhatsappAction(action, payload) {
-  return apiRequest('/meta/whatsapp', {
+  return apiRequest('/chat/respond?integration=meta-whatsapp', {
     method: 'POST',
     body: JSON.stringify({ action, ...payload }),
   })
