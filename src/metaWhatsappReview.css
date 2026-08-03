@@ -1,0 +1,61 @@
+/* Readable form controls for the Meta / WhatsApp app-review workspace.
+   The page uses the legacy `input` class while the design system's standard
+   field class is `inp`, so browsers were falling back to white controls with
+   inherited light text in dark mode. */
+.theme-petshop .input {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  border-radius: 0.75rem;
+  background-color: var(--surface);
+  color: var(--text);
+  padding: 0.625rem 0.875rem;
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+  outline: none;
+  caret-color: var(--text);
+  transition: border-color 150ms ease, box-shadow 150ms ease, background-color 150ms ease;
+}
+
+.theme-petshop .input::placeholder {
+  color: var(--muted2);
+  opacity: 1;
+}
+
+.theme-petshop .input:focus {
+  border-color: var(--primary-hover);
+  box-shadow: 0 0 0 3px var(--primary-bg-light);
+}
+
+.theme-petshop .input:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.theme-petshop select.input {
+  color-scheme: light;
+}
+
+.theme-petshop select.input option {
+  background-color: #ffffff;
+  color: #0f172a;
+}
+
+.theme-petshop.theme-dark select.input {
+  color-scheme: dark;
+}
+
+.theme-petshop.theme-dark select.input option {
+  background-color: #0d1424;
+  color: #f8fafc;
+}
+
+.theme-petshop.theme-dark .input {
+  background-color: #111b2e;
+  border-color: #334155;
+  color: #f8fafc;
+}
+
+.theme-petshop.theme-dark .input::placeholder {
+  color: #94a3b8;
+}
