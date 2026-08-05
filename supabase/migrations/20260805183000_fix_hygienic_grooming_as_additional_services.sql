@@ -34,7 +34,6 @@ declare
   v_module_id text := coalesce(nullif(trim(p_module_id), ''), 'petshop');
   v_definition record;
   v_existing_id uuid;
-  v_existing_source_product_id uuid;
 begin
   if p_tenant_id is null or v_module_id <> 'petshop' then
     return;
@@ -85,13 +84,12 @@ begin
     )
   loop
     v_existing_id := null;
-    v_existing_source_product_id := null;
 
     -- Prioriza o cadastro comercial ou já precificado. Isso evita ativar uma
     -- duplicata vazia criada por uma migration anterior quando já havia um item
     -- real cadastrado pelo petshop.
-    select service.id, service.source_product_id
-    into v_existing_id, v_existing_source_product_id
+    select service.id
+    into v_existing_id
     from public.petshop_services service
     where service.tenant_id = p_tenant_id
       and service.module_id = v_module_id
@@ -146,13 +144,7 @@ begin
       returning id into v_existing_id;
     else
       update public.petshop_services
-      set code = case
-            -- Produtos sincronizados mantêm o código catalog_<uuid> para não
-            -- quebrar a sincronização com Estoque/Produtos.
-            when v_existing_source_product_id is not null then code
-            else v_definition.canonical_code
-          end,
-          name = v_definition.canonical_name,
+      set name = v_definition.canonical_name,
           group_type = 'banho_tosa',
           default_duration_min = case
             when coalesce(default_duration_min, 0) >= 15
