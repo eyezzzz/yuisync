@@ -43,7 +43,7 @@ const emptyService = (groupId = 'banho_tosa') => ({
   commission_rate: '5',
   min_weight_kg: '',
   max_weight_kg: '',
-  species_target: '',
+  species_target: 'all',
   active: true,
   sort_order: '999',
 })
@@ -63,7 +63,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
         commission_rate: String(service.commission_rate ?? defaultServiceCommissionRate(service)),
         min_weight_kg: optionalWeightValue(service.min_weight_kg),
         max_weight_kg: optionalWeightValue(service.max_weight_kg),
-        species_target: service.species_target || serviceSpeciesTarget(service) || '',
+        species_target: service.species_target || serviceSpeciesTarget(service) || 'all',
         sort_order: String(service.sort_order ?? 999),
       }
     : emptyService(initialGroup))
@@ -87,7 +87,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
     const commission = Number(form.commission_rate)
     const minWeight = form.min_weight_kg === '' ? null : Number(form.min_weight_kg)
     const maxWeight = form.max_weight_kg === '' ? null : Number(form.max_weight_kg)
-    const speciesTarget = form.group_type === 'banho_tosa' && ['dog', 'cat'].includes(form.species_target)
+    const speciesTarget = form.group_type === 'banho_tosa' && ['dog', 'cat', 'all'].includes(form.species_target)
       ? form.species_target
       : null
 
@@ -135,9 +135,6 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
         min_weight_kg: form.min_weight_kg === '' ? null : form.min_weight_kg,
         max_weight_kg: form.max_weight_kg === '' ? null : form.max_weight_kg,
       })
-    : null
-  const inferredSpecies = form.group_type === 'banho_tosa'
-    ? serviceSpeciesTarget(form)
     : null
   const standardCommission = defaultServiceCommissionRate(form)
 
@@ -222,11 +219,11 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
               <div>
                 <label className="inp-label">Espécie atendida</label>
                 <div className="grid grid-cols-3 gap-2">
-                  <button type="button" onClick={() => set('species_target', '')} className={`rounded-xl border px-3 py-2 text-xs font-bold ${!form.species_target ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}>Cães e gatos</button>
+                  <button type="button" onClick={() => set('species_target', 'all')} className={`rounded-xl border px-3 py-2 text-xs font-bold ${form.species_target === 'all' ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}>Cães e gatos</button>
                   <button type="button" onClick={() => set('species_target', 'dog')} className={`flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold ${form.species_target === 'dog' ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}><Dog size={13}/>Cães</button>
                   <button type="button" onClick={() => set('species_target', 'cat')} className={`flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold ${form.species_target === 'cat' ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}><Cat size={13}/>Gatos</button>
                 </div>
-                <p className="mt-2 text-xs text-muted">Regra atual: <strong className="text-text">{serviceSpeciesLabel({ ...form, species_target: form.species_target || inferredSpecies })}</strong>{!form.species_target && inferredSpecies ? ' · inferida pelo nome' : form.species_target ? ' · configurada manualmente' : ''}</p>
+                <p className="mt-2 text-xs text-muted">Regra atual: <strong className="text-text">{serviceSpeciesLabel(form)}</strong> · configurada no serviço.</p>
               </div>
 
               <div>
@@ -382,7 +379,7 @@ export default function ServicosPage() {
                     <td><span className="inline-flex items-center gap-1"><Clock3 size={13}/>{service.default_duration_min || 60} min</span></td>
                     <td>
                       {service.group_type === 'banho_tosa'
-                        ? <span className={`inline-flex items-center gap-1 text-xs ${target ? 'font-semibold text-text' : 'text-muted'}`}>{target === 'cat' ? <Cat size={12}/> : target === 'dog' ? <Dog size={12}/> : null}{serviceSpeciesLabel(service)}</span>
+                        ? <span className={`inline-flex items-center gap-1 text-xs ${target && target !== 'all' ? 'font-semibold text-text' : 'text-muted'}`}>{target === 'cat' ? <Cat size={12}/> : target === 'dog' ? <Dog size={12}/> : null}{serviceSpeciesLabel(service)}</span>
                         : <span className="text-xs text-muted">—</span>}
                     </td>
                     <td>
