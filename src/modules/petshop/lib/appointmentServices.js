@@ -52,6 +52,7 @@ const normalizeSpecies = (value = '') => {
   const normalized = stripAccents(value)
   if (['dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino', 'canina'].includes(normalized)) return 'dog'
   if (['cat', 'gato', 'gata', 'felino', 'felina'].includes(normalized)) return 'cat'
+  if (['all', 'ambos', 'ambas', 'todos', 'todas', 'both'].includes(normalized)) return 'all'
   return null
 }
 
@@ -87,9 +88,9 @@ export function serviceSpeciesTarget(service = {}) {
 
 export function serviceFitsPetSpecies(service = {}, petSpecies = null) {
   const normalizedPetSpecies = normalizeSpecies(petSpecies)
-  if (!normalizedPetSpecies) return true
+  if (!normalizedPetSpecies || normalizedPetSpecies === 'all') return true
   const target = serviceSpeciesTarget(service)
-  return !target || target === normalizedPetSpecies
+  return !target || target === 'all' || target === normalizedPetSpecies
 }
 
 export function serviceSpeciesLabel(service = {}, { genericLabel = 'Cães e gatos' } = {}) {
