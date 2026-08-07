@@ -262,9 +262,10 @@ export function usePetshopAdvanced() {
 
     const minWeightKg = bathGrooming ? optionalWeight(payload.min_weight_kg) : null
     const maxWeightKg = bathGrooming ? optionalWeight(payload.max_weight_kg) : null
-    const speciesTarget = bathGrooming
+    const normalizedSpeciesTarget = bathGrooming
       ? normalizeSpeciesTarget(payload.species_target, payload)
       : null
+    const speciesTarget = normalizedSpeciesTarget === 'all' ? null : normalizedSpeciesTarget
     const commissionRate = Number.isFinite(Number(payload.commission_rate))
       ? Math.max(0, Number(payload.commission_rate))
       : defaultServiceCommissionRate(payload)
