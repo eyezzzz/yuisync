@@ -9,8 +9,11 @@ const stripAccents = (value = '') => String(value || '')
 const VALID_APPOINTMENT_GROUPS = new Set(['banho_tosa', 'veterinaria'])
 const VETERINARY_PATTERN = /\b(vet|veterin|consulta|vacina|clinica|medico|exame|cirurg|ultrassom|castr|retorno|internac|curativo|vermifug|microchip|aplicacao|hemograma|radiograf|raio[ -]?x|coleta|sorolog|odontolog|anestesia|medicacao|eletrocard|ecocard|emergencia|procedimento)\w*/
 const TOSA_PATTERN = /\b(tosa|tosagem|tosar|trim|trimming|stripping|acabamento|penteado|corte (?:de|do) pelo)\w*/
+const COMMISSION_TOSA_PATTERN = /\b(tosa|tosagem|tosar|trim|trimming|stripping|corte (?:de|do) pelo)\w*/
 const BATH_PATTERN = /\b(banho|lavagem|secagem|secar)\w*/
 const GROOMING_COMPLEMENT_PATTERN = /\b(desembolo|desembarac|escovac|hidrat|higien|perfume|spa|unha|unhas|ouvido|orelhas|patas|almofad|dente|dental|pelagem)\w*/
+const CAT_PATTERN = /\b(gato|gata|gatos|gatas|felino|felina|felinos|felinas)\b/
+const DOG_PATTERN = /\b(cao|caes|cachorro|cachorra|cachorros|cachorras|canino|canina|caninos|caninas)\b/
 
 const appointmentServiceText = (service = {}) => stripAccents([
   service.code,
@@ -45,8 +48,55 @@ const parseWeightFromText = (text = '') => {
   return null
 }
 
+const normalizeSpecies = (value = '') => {
+  const normalized = stripAccents(value)
+  if (['dog', 'cao', 'caes', 'cachorro', 'cachorra', 'canino', 'canina'].includes(normalized)) return 'dog'
+  if (['cat', 'gato', 'gata', 'felino', 'felina'].includes(normalized)) return 'cat'
+  return null
+}
+
 export function normalizeAppointmentServiceText(value = '') {
   return stripAccents(value)
+}
+
+export function defaultServiceCommissionRate(service = {}) {
+  return COMMISSION_TOSA_PATTERN.test(appointmentServiceText(service)) ? 10 : 5
+}
+
+export function serviceSpeciesTarget(service = {}) {
+  const explicit = normalizeSpecies(
+    service.species_target
+    ?? service.speciesTarget
+    ?? service.species
+    ?? service.bot_metadata?.species,
+  )
+  if (explicit) return explicit
+
+  const text = appointmentServiceText(service)
+  if (CAT_PATTERN.test(text)) return 'cat'
+  if (DOG_PATTERN.test(text)) return 'dog'
+
+  // Compatibilidade com o catálogo comercial antigo: os serviços de porte
+  // "Banho/Tosa Pet" eram cadastrados para cães mesmo sem escrever "cão".
+  if (/\b(banho|tosa|tosagem|tosar)\w*/.test(text)
+    && /\bpet\b/.test(text)
+    && /\bporte\b/.test(text)) return 'dog'
+
+  return null
+}
+
+export function serviceFitsPetSpecies(service = {}, petSpecies = null) {
+  const normalizedPetSpecies = normalizeSpecies(petSpecies)
+  if (!normalizedPetSpecies) return true
+  const target = serviceSpeciesTarget(service)
+  return !target || target === normalizedPetSpecies
+}
+
+export function serviceSpeciesLabel(service = {}, { genericLabel = 'Cães e gatos' } = {}) {
+  const target = serviceSpeciesTarget(service)
+  if (target === 'dog') return 'Somente cães'
+  if (target === 'cat') return 'Somente gatos'
+  return genericLabel
 }
 
 export function serviceWeightRange(service = {}) {
