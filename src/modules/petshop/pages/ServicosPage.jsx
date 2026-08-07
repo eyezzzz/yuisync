@@ -63,7 +63,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
         commission_rate: String(service.commission_rate ?? defaultServiceCommissionRate(service)),
         min_weight_kg: optionalWeightValue(service.min_weight_kg),
         max_weight_kg: optionalWeightValue(service.max_weight_kg),
-        species_target: service.species_target || serviceSpeciesTarget(service) || 'all',
+        species_target: serviceSpeciesTarget(service) || 'all',
         sort_order: String(service.sort_order ?? 999),
       }
     : emptyService(initialGroup))
@@ -87,7 +87,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
     const commission = Number(form.commission_rate)
     const minWeight = form.min_weight_kg === '' ? null : Number(form.min_weight_kg)
     const maxWeight = form.max_weight_kg === '' ? null : Number(form.max_weight_kg)
-    const speciesTarget = form.group_type === 'banho_tosa' && ['dog', 'cat', 'all'].includes(form.species_target)
+    const speciesTarget = form.group_type === 'banho_tosa' && ['dog', 'cat'].includes(form.species_target)
       ? form.species_target
       : null
 
