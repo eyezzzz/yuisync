@@ -40,7 +40,7 @@ const optionalWeight = (value) => {
 }
 
 const normalizeSpeciesTarget = (value, fallback = {}) => (
-  serviceSpeciesTarget({ species_target: value, ...fallback })
+  serviceSpeciesTarget({ ...fallback, species_target: value })
 )
 
 const isCatalogServiceProduct = (product = {}) => {
