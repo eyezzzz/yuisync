@@ -5,6 +5,10 @@ import { useAuthCtx } from '../../../context/AuthContext'
 import { applyTenantFilter, runWithTenantFallback } from '../../../lib/tenant'
 import { normalizeCode, normalizeServices } from '../lib/petshopTeam'
 import { fetchAllServiceCatalogPages } from '../lib/serviceCatalogPagination'
+import {
+  defaultServiceCommissionRate,
+  serviceSpeciesTarget,
+} from '../lib/appointmentServices'
 import { usePetshopAdvanced as usePetshopAdvancedCore } from './usePetshopAdvancedCore'
 
 export {
@@ -34,6 +38,10 @@ const optionalWeight = (value) => {
   const parsed = Number(String(value).replace(',', '.'))
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
 }
+
+const normalizeSpeciesTarget = (value, fallback = {}) => (
+  serviceSpeciesTarget({ species_target: value, ...fallback })
+)
 
 const isCatalogServiceProduct = (product = {}) => {
   const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
@@ -103,7 +111,7 @@ export function usePetshopAdvanced() {
       runScoped(async (includeTenant) => fetchAllServiceCatalogPages(() => {
         let query = supabase
           .from('products')
-          .select('id,name,category,description,price,active,bot_metadata')
+          .select('id,name,category,description,price,active,bot_metadata,species_target')
           .eq('module_id', moduleId)
           .eq('active', true)
           .order('name', { ascending: true })
@@ -149,6 +157,13 @@ export function usePetshopAdvanced() {
           )),
           min_weight_kg: optionalWeight(service.min_weight_kg),
           max_weight_kg: optionalWeight(service.max_weight_kg),
+          species_target: groupType === 'banho_tosa'
+            ? normalizeSpeciesTarget(service.species_target, service)
+            : null,
+          commission_type: service.commission_type || 'percentage',
+          commission_rate: service.commission_rate === null || service.commission_rate === undefined
+            ? defaultServiceCommissionRate(service)
+            : Number(service.commission_rate),
           active: service.active !== false,
           service_source: 'petshop_service',
         }
@@ -162,6 +177,16 @@ export function usePetshopAdvanced() {
           ? product.bot_metadata
           : {}
         const groupType = serviceGroup(linked.group_type, product)
+        const mergedForRules = {
+          ...product,
+          ...linked,
+          name: product.name || linked.name,
+          category: product.category || linked.category,
+          description: product.description || linked.description,
+          species_target: linked.species_target
+            ?? metadata.species
+            ?? product.species_target,
+        }
 
         return {
           ...linked,
@@ -188,8 +213,13 @@ export function usePetshopAdvanced() {
             ?? metadata.max_weight_kg
             ?? metadata.maxWeightKg,
           ),
+          species_target: groupType === 'banho_tosa'
+            ? normalizeSpeciesTarget(mergedForRules.species_target, mergedForRules)
+            : null,
           commission_type: linked.commission_type || 'percentage',
-          commission_rate: Number(linked.commission_rate || 0),
+          commission_rate: linked.commission_rate === null || linked.commission_rate === undefined
+            ? defaultServiceCommissionRate(mergedForRules)
+            : Number(linked.commission_rate),
           active: product.active !== false && linked.active !== false,
           sort_order: Number(linked.sort_order ?? 500),
           icon: linked.icon || (
@@ -209,18 +239,18 @@ export function usePetshopAdvanced() {
     return normalizeServices([...independentServices, ...productServices])
   }, [activeTenantId, moduleId, runScoped])
 
-  const ensureWeightSchema = useCallback(async () => {
+  const ensureServiceRulesSchema = useCallback(async () => {
     const schemaCheck = await runScoped(async (includeTenant) => {
       let query = supabase
         .from('petshop_services')
-        .select('id,min_weight_kg,max_weight_kg')
+        .select('id,min_weight_kg,max_weight_kg,species_target,commission_rate')
         .eq('module_id', moduleId)
         .limit(1)
       return applyTenantFilter(query, activeTenantId, includeTenant)
     })
     if (schemaCheck.error) {
       if (isPetshopServicesSchemaError(schemaCheck.error)) {
-        throw new Error('Aplique a migration de faixa de peso dos serviços antes de salvar esta configuração.')
+        throw new Error('Aplique a migration de regras de espécie/peso/comissão dos serviços antes de salvar esta configuração.')
       }
       throw schemaCheck.error
     }
@@ -228,22 +258,32 @@ export function usePetshopAdvanced() {
 
   const savePetshopService = useCallback(async (payload) => {
     const bathGrooming = payload.group_type === 'banho_tosa'
-    if (bathGrooming) await ensureWeightSchema()
+    await ensureServiceRulesSchema()
+
+    const minWeightKg = bathGrooming ? optionalWeight(payload.min_weight_kg) : null
+    const maxWeightKg = bathGrooming ? optionalWeight(payload.max_weight_kg) : null
+    const speciesTarget = bathGrooming
+      ? normalizeSpeciesTarget(payload.species_target, payload)
+      : null
+    const commissionRate = Number.isFinite(Number(payload.commission_rate))
+      ? Math.max(0, Number(payload.commission_rate))
+      : defaultServiceCommissionRate(payload)
 
     const productManaged = payload.service_source === 'product' || Boolean(payload.source_product_id)
     if (productManaged) {
       if (!payload.id || !payload.source_product_id) {
-        throw new Error('Serviço sincronizado sem vínculo operacional. Atualize o catálogo antes de configurar o peso.')
+        throw new Error('Serviço sincronizado sem vínculo operacional. Atualize o catálogo antes de configurar as regras.')
       }
 
-      const minWeightKg = optionalWeight(payload.min_weight_kg)
-      const maxWeightKg = optionalWeight(payload.max_weight_kg)
       const response = await runScoped(async (includeTenant) => {
         let query = supabase
           .from('petshop_services')
           .update({
             min_weight_kg: minWeightKg,
             max_weight_kg: maxWeightKg,
+            species_target: speciesTarget,
+            commission_type: 'percentage',
+            commission_rate: commissionRate,
             updated_at: new Date().toISOString(),
           })
           .eq('module_id', moduleId)
@@ -259,17 +299,22 @@ export function usePetshopAdvanced() {
       return normalizeServices([{ ...payload, ...response.data, service_source: 'product' }])[0]
     }
 
-    const saved = await core.savePetshopService(payload)
-    if (!saved?.id || !bathGrooming) return saved
+    const saved = await core.savePetshopService({
+      ...payload,
+      commission_type: 'percentage',
+      commission_rate: commissionRate,
+    })
+    if (!saved?.id) return saved
 
-    const minWeightKg = optionalWeight(payload.min_weight_kg)
-    const maxWeightKg = optionalWeight(payload.max_weight_kg)
     const response = await runScoped(async (includeTenant) => {
       let query = supabase
         .from('petshop_services')
         .update({
           min_weight_kg: minWeightKg,
           max_weight_kg: maxWeightKg,
+          species_target: speciesTarget,
+          commission_type: 'percentage',
+          commission_rate: commissionRate,
           updated_at: new Date().toISOString(),
         })
         .eq('id', saved.id)
@@ -280,7 +325,7 @@ export function usePetshopAdvanced() {
 
     if (response.error) throw response.error
     return normalizeServices([{ ...saved, ...response.data }])[0]
-  }, [core.savePetshopService, ensureWeightSchema, moduleId, runScoped])
+  }, [core.savePetshopService, ensureServiceRulesSchema, moduleId, runScoped])
 
   return {
     ...core,
