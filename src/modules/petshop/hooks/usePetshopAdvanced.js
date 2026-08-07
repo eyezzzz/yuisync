@@ -29,6 +29,12 @@ const normalizeCatalogText = (value = '') => String(value || '')
 
 const catalogServiceCode = (productId = '') => `catalog_${String(productId).replace(/-/g, '')}`
 
+const optionalWeight = (value) => {
+  if (value === null || value === undefined || value === '') return null
+  const parsed = Number(String(value).replace(',', '.'))
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : null
+}
+
 const isCatalogServiceProduct = (product = {}) => {
   const metadata = product.bot_metadata && typeof product.bot_metadata === 'object' ? product.bot_metadata : {}
   const category = normalizeCatalogText(product.category)
@@ -72,6 +78,7 @@ const isPetshopServicesSchemaError = (error) => {
     message.includes('does not exist')
     || message.includes('schema cache')
     || message.includes('relation')
+    || message.includes('column')
   )
 }
 
@@ -140,6 +147,8 @@ export function usePetshopAdvanced() {
           default_duration_min: Math.max(15, Number(
             service.default_duration_min ?? service.duration_min ?? 60
           )),
+          min_weight_kg: optionalWeight(service.min_weight_kg),
+          max_weight_kg: optionalWeight(service.max_weight_kg),
           active: service.active !== false,
           service_source: 'petshop_service',
         }
@@ -169,6 +178,16 @@ export function usePetshopAdvanced() {
             ?? metadata.service_duration_min
             ?? 60
           )),
+          min_weight_kg: optionalWeight(
+            linked.min_weight_kg
+            ?? metadata.min_weight_kg
+            ?? metadata.minWeightKg,
+          ),
+          max_weight_kg: optionalWeight(
+            linked.max_weight_kg
+            ?? metadata.max_weight_kg
+            ?? metadata.maxWeightKg,
+          ),
           commission_type: linked.commission_type || 'percentage',
           commission_rate: Number(linked.commission_rate || 0),
           active: product.active !== false && linked.active !== false,
@@ -190,8 +209,82 @@ export function usePetshopAdvanced() {
     return normalizeServices([...independentServices, ...productServices])
   }, [activeTenantId, moduleId, runScoped])
 
+  const ensureWeightSchema = useCallback(async () => {
+    const schemaCheck = await runScoped(async (includeTenant) => {
+      let query = supabase
+        .from('petshop_services')
+        .select('id,min_weight_kg,max_weight_kg')
+        .eq('module_id', moduleId)
+        .limit(1)
+      return applyTenantFilter(query, activeTenantId, includeTenant)
+    })
+    if (schemaCheck.error) {
+      if (isPetshopServicesSchemaError(schemaCheck.error)) {
+        throw new Error('Aplique a migration de faixa de peso dos serviços antes de salvar esta configuração.')
+      }
+      throw schemaCheck.error
+    }
+  }, [activeTenantId, moduleId, runScoped])
+
+  const savePetshopService = useCallback(async (payload) => {
+    const bathGrooming = payload.group_type === 'banho_tosa'
+    if (bathGrooming) await ensureWeightSchema()
+
+    const productManaged = payload.service_source === 'product' || Boolean(payload.source_product_id)
+    if (productManaged) {
+      if (!payload.id || !payload.source_product_id) {
+        throw new Error('Serviço sincronizado sem vínculo operacional. Atualize o catálogo antes de configurar o peso.')
+      }
+
+      const minWeightKg = optionalWeight(payload.min_weight_kg)
+      const maxWeightKg = optionalWeight(payload.max_weight_kg)
+      const response = await runScoped(async (includeTenant) => {
+        let query = supabase
+          .from('petshop_services')
+          .update({
+            min_weight_kg: minWeightKg,
+            max_weight_kg: maxWeightKg,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('module_id', moduleId)
+          .eq('source_product_id', payload.source_product_id)
+        query = applyTenantFilter(query, activeTenantId, includeTenant)
+        return query.select('*').maybeSingle()
+      })
+
+      if (response.error) throw response.error
+      if (!response.data) {
+        throw new Error('Serviço sincronizado ainda não possui vínculo em petshop_services. Atualize o produto e tente novamente.')
+      }
+      return normalizeServices([{ ...payload, ...response.data, service_source: 'product' }])[0]
+    }
+
+    const saved = await core.savePetshopService(payload)
+    if (!saved?.id || !bathGrooming) return saved
+
+    const minWeightKg = optionalWeight(payload.min_weight_kg)
+    const maxWeightKg = optionalWeight(payload.max_weight_kg)
+    const response = await runScoped(async (includeTenant) => {
+      let query = supabase
+        .from('petshop_services')
+        .update({
+          min_weight_kg: minWeightKg,
+          max_weight_kg: maxWeightKg,
+          updated_at: new Date().toISOString(),
+        })
+        .eq('id', saved.id)
+        .eq('module_id', moduleId)
+      query = applyTenantFilter(query, activeTenantId, includeTenant)
+      return query.select('*').single()
+    })
+
+    if (response.error) throw response.error
+    return normalizeServices([{ ...saved, ...response.data }])[0]
+  }, [core.savePetshopService, ensureWeightSchema, moduleId, runScoped])
+
   return {
     ...core,
     loadPetshopServices,
+    savePetshopService,
   }
 }

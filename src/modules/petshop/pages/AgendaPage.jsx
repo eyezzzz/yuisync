@@ -32,7 +32,9 @@ import {
   appointmentServiceLabel,
   calculateAppointmentServiceTotals,
   classifyAppointmentServiceGroup,
+  serviceFitsPetWeight,
   serviceOptionsForAppointmentGroup,
+  serviceWeightRangeLabel,
 } from '../lib/appointmentServices'
 import {
   MANUAL_SLOT_CAPACITY,
@@ -55,6 +57,8 @@ const asAgendaServices = (services = []) =>
     duration: Number(service.default_duration_min ?? service.duration ?? 60),
     icon: serviceIcon(service),
     group_type: classifyAppointmentServiceGroup(service),
+    min_weight_kg: service.min_weight_kg ?? service.minWeightKg ?? null,
+    max_weight_kg: service.max_weight_kg ?? service.maxWeightKg ?? null,
     active: service.active !== false,
   }))
 
@@ -438,6 +442,14 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
   const petSearch = form.pet_search || ''
   const deferredPetSearch = useDeferredValue(petSearch)
+  const petWeightKg = useMemo(() => {
+    const selected = (selectedClient?.id === form.pet_id ? selectedClient : null)
+      || (pets || []).find((pet) => pet.id === form.pet_id)
+      || (appt?.pets?.id === form.pet_id ? appt.pets : null)
+    if (selected?.weight_kg === null || selected?.weight_kg === undefined || selected?.weight_kg === '') return null
+    const weight = Number(String(selected.weight_kg).replace(',', '.'))
+    return Number.isFinite(weight) && weight > 0 ? weight : null
+  }, [selectedClient, pets, form.pet_id, appt?.pets])
   const activeSubscriptions = useMemo(
     () => activeSubscriptionsForClient(subscriptions, form.pet_id),
     [subscriptions, form.pet_id],
@@ -451,7 +463,8 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     && item.catalog_service
     && item.catalog_service.group_type === serviceGroup
     && Number(item.remaining || 0) > 0
-  )), [packageUsage, serviceGroup])
+    && (serviceGroup !== 'banho_tosa' || serviceFitsPetWeight(item.catalog_service, petWeightKg))
+  )), [packageUsage, serviceGroup, petWeightKg])
   const packageServiceCodes = useMemo(
     () => new Set(packageServiceEntries.map((item) => String(item.service_code || item.service_type))),
     [packageServiceEntries],
@@ -473,31 +486,31 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     ), 0)
     if (serviceGroup !== 'banho_tosa') return { ...totals, price: packageAdjustedPrice }
     const durations = normalizeServiceDurations(serviceDurations)
-    const weightKg = selectedClient?.weight_kg ?? appt?.pets?.weight_kg ?? null
     return {
       ...totals,
       price: packageAdjustedPrice,
       duration: totals.services.reduce((sum, service) => sum + resolvePetshopServiceDuration({
         service,
-        weightKg,
+        weightKg: petWeightKg,
         durations,
         fallbackMin: service.duration || 60,
       }), 0),
     }
-  }, [form.service_codes, serviceOptions, serviceGroup, serviceDurations, selectedClient?.weight_kg, appt?.pets?.weight_kg, packageServiceCodes])
+  }, [form.service_codes, serviceOptions, serviceGroup, serviceDurations, petWeightKg, packageServiceCodes])
   const effectiveDuration = Math.max(10, Number(durationOverride || serviceTotals.duration || 0))
   const availableServiceOptions = useMemo(() => {
     const query = safeLower(serviceSearch)
     const selectedCodes = new Set(form.service_codes.map(String))
     return serviceOptions
       .filter((service) => !selectedCodes.has(String(service.value)))
+      .filter((service) => serviceGroup !== 'banho_tosa' || serviceFitsPetWeight(service, petWeightKg))
       .filter((service) => !query || safeLower([service.label, service.value].filter(Boolean).join(' ')).includes(query))
       .sort((left, right) => {
         const packagePriority = Number(packageServiceCodes.has(String(right.value))) - Number(packageServiceCodes.has(String(left.value)))
         if (packagePriority !== 0) return packagePriority
         return String(left.label || '').localeCompare(String(right.label || ''), 'pt-BR')
       })
-  }, [serviceOptions, form.service_codes, serviceSearch, packageServiceCodes])
+  }, [serviceOptions, form.service_codes, serviceSearch, packageServiceCodes, serviceGroup, petWeightKg])
   const filteredTutorGroups = useMemo(() => {
     const query = safeLower(deferredPetSearch)
     const unique = new Map()
@@ -615,6 +628,10 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
   }
 
   const addService = (serviceCode) => {
+    const selectedService = serviceOptions.find((service) => String(service.value) === String(serviceCode))
+    if (serviceGroup === 'banho_tosa' && selectedService && !serviceFitsPetWeight(selectedService, petWeightKg)) {
+      return setErr(`${selectedPet?.pet_name || 'O pet'} pesa ${petWeightKg} kg e este serviço atende ${serviceWeightRangeLabel(selectedService)}.`)
+    }
     setForm((current) => ({
       ...current,
       service_codes: current.service_codes.includes(serviceCode)
@@ -628,7 +645,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
 
   const addPackageServices = () => {
     const codes = packageServiceEntries.map((item) => String(item.service_code || item.service_type)).filter(Boolean)
-    if (!codes.length) return setErr('O pacote ativo não possui serviço disponível nesta aba.')
+    if (!codes.length) return setErr('O pacote ativo não possui serviço compatível disponível nesta aba.')
     setForm((current) => ({
       ...current,
       service_codes: [...new Set([...current.service_codes, ...codes])],
@@ -652,6 +669,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     if (!form.date) return setErr('Informe a data')
     if (!form.time) return setErr('Informe o horario')
     if (!serviceTotals.services.length) return setErr('Os servicos selecionados nao estao mais disponiveis')
+    if (serviceGroup === 'banho_tosa' && petWeightKg !== null) {
+      const incompatible = serviceTotals.services.find((service) => !serviceFitsPetWeight(service, petWeightKg))
+      if (incompatible) {
+        return setErr(`${selectedPet?.pet_name || 'O pet'} pesa ${petWeightKg} kg. O serviço “${incompatible.label}” atende ${serviceWeightRangeLabel(incompatible)}.`)
+      }
+    }
 
     const candidateStart = new Date(`${form.date}T${form.time}:00`)
     if (Number.isNaN(candidateStart.getTime())) return setErr('Horario invalido')
@@ -719,8 +742,8 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                     <span className="block text-sm font-bold text-text truncate">{selectedPet.owner_name || 'Cliente sem nome'}</span>
                     <span className="block text-xs text-muted truncate">
                       {selectedTutorPets.length > 1
-                        ? `Pet selecionado: ${selectedPet.pet_name || 'sem nome'} · ${selectedTutorPets.length} pets no cadastro`
-                        : [selectedPet.pet_name, selectedPet.breed || selectedPet.species, selectedPet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
+                        ? `Pet selecionado: ${selectedPet.pet_name || 'sem nome'} · ${petWeightKg !== null ? `${petWeightKg} kg · ` : ''}${selectedTutorPets.length} pets no cadastro`
+                        : [selectedPet.pet_name, selectedPet.breed || selectedPet.species, petWeightKg !== null ? `${petWeightKg} kg` : '', selectedPet.phone].filter(Boolean).join(' - ') || 'Cadastro sem pet informado'}
                     </span>
                   </span>
                   <span className="text-[11px] font-bold text-amber-400 flex-shrink-0">Alterar</span>
@@ -785,7 +808,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                                 <span className="block text-xs font-bold text-text truncate">{group.owner_name || 'Cliente sem nome'}</span>
                                 <span className="block text-[11px] truncate">
                                   {group.pets.length === 1
-                                    ? [petNames, group.pets[0]?.breed || group.pets[0]?.species, group.phone].filter(Boolean).join(' - ')
+                                    ? [petNames, group.pets[0]?.breed || group.pets[0]?.species, group.pets[0]?.weight_kg ? `${group.pets[0].weight_kg} kg` : '', group.phone].filter(Boolean).join(' - ')
                                     : `${group.pets.length} pets: ${petNames}`}
                                 </span>
                               </span>
@@ -814,6 +837,16 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
 
             <div ref={servicePickerRef}>
               <label className="inp-label">{serviceGroupLabel}</label>
+              {serviceGroup === 'banho_tosa' && selectedPet && petWeightKg !== null && (
+                <div className="mb-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200">
+                  <strong className="text-emerald-100">Filtro por peso ativo:</strong> {selectedPet.pet_name || 'pet'} · {petWeightKg} kg. A busca mostra apenas serviços compatíveis ou serviços sem restrição de peso.
+                </div>
+              )}
+              {serviceGroup === 'banho_tosa' && selectedPet && petWeightKg === null && (
+                <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+                  <strong className="text-amber-100">Peso não cadastrado.</strong> Cadastre o peso de {selectedPet.pet_name || 'este pet'} para filtrar automaticamente os serviços por porte.
+                </div>
+              )}
               {serviceGroup === 'banho_tosa' && activeSubscriptions.length > 0 && (
                 <section data-yuisync-native-package-panel className="mb-3 rounded-2xl border border-emerald-400/35 bg-emerald-500/10 p-4">
                   <div className="flex flex-wrap items-start justify-between gap-3">
@@ -861,7 +894,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                       </div>
                     </>
                   ) : (
-                    <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">O pacote está ativo, mas não possui serviço de banho/tosa disponível neste ciclo.</p>
+                    <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">O pacote está ativo, mas não possui serviço de banho/tosa compatível disponível neste ciclo.</p>
                   )}
                 </section>
               )}
@@ -910,6 +943,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                         {availableServiceOptions.map((service) => {
                           const Icon = service.icon || PawPrint
                           const coveredByPackage = packageServiceCodes.has(String(service.value))
+                          const weightLabel = serviceGroup === 'banho_tosa' ? serviceWeightRangeLabel(service, { genericLabel: '' }) : ''
                           return (
                             <button
                               key={service.value}
@@ -922,7 +956,7 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                               <span className="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-lg bg-amber-500/10 text-amber-400"><Icon size={14}/></span>
                               <span className="min-w-0 flex-1">
                                 <span className="block truncate text-sm font-bold text-text">{service.label}</span>
-                                <span className={`block text-xs ${coveredByPackage ? 'font-semibold text-emerald-300' : 'text-muted'}`}>{coveredByPackage ? 'Pacote · R$ 0,00' : fmtCurrency(service.price)} · {service.duration || 60} min</span>
+                                <span className={`block text-xs ${coveredByPackage ? 'font-semibold text-emerald-300' : 'text-muted'}`}>{coveredByPackage ? 'Pacote · R$ 0,00' : fmtCurrency(service.price)} · {service.duration || 60} min{weightLabel ? ` · ${weightLabel}` : ''}</span>
                               </span>
                               {coveredByPackage ? <span className="badge badge-green">Pacote</span> : <Plus size={15} className="flex-shrink-0 text-amber-400"/>}
                             </button>
@@ -932,7 +966,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                           <p className="px-3 py-3 text-xs text-muted">
                             {form.service_codes.length === serviceOptions.length
                               ? 'Todos os servicos desta area ja foram adicionados.'
-                              : 'Nenhum servico encontrado nesta busca.'}
+                              : serviceGroup === 'banho_tosa' && petWeightKg !== null
+                                ? `Nenhum servico compatível com ${petWeightKg} kg foi encontrado nesta busca.`
+                                : 'Nenhum servico encontrado nesta busca.'}
                           </p>
                         )}
                       </div>
@@ -945,16 +981,17 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                         const Icon = service.icon || PawPrint
                         const displayedDuration = resolvePetshopServiceDuration({
                           service,
-                          weightKg: selectedClient?.weight_kg ?? appt?.pets?.weight_kg ?? null,
+                          weightKg: petWeightKg,
                           durations: serviceDurations,
                           fallbackMin: service.duration || 60,
                         })
+                        const weightLabel = serviceGroup === 'banho_tosa' ? serviceWeightRangeLabel(service, { genericLabel: '' }) : ''
                         return (
                           <div key={service.value} className="flex items-center gap-3 px-3 py-2.5">
                             <Icon size={14} className="flex-shrink-0 text-amber-400"/>
                             <span className="min-w-0 flex-1">
                               <span className="block truncate text-sm font-semibold text-text">{service.label}</span>
-                              <span className="block text-xs text-muted">{packageServiceCodes.has(String(service.value)) ? 'Pacote · R$ 0,00' : fmtCurrency(service.price)} · {displayedDuration} min</span>
+                              <span className="block text-xs text-muted">{packageServiceCodes.has(String(service.value)) ? 'Pacote · R$ 0,00' : fmtCurrency(service.price)} · {displayedDuration} min{weightLabel ? ` · ${weightLabel}` : ''}</span>
                             </span>
                             <button
                               type="button"
@@ -1156,7 +1193,6 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
         <span className={`badge ${sb.cls} text-[10px]`}>{sb.label}</span>
         <span className="text-xs font-semibold text-emerald-400">{fmtCurrency(appt.price)}</span>
       </div>
-      {/* Quick status actions */}
       <div className="flex gap-1.5 pt-1">
         {appt.status === 'agendado' && (
           <button onClick={() => onStatus(appt.id, 'confirmado')}
@@ -1508,10 +1544,10 @@ export default function AgendaPage({ setPage }) {
   const { storeSettings } = useAuthCtx()
 
   const [selectedDate, setSelectedDate] = useState(new Date())
-  const [modal, setModal]           = useState(null)   // null | {} | {appt}
-  const [receipt, setReceipt]       = useState(null) // appt to print
-  const [view, setView]             = useState('list')  // 'list' | 'kanban' | 'agenda'
-  const [agendaPeriod, setAgendaPeriod] = useState('day') // 'day' | 'week'
+  const [modal, setModal]           = useState(null)
+  const [receipt, setReceipt]       = useState(null)
+  const [view, setView]             = useState('list')
+  const [agendaPeriod, setAgendaPeriod] = useState('day')
   const [filterStatus, setFilterStatus] = useState('')
   const [search, setSearch]         = useState('')
   const [activeAgendaTab, setActiveAgendaTab] = useState('banho_tosa')
@@ -1609,7 +1645,6 @@ export default function AgendaPage({ setPage }) {
 
   return (
     <div className="page animate-fade-up">
-      {/* Header */}
       <div className="page-header">
         <div>
           <h1 className="page-title flex items-center gap-2">
@@ -1628,7 +1663,6 @@ export default function AgendaPage({ setPage }) {
         </div>
       </div>
 
-      {/* Stats do dia */}
       <div className="grid grid-cols-3 sm:grid-cols-6 gap-3">
         {[
           { label: 'Total',        value: stats.total,        cls: 'text-text'       },
@@ -1667,9 +1701,7 @@ export default function AgendaPage({ setPage }) {
         })}
       </div>
 
-      {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
-        {/* Date Navigator */}
         <div className="flex items-center gap-1 bg-card border border-[var(--border)] rounded-xl p-1">
           <button aria-label="Dia anterior" title="Dia anterior" onClick={() => setSelectedDate(d => addDays(d,-1))}
             className="btn btn-ghost btn-sm btn-icon">
@@ -1687,20 +1719,17 @@ export default function AgendaPage({ setPage }) {
           </button>
         </div>
 
-        {/* Search */}
         <div className="relative flex-1 min-w-[200px]">
           <Search size={14} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-muted"/>
           <input aria-label="Buscar pet ou tutor" className="inp pl-9 py-2" placeholder="Buscar pet, tutor..."
             value={search} onChange={e => setSearch(e.target.value)}/>
         </div>
 
-        {/* Status filter */}
         <select aria-label="Filtrar por status" className="inp py-2 w-auto" value={filterStatus} onChange={e => setFilterStatus(e.target.value)}>
           <option value="">Todos os status</option>
           {STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
         </select>
 
-        {/* View toggle */}
         <div className="flex bg-card border border-[var(--border)] rounded-xl p-1">
           {[
             { id:'list',   label:'Lista'  },
@@ -1742,7 +1771,6 @@ export default function AgendaPage({ setPage }) {
         </button>
       </div>
 
-      {/* Content */}
       {loading ? (
         <div className="flex items-center justify-center py-16 text-muted text-sm">
           <RefreshCw size={16} className="animate-spin mr-2"/> Carregando...
@@ -1777,7 +1805,6 @@ export default function AgendaPage({ setPage }) {
           onSelectDate={setSelectedDate}
         />
       ) : view === 'list' ? (
-        /* ── LIST VIEW ── */
         <div className="bg-card border border-[var(--border)] rounded-xl2 overflow-hidden">
           <div className="overflow-x-auto">
             <table className="tbl">
@@ -1820,7 +1847,7 @@ export default function AgendaPage({ setPage }) {
                           {a.status === 'concluido' && (
                             <button type="button" aria-label={needsPayment(a) ? 'Receber atendimento' : 'Imprimir ficha'} onClick={() => handleCompletedAction(a)}
                               className={`btn btn-ghost btn-sm btn-icon border ${needsPayment(a) ? 'text-amber-400 border-amber-500/20' : 'text-emerald-400 border-emerald-500/20'}`} title={needsPayment(a) ? 'Receber e lancar no caixa' : 'Imprimir ficha'}>
-                              {needsPayment(a) ? <Wallet size={13}/> : <Receipt size={13}/>}
+                              {needsPayment(a) ? <Wallet size={13}/> : <Receipt size={13}/>} 
                             </button>
                           )}
                           {['agendado','confirmado'].includes(a.status) && (
@@ -1843,7 +1870,6 @@ export default function AgendaPage({ setPage }) {
           </div>
         </div>
       ) : (
-        /* ── KANBAN VIEW ── */
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           {[
             { status:'agendado',     label:'Agendado',       cls:'text-amber-400',   icon: ClipboardList },
@@ -1880,7 +1906,6 @@ export default function AgendaPage({ setPage }) {
         </div>
       )}
 
-      {/* Modals */}
       {modal !== null && (
         <ApptModal
           appt={modal?.id ? modal : modal}
