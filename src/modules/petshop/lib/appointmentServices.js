@@ -65,12 +65,13 @@ export function defaultServiceCommissionRate(service = {}) {
 }
 
 export function serviceSpeciesTarget(service = {}) {
-  const explicit = normalizeSpecies(
-    service.species_target
-    ?? service.speciesTarget
-    ?? service.species
-    ?? service.bot_metadata?.species,
-  )
+  const hasOperationalTarget = Object.prototype.hasOwnProperty.call(service, 'species_target')
+    || Object.prototype.hasOwnProperty.call(service, 'speciesTarget')
+  if (hasOperationalTarget) {
+    return normalizeSpecies(service.species_target ?? service.speciesTarget) || 'all'
+  }
+
+  const explicit = normalizeSpecies(service.species ?? service.bot_metadata?.species)
   if (explicit) return explicit
 
   const text = appointmentServiceText(service)
