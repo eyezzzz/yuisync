@@ -32,6 +32,7 @@ import {
   appointmentServiceLabel,
   calculateAppointmentServiceTotals,
   classifyAppointmentServiceGroup,
+  serviceFitsPetSpecies,
   serviceFitsPetWeight,
   serviceOptionsForAppointmentGroup,
   serviceWeightRangeLabel,
@@ -59,6 +60,7 @@ const asAgendaServices = (services = []) =>
     group_type: classifyAppointmentServiceGroup(service),
     min_weight_kg: service.min_weight_kg ?? service.minWeightKg ?? null,
     max_weight_kg: service.max_weight_kg ?? service.maxWeightKg ?? null,
+    species_target: service.species_target ?? service.speciesTarget ?? null,
     active: service.active !== false,
   }))
 
@@ -220,7 +222,6 @@ const appointmentHourSlotKeys = (appt = {}) => {
   return keys
 }
 
-
 const DAILY_SLOT_MINUTES = 10
 const DAILY_ROW_HEIGHT = 24
 
@@ -248,7 +249,6 @@ const PT_WEEKDAYS = ['Dom','Seg','Ter','Qua','Qui','Sex','Sáb']
 const PT_MONTHS   = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
                      'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
 
-// ── Modal de Recibo de Serviço ────────────────────────────────────────────────
 const escapeReceiptHtml = (value = '') => String(value ?? '')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -376,7 +376,6 @@ function ReceiptModal({ appt, onClose, serviceLabel, staffById = new Map() }) {
   )
 }
 
-// ── Modal de Agendamento ──────────────────────────────────────────────────────
 function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubscriptions, onManagePets, pets, services = SERVICES, subscriptions = [], staff = [], deliveryStaff = [], transportOptions = [], serviceDurations, onSearchClients, appointments = [], slotCapacity = MANUAL_SLOT_CAPACITY }) {
   const isEdit = !!appt?.id
   const now = new Date()
@@ -396,6 +395,10 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
       price: Number(snapshot.unit_price ?? snapshot.price ?? 0),
       duration: Number(snapshot.duration_min || 60),
       group_type: snapshot.group_type || serviceGroup,
+      min_weight_kg: snapshot.min_weight_kg ?? null,
+      max_weight_kg: snapshot.max_weight_kg ?? null,
+      species_target: snapshot.species_target ?? null,
+      commission_rate: snapshot.commission_rate ?? null,
       active: true,
       icon: PawPrint,
     }
@@ -450,6 +453,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     const weight = Number(String(selected.weight_kg).replace(',', '.'))
     return Number.isFinite(weight) && weight > 0 ? weight : null
   }, [selectedClient, pets, form.pet_id, appt?.pets])
+  const petSpecies = useMemo(() => {
+    const selected = (selectedClient?.id === form.pet_id ? selectedClient : null)
+      || (pets || []).find((pet) => pet.id === form.pet_id)
+      || (appt?.pets?.id === form.pet_id ? appt.pets : null)
+    return selected?.species || null
+  }, [selectedClient, pets, form.pet_id, appt?.pets])
   const activeSubscriptions = useMemo(
     () => activeSubscriptionsForClient(subscriptions, form.pet_id),
     [subscriptions, form.pet_id],
@@ -463,8 +472,11 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     && item.catalog_service
     && item.catalog_service.group_type === serviceGroup
     && Number(item.remaining || 0) > 0
-    && (serviceGroup !== 'banho_tosa' || serviceFitsPetWeight(item.catalog_service, petWeightKg))
-  )), [packageUsage, serviceGroup, petWeightKg])
+    && (serviceGroup !== 'banho_tosa' || (
+      serviceFitsPetWeight(item.catalog_service, petWeightKg)
+      && serviceFitsPetSpecies(item.catalog_service, petSpecies)
+    ))
+  )), [packageUsage, serviceGroup, petWeightKg, petSpecies])
   const packageServiceCodes = useMemo(
     () => new Set(packageServiceEntries.map((item) => String(item.service_code || item.service_type))),
     [packageServiceEntries],
@@ -503,14 +515,17 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     const selectedCodes = new Set(form.service_codes.map(String))
     return serviceOptions
       .filter((service) => !selectedCodes.has(String(service.value)))
-      .filter((service) => serviceGroup !== 'banho_tosa' || serviceFitsPetWeight(service, petWeightKg))
+      .filter((service) => serviceGroup !== 'banho_tosa' || (
+        serviceFitsPetWeight(service, petWeightKg)
+        && serviceFitsPetSpecies(service, petSpecies)
+      ))
       .filter((service) => !query || safeLower([service.label, service.value].filter(Boolean).join(' ')).includes(query))
       .sort((left, right) => {
         const packagePriority = Number(packageServiceCodes.has(String(right.value))) - Number(packageServiceCodes.has(String(left.value)))
         if (packagePriority !== 0) return packagePriority
         return String(left.label || '').localeCompare(String(right.label || ''), 'pt-BR')
       })
-  }, [serviceOptions, form.service_codes, serviceSearch, packageServiceCodes, serviceGroup, petWeightKg])
+  }, [serviceOptions, form.service_codes, serviceSearch, packageServiceCodes, serviceGroup, petWeightKg, petSpecies])
   const filteredTutorGroups = useMemo(() => {
     const query = safeLower(deferredPetSearch)
     const unique = new Map()
@@ -629,6 +644,9 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
 
   const addService = (serviceCode) => {
     const selectedService = serviceOptions.find((service) => String(service.value) === String(serviceCode))
+    if (serviceGroup === 'banho_tosa' && selectedService && !serviceFitsPetSpecies(selectedService, petSpecies)) {
+      return setErr(`${selectedPet?.pet_name || 'O pet'} não é compatível com a espécie atendida por este serviço.`)
+    }
     if (serviceGroup === 'banho_tosa' && selectedService && !serviceFitsPetWeight(selectedService, petWeightKg)) {
       return setErr(`${selectedPet?.pet_name || 'O pet'} pesa ${petWeightKg} kg e este serviço atende ${serviceWeightRangeLabel(selectedService)}.`)
     }
@@ -669,6 +687,12 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
     if (!form.date) return setErr('Informe a data')
     if (!form.time) return setErr('Informe o horario')
     if (!serviceTotals.services.length) return setErr('Os servicos selecionados nao estao mais disponiveis')
+    if (serviceGroup === 'banho_tosa' && petSpecies) {
+      const incompatibleSpecies = serviceTotals.services.find((service) => !serviceFitsPetSpecies(service, petSpecies))
+      if (incompatibleSpecies) {
+        return setErr(`${selectedPet?.pet_name || 'O pet'} não é compatível com a espécie atendida pelo serviço “${incompatibleSpecies.label}”.`)
+      }
+    }
     if (serviceGroup === 'banho_tosa' && petWeightKg !== null) {
       const incompatible = serviceTotals.services.find((service) => !serviceFitsPetWeight(service, petWeightKg))
       if (incompatible) {
@@ -837,14 +861,14 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
 
             <div ref={servicePickerRef}>
               <label className="inp-label">{serviceGroupLabel}</label>
-              {serviceGroup === 'banho_tosa' && selectedPet && petWeightKg !== null && (
+              {serviceGroup === 'banho_tosa' && selectedPet && (
                 <div className="mb-3 rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3 text-xs text-emerald-200">
-                  <strong className="text-emerald-100">Filtro por peso ativo:</strong> {selectedPet.pet_name || 'pet'} · {petWeightKg} kg. A busca mostra apenas serviços compatíveis ou serviços sem restrição de peso.
+                  <strong className="text-emerald-100">Filtros do pet:</strong> {selectedPet.pet_name || 'pet'}{['dog', 'cat'].includes(String(petSpecies || '').toLowerCase()) ? ` · ${String(petSpecies).toLowerCase() === 'cat' ? 'Gato' : 'Cão'}` : ''}{petWeightKg !== null ? ` · ${petWeightKg} kg` : ''}. A busca oculta serviços incompatíveis por espécie e, quando houver peso cadastrado, por porte.
                 </div>
               )}
               {serviceGroup === 'banho_tosa' && selectedPet && petWeightKg === null && (
                 <div className="mb-3 rounded-xl border border-amber-500/25 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
-                  <strong className="text-amber-100">Peso não cadastrado.</strong> Cadastre o peso de {selectedPet.pet_name || 'este pet'} para filtrar automaticamente os serviços por porte.
+                  <strong className="text-amber-100">Peso não cadastrado.</strong> Cadastre o peso de {selectedPet.pet_name || 'este pet'} para completar o filtro automático por porte.
                 </div>
               )}
               {serviceGroup === 'banho_tosa' && activeSubscriptions.length > 0 && (
@@ -966,8 +990,8 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
                           <p className="px-3 py-3 text-xs text-muted">
                             {form.service_codes.length === serviceOptions.length
                               ? 'Todos os servicos desta area ja foram adicionados.'
-                              : serviceGroup === 'banho_tosa' && petWeightKg !== null
-                                ? `Nenhum servico compatível com ${petWeightKg} kg foi encontrado nesta busca.`
+                              : serviceGroup === 'banho_tosa' && selectedPet
+                                ? 'Nenhum serviço compatível com este pet foi encontrado nesta busca.'
                                 : 'Nenhum servico encontrado nesta busca.'}
                           </p>
                         )}
@@ -1148,7 +1172,6 @@ function ApptModal({ appt, onClose, onCreate, onUpdate, onReceipt, onRefreshSubs
   )
 }
 
-// ── Coluna de Status (Kanban) ──────────────────────────────────────────────────
 function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onReceipt, onCompletedAction, needsPayment, services = SERVICES, staffById = new Map() }) {
   const sb = statusBadge(appt.status)
   const assigned = staffById.get(appt.responsible_staff_key)
@@ -1223,7 +1246,6 @@ function KanbanCard({ appt, serviceLabel, statusBadge, onEdit, onStatus, onRecei
   )
 }
 
-// ── Página Principal ──────────────────────────────────────────────────────────
 function AgendaTimelineView({
   days,
   selectedDate,
