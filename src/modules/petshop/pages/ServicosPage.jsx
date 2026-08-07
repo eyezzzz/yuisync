@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { createPortal } from 'react-dom'
 import {
   Bike,
+  Cat,
   Clock3,
+  Dog,
   Droplets,
   Pencil,
   Plus,
@@ -16,7 +18,13 @@ import {
 
 import { fmtCurrency } from '../../../lib/supabase'
 import { usePetshopAdvanced } from '../hooks/usePetshopAdvanced'
-import { serviceWeightRange, serviceWeightRangeLabel } from '../lib/appointmentServices'
+import {
+  defaultServiceCommissionRate,
+  serviceSpeciesLabel,
+  serviceSpeciesTarget,
+  serviceWeightRange,
+  serviceWeightRangeLabel,
+} from '../lib/appointmentServices'
 
 const SERVICE_GROUPS = [
   { id: 'banho_tosa', label: 'Banho/Tosa', icon: Droplets, defaultIcon: 'droplets' },
@@ -32,9 +40,10 @@ const emptyService = (groupId = 'banho_tosa') => ({
   group_type: groupId,
   default_price: '',
   default_duration_min: '60',
-  commission_rate: '0',
+  commission_rate: '5',
   min_weight_kg: '',
   max_weight_kg: '',
+  species_target: 'all',
   active: true,
   sort_order: '999',
 })
@@ -51,16 +60,25 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
         ...service,
         default_price: String(service.default_price ?? ''),
         default_duration_min: String(service.default_duration_min ?? 60),
-        commission_rate: String(service.commission_rate ?? 0),
+        commission_rate: String(service.commission_rate ?? defaultServiceCommissionRate(service)),
         min_weight_kg: optionalWeightValue(service.min_weight_kg),
         max_weight_kg: optionalWeightValue(service.max_weight_kg),
+        species_target: serviceSpeciesTarget(service) || 'all',
         sort_order: String(service.sort_order ?? 999),
       }
     : emptyService(initialGroup))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [commissionTouched, setCommissionTouched] = useState(Boolean(service))
 
   const set = (key, value) => setForm((current) => ({ ...current, [key]: value }))
+  const setName = (value) => setForm((current) => ({
+    ...current,
+    name: value,
+    commission_rate: commissionTouched
+      ? current.commission_rate
+      : String(defaultServiceCommissionRate({ ...current, name: value })),
+  }))
 
   async function submit() {
     const name = String(form.name || '').trim()
@@ -69,6 +87,9 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
     const commission = Number(form.commission_rate)
     const minWeight = form.min_weight_kg === '' ? null : Number(form.min_weight_kg)
     const maxWeight = form.max_weight_kg === '' ? null : Number(form.max_weight_kg)
+    const speciesTarget = form.group_type === 'banho_tosa' && ['dog', 'cat'].includes(form.species_target)
+      ? form.species_target
+      : null
 
     if (!name) return setError('Informe o nome do serviço.')
     if (!Number.isFinite(price) || price < 0) return setError('Informe um valor válido.')
@@ -95,6 +116,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
         commission_rate: commission,
         min_weight_kg: form.group_type === 'banho_tosa' ? minWeight : null,
         max_weight_kg: form.group_type === 'banho_tosa' ? maxWeight : null,
+        species_target: speciesTarget,
         active: form.active !== false,
         sort_order: Number(form.sort_order || 999),
         icon: metadata.defaultIcon,
@@ -114,6 +136,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
         max_weight_kg: form.max_weight_kg === '' ? null : form.max_weight_kg,
       })
     : null
+  const standardCommission = defaultServiceCommissionRate(form)
 
   return createPortal(
     <div className="modal-overlay theme-petshop-modal" onClick={(event) => event.target === event.currentTarget && onClose()}>
@@ -123,7 +146,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
             <h2 className="font-display text-xl font-bold text-text">{service ? 'Editar serviço' : 'Novo serviço'}</h2>
             <p className="mt-1 text-sm text-muted">
               {productManaged
-                ? 'Nome, valor e comissão continuam controlados pelo Estoque. Aqui você pode configurar a faixa de peso usada na Agenda.'
+                ? 'Nome, valor e duração continuam controlados pelo Estoque. Espécie, peso e comissão são regras operacionais deste serviço.'
                 : 'O item será salvo diretamente no catálogo operacional e aparecerá na tabela da área escolhida.'}
             </p>
           </div>
@@ -155,7 +178,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className="inp-label">Nome</label>
-              <input disabled={productManaged} className="inp disabled:cursor-not-allowed disabled:opacity-60" value={form.name} onChange={(event) => set('name', event.target.value)} placeholder="Ex.: Banho porte pequeno"/>
+              <input disabled={productManaged} className="inp disabled:cursor-not-allowed disabled:opacity-60" value={form.name} onChange={(event) => setName(event.target.value)} placeholder="Ex.: Banho porte pequeno"/>
             </div>
             <div>
               <label className="inp-label">Código interno</label>
@@ -171,15 +194,41 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
             </div>
             <div>
               <label className="inp-label">Comissão (%)</label>
-              <input disabled={productManaged} className="inp disabled:cursor-not-allowed disabled:opacity-60" type="number" min="0" step="0.01" value={form.commission_rate} onChange={(event) => set('commission_rate', event.target.value)}/>
+              <input
+                className="inp"
+                type="number"
+                min="0"
+                step="0.01"
+                value={form.commission_rate}
+                onChange={(event) => {
+                  setCommissionTouched(true)
+                  set('commission_rate', event.target.value)
+                }}
+              />
+              <p className="mt-1 text-[11px] text-muted">Padrão: <strong className="text-text">{standardCommission}%</strong> · qualquer tosa = 10%; demais serviços = 5%. A regra pode ser ajustada por serviço.</p>
             </div>
           </div>
 
           {form.group_type === 'banho_tosa' && (
-            <section className="rounded-xl border border-[var(--border2)] bg-white/[0.03] p-4">
-              <div className="mb-3">
-                <p className="text-sm font-bold text-text">Faixa de peso do pet</p>
-                <p className="mt-1 text-xs text-muted">Opcional. Quando configurada, a Agenda mostra o serviço apenas para pets compatíveis. Sem faixa, o sistema tenta reconhecer “porte pequeno/médio/grande” ou pesos escritos no nome.</p>
+            <section className="rounded-xl border border-[var(--border2)] bg-white/[0.03] p-4 space-y-4">
+              <div>
+                <p className="text-sm font-bold text-text">Compatibilidade do pet</p>
+                <p className="mt-1 text-xs text-muted">Espécie e peso são usados pela Agenda para esconder opções incompatíveis antes do agendamento.</p>
+              </div>
+
+              <div>
+                <label className="inp-label">Espécie atendida</label>
+                <div className="grid grid-cols-3 gap-2">
+                  <button type="button" onClick={() => set('species_target', 'all')} className={`rounded-xl border px-3 py-2 text-xs font-bold ${form.species_target === 'all' ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}>Cães e gatos</button>
+                  <button type="button" onClick={() => set('species_target', 'dog')} className={`flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold ${form.species_target === 'dog' ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}><Dog size={13}/>Cães</button>
+                  <button type="button" onClick={() => set('species_target', 'cat')} className={`flex items-center justify-center gap-1 rounded-xl border px-3 py-2 text-xs font-bold ${form.species_target === 'cat' ? 'border-emerald-400/45 bg-emerald-500/15 text-emerald-300' : 'border-[var(--border2)] text-muted'}`}><Cat size={13}/>Gatos</button>
+                </div>
+                <p className="mt-2 text-xs text-muted">Regra atual: <strong className="text-text">{serviceSpeciesLabel(form)}</strong> · configurada no serviço.</p>
+              </div>
+
+              <div>
+                <p className="text-sm font-bold text-text">Faixa de peso</p>
+                <p className="mt-1 text-xs text-muted">Opcional. Sem faixa, o sistema tenta reconhecer “porte pequeno/médio/grande” ou pesos escritos no nome.</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -191,8 +240,8 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
                   <input className="inp" type="number" min="0" step="0.1" value={form.max_weight_kg} onChange={(event) => set('max_weight_kg', event.target.value)} placeholder="Sem máximo"/>
                 </div>
               </div>
-              <p className="mt-3 text-xs text-muted">
-                Regra atual: <strong className="text-text">{serviceWeightRangeLabel({
+              <p className="text-xs text-muted">
+                Regra de peso: <strong className="text-text">{serviceWeightRangeLabel({
                   ...form,
                   min_weight_kg: form.min_weight_kg === '' ? null : form.min_weight_kg,
                   max_weight_kg: form.max_weight_kg === '' ? null : form.max_weight_kg,
@@ -210,7 +259,7 @@ function ServiceModal({ service, initialGroup, onClose, onSave }) {
 
           <div className="flex gap-3">
             <button type="button" onClick={onClose} className="btn btn-secondary flex-1 justify-center">Cancelar</button>
-            <button type="button" onClick={submit} disabled={saving} className="btn btn-primary flex-1 justify-center"><Save size={15}/>{saving ? 'Salvando...' : productManaged ? 'Salvar faixa de peso' : 'Salvar serviço'}</button>
+            <button type="button" onClick={submit} disabled={saving} className="btn btn-primary flex-1 justify-center"><Save size={15}/>{saving ? 'Salvando...' : productManaged ? 'Salvar regras' : 'Salvar serviço'}</button>
           </div>
         </div>
       </div>
@@ -282,7 +331,7 @@ export default function ServicosPage() {
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <h1 className="page-title">Catálogo de Serviços</h1>
-          <p className="page-sub">Cadastre serviços manuais e organize cada item diretamente em Banho/Tosa, Veterinária ou Motoboy.</p>
+          <p className="page-sub">Serviço é a fonte de verdade para preço, duração, compatibilidade do pet e comissão operacional.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button type="button" onClick={reload} className="btn btn-secondary"><RefreshCw size={15}/>Atualizar</button>
@@ -315,12 +364,13 @@ export default function ServicosPage() {
           <h2 className="section-title">Serviços de {groupMeta(activeGroup).label}</h2>
         </div>
         <div className="overflow-x-auto">
-          <table className="tbl min-w-[980px]">
-            <thead><tr><th>Serviço</th><th>Código</th><th>Valor</th><th>Duração</th><th>Peso</th><th>Comissão</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead>
+          <table className="tbl min-w-[1080px]">
+            <thead><tr><th>Serviço</th><th>Código</th><th>Valor</th><th>Duração</th><th>Espécie</th><th>Peso</th><th>Comissão</th><th>Origem</th><th>Status</th><th>Ações</th></tr></thead>
             <tbody>
               {visibleServices.map((service) => {
                 const productManaged = service.service_source === 'product'
                 const range = serviceWeightRange(service)
+                const target = serviceSpeciesTarget(service)
                 return (
                   <tr key={`${service.group_type}-${service.id || service.code}`}>
                     <td className="font-semibold text-text">{service.name}</td>
@@ -329,15 +379,20 @@ export default function ServicosPage() {
                     <td><span className="inline-flex items-center gap-1"><Clock3 size={13}/>{service.default_duration_min || 60} min</span></td>
                     <td>
                       {service.group_type === 'banho_tosa'
+                        ? <span className={`inline-flex items-center gap-1 text-xs ${target && target !== 'all' ? 'font-semibold text-text' : 'text-muted'}`}>{target === 'cat' ? <Cat size={12}/> : target === 'dog' ? <Dog size={12}/> : null}{serviceSpeciesLabel(service)}</span>
+                        : <span className="text-xs text-muted">—</span>}
+                    </td>
+                    <td>
+                      {service.group_type === 'banho_tosa'
                         ? <span className={`text-xs ${range ? 'font-semibold text-text' : 'text-muted'}`}>{serviceWeightRangeLabel(service)}</span>
                         : <span className="text-xs text-muted">—</span>}
                     </td>
-                    <td>{Number(service.commission_rate || 0).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%</td>
+                    <td>{Number(service.commission_rate ?? defaultServiceCommissionRate(service)).toLocaleString('pt-BR', { maximumFractionDigits: 2 })}%</td>
                     <td><span className={`badge ${productManaged ? 'badge-blue' : 'badge-gray'}`}>{productManaged ? 'Produto / Estoque' : 'Manual'}</span></td>
                     <td><span className={`badge ${service.active !== false ? 'badge-green' : 'badge-gray'}`}>{service.active !== false ? 'Ativo' : 'Inativo'}</span></td>
                     <td>
                       <div className="flex items-center gap-2">
-                        <button type="button" title={productManaged ? 'Configurar faixa de peso; dados comerciais continuam no Estoque' : 'Editar serviço'} onClick={() => setModal({ mode: 'edit', service })} className="btn btn-secondary btn-sm"><Pencil size={13}/>{productManaged ? 'Peso' : 'Editar'}</button>
+                        <button type="button" title={productManaged ? 'Configurar espécie, peso e comissão; dados comerciais continuam no Estoque' : 'Editar serviço'} onClick={() => setModal({ mode: 'edit', service })} className="btn btn-secondary btn-sm"><Pencil size={13}/>{productManaged ? 'Regras' : 'Editar'}</button>
                         <button type="button" disabled={productManaged || changingId === service.id} onClick={() => toggleService(service)} className="btn btn-ghost btn-sm">
                           {service.active !== false ? <ToggleRight size={17} className="text-emerald-400"/> : <ToggleLeft size={17}/>} {service.active !== false ? 'Desativar' : 'Ativar'}
                         </button>
@@ -347,9 +402,9 @@ export default function ServicosPage() {
                 )
               })}
               {!visibleServices.length && !loading && (
-                <tr><td colSpan={9} className="py-12 text-center text-muted">Nenhum serviço nesta área. Clique em “Novo serviço” para cadastrar o primeiro.</td></tr>
+                <tr><td colSpan={10} className="py-12 text-center text-muted">Nenhum serviço nesta área. Clique em “Novo serviço” para cadastrar o primeiro.</td></tr>
               )}
-              {loading && <tr><td colSpan={9} className="py-12 text-center text-muted">Carregando serviços...</td></tr>}
+              {loading && <tr><td colSpan={10} className="py-12 text-center text-muted">Carregando serviços...</td></tr>}
             </tbody>
           </table>
         </div>

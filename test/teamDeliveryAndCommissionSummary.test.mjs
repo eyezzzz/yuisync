@@ -70,7 +70,7 @@ test('registros antigos genericos nao viram tosa automaticamente', async () => {
   assert.equal(rows[0].machine_grooming_count, 0)
 })
 
-test('banho com tosa higienica continua classificado como banho', async () => {
+test('banho com tosa higienica continua classificado como banho e recebe 10 por cento', async () => {
   const { appointmentCommissionLines } = await import('../src/modules/petshop/lib/teamCommissionSummary.js')
   const [line] = appointmentCommissionLines({
     id: 'bath-hygiene',
@@ -78,7 +78,7 @@ test('banho com tosa higienica continua classificado como banho', async () => {
     service_items: [{ name: 'Banho com tosa higienica', group_type: 'banho_tosa', unit_price: 50 }],
   })
   assert.equal(line.category, 'bath')
-  assert.equal(line.rate, 0.05)
+  assert.equal(line.rate, 0.10)
 })
 
 test('pacote de 280 com 80 de MotoDog gera quatro banhos de 50 e comissao de 2,50', async () => {
