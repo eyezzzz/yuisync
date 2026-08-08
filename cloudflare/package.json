@@ -6,7 +6,7 @@
   "scripts": {
     "types": "wrangler types worker-configuration.d.ts",
     "typecheck": "npm run types && tsc --noEmit",
-    "test": "vitest run",
+    "test": "vitest run --config vitest.config.ts",
     "check": "npm run typecheck && npm test && wrangler deploy --dry-run --env staging",
     "dev": "wrangler dev --env staging",
     "deploy:staging": "wrangler deploy --env staging",
@@ -17,6 +17,7 @@
     "better-auth": "1.6.25"
   },
   "devDependencies": {
+    "@types/node": "24.5.2",
     "typescript": "6.0.3",
     "vitest": "4.1.10",
     "wrangler": "4.114.0"
