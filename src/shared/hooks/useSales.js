@@ -96,6 +96,13 @@ function insertSaleSelect({ includeClient = true, includeFulfillment = true, inc
   return fields.join(', ')
 }
 
+export function resolveSalesLoadStatus(filters = {}) {
+  if (Object.prototype.hasOwnProperty.call(filters, 'status')) {
+    return filters.status || null
+  }
+  return filters.date ? 'concluido' : null
+}
+
 async function syncSaleToChatTimeline(moduleId, tenantId, sale, cartItems) {
   if (!sale?.customer_phone && !sale?.client_id) return
 
@@ -285,6 +292,7 @@ export function useSales() {
     setLoading(true)
     setError(null)
     const tz = getTimezoneOffset()
+    const requestedStatus = resolveSalesLoadStatus(filters)
 
     try {
       const response = await runWithTenantFallback(activeTenantId, async (includeTenant) => {
@@ -296,7 +304,7 @@ export function useSales() {
             .order('created_at', { ascending: false })
 
           query = applyTenantFilter(query, activeTenantId, includeTenant)
-          if (filters.status) query = query.eq('status', filters.status)
+          if (requestedStatus) query = query.eq('status', requestedStatus)
           if (filters.date) {
             query = query
               .gte('created_at', `${filters.date}T00:00:00${tz}`)
