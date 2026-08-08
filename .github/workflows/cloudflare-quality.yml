@@ -8,6 +8,15 @@ on:
       - 'src/shared/hooks/useAuth.js'
       - 'src/shared/hooks/useLegacyAuth.js'
       - 'src/shared/hooks/useNextAuth.js'
+      - 'src/shared/hooks/useClients.js'
+      - 'src/shared/hooks/useLegacyClients.js'
+      - 'src/shared/hooks/useProducts.js'
+      - 'src/shared/hooks/useLegacyProducts.js'
+      - 'src/shared/hooks/useAppointments.js'
+      - 'src/shared/hooks/useLegacyAppointments.js'
+      - 'src/shared/hooks/useSales.js'
+      - 'src/shared/hooks/useLegacySales.js'
+      - '.env.example'
       - '.github/workflows/cloudflare-quality.yml'
   push:
     branches:
@@ -18,21 +27,44 @@ on:
       - 'src/shared/hooks/useAuth.js'
       - 'src/shared/hooks/useLegacyAuth.js'
       - 'src/shared/hooks/useNextAuth.js'
+      - 'src/shared/hooks/useClients.js'
+      - 'src/shared/hooks/useLegacyClients.js'
+      - 'src/shared/hooks/useProducts.js'
+      - 'src/shared/hooks/useLegacyProducts.js'
+      - 'src/shared/hooks/useAppointments.js'
+      - 'src/shared/hooks/useLegacyAppointments.js'
+      - 'src/shared/hooks/useSales.js'
+      - 'src/shared/hooks/useLegacySales.js'
+      - '.env.example'
 
 jobs:
   quality:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: cloudflare
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
-      - run: npm install --ignore-scripts
-      - run: npm run typecheck
-      - run: npm test
-      - run: npx wrangler deploy --dry-run --env staging
+
+      - name: Install edge dependencies
+        working-directory: cloudflare
+        run: npm install --ignore-scripts
+      - name: Edge typecheck
+        working-directory: cloudflare
+        run: npm run typecheck
+      - name: Edge tests
+        working-directory: cloudflare
+        run: npm test
+      - name: Worker dry run
+        working-directory: cloudflare
+        run: npx wrangler deploy --dry-run --env staging
       - name: Frontend cutover inventory
+        working-directory: cloudflare
         run: node scripts/frontend-cutover-audit.mjs
+
+      - name: Install frontend dependencies
+        run: npm ci --ignore-scripts
+      - name: Frontend typecheck
+        run: npm run typecheck
+      - name: Frontend build
+        run: npm run build
