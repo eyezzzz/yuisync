@@ -4,6 +4,8 @@ import test from 'node:test'
 
 const migrationPath = new URL('../supabase/migrations/20260808153000_repair_stale_consumed_open_appointments.sql', import.meta.url)
 const sql = fs.readFileSync(migrationPath, 'utf8')
+const preopenMigrationPath = new URL('../supabase/migrations/20260808160000_preopen_consumed_appointment_before_service_edit.sql', import.meta.url)
+const preopenSql = fs.readFileSync(preopenMigrationPath, 'utf8')
 
 test('repara beneficio consumido legado antes de recalcular uma edicao aberta', () => {
   assert.match(sql, /repair_petshop_reopened_consumed_appointment/)
@@ -23,4 +25,13 @@ test('faz saneamento imediato apenas em atendimentos abertos sem venda', () => {
   assert.match(sql, /appointment\.status not in \('concluido', 'completed', 'finalizado'\)/)
   assert.match(sql, /appointment\.subscription_benefit_status = 'consumed'/)
   assert.match(sql, /not exists \(\s*select 1\s*from public\.sales sale/s)
+})
+
+test('reabre status antes de trocar servico quando o save envia tudo na mesma transacao', () => {
+  assert.match(preopenSql, /rename to update_petshop_appointment_transaction_core/)
+  assert.match(preopenSql, /v_current\.status in \('concluido', 'completed', 'finalizado'\)/)
+  assert.match(preopenSql, /v_current\.subscription_benefit_status = 'consumed'/)
+  assert.match(preopenSql, /update public\.appointments\s+set status = v_requested_status/s)
+  assert.match(preopenSql, /repair_petshop_reopened_consumed_appointment\(p_appointment_id\)/)
+  assert.match(preopenSql, /update_petshop_appointment_transaction_core\(\s*p_appointment_id,\s*p_payload/s)
 })
