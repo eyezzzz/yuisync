@@ -53,7 +53,7 @@
   },
   "vars": {
     "APP_ENV": "local",
-    "SCHEMA_VERSION": "15",
+    "SCHEMA_VERSION": "16",
     "BETTER_AUTH_ENABLED": "false",
     "LEGACY_IDENTITY_BRIDGE_ENABLED": "false",
     "MIGRATION_ENABLED": "false",
@@ -102,7 +102,7 @@
       },
       "vars": {
         "APP_ENV": "staging",
-        "SCHEMA_VERSION": "15",
+        "SCHEMA_VERSION": "16",
         "BETTER_AUTH_ENABLED": "true",
         "LEGACY_IDENTITY_BRIDGE_ENABLED": "true",
         "MIGRATION_ENABLED": "true",
