@@ -1,12 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useAuthCtx } from '../../context/AuthContext'
 import { useModuleCtx } from '../../context/ModuleContext'
-import { nextApi, nextFeature } from '../../lib/nextApi'
+import { nextApi, nextDomainEnabled } from '../../lib/nextApi'
 import { useAppointments as useLegacyAppointments } from './useLegacyAppointments'
 
-const readNext = nextFeature('appointments', 'read')
-const writeNext = nextFeature('appointments', 'write')
-const nextEnabled = readNext && writeNext
+const nextEnabled = nextDomainEnabled('appointments')
+const own = (object, key) => Object.prototype.hasOwnProperty.call(object, key)
 
 const normalizeMode = (value) => {
   const mode = String(value || '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim()
@@ -96,13 +95,7 @@ const fromNext = (row) => {
 const servicePayload = (payload = {}) => {
   const raw = Array.isArray(payload.services) ? payload.services : Array.isArray(payload.service_items) ? payload.service_items : []
   if (!raw.length && payload.service_type) {
-    return [{
-      code: payload.service_type,
-      name: payload.service_type,
-      price: Number(payload.price || 0),
-      durationMinutes: Number(payload.duration_min || payload.durationMinutes || 60),
-      quantity: 1,
-    }]
+    return [{ code: payload.service_type, name: payload.service_type, price: Number(payload.price || 0), durationMinutes: Number(payload.duration_min || payload.durationMinutes || 60), quantity: 1 }]
   }
   return raw.map((service) => ({
     serviceId: service.serviceId || service.service_id || null,
@@ -114,26 +107,29 @@ const servicePayload = (payload = {}) => {
   }))
 }
 
-const toNext = (payload = {}) => {
-  const transportSource = payload.transport || payload.motodog || {}
-  const hasTransport = Boolean(payload.transport || payload.motodog || payload.transport_mode)
-  return {
-    clientId: payload.clientId || payload.client_id || null,
-    petId: payload.petId || payload.pet_id || null,
-    scheduledAt: payload.scheduledAt || payload.scheduled_at,
-    durationMinutes: Number(payload.durationMinutes ?? payload.duration_min ?? 60),
-    status: payload.status,
-    liveStatus: payload.liveStatus ?? payload.live_status,
-    source: payload.source || 'manual',
-    notes: payload.notes,
-    employeeId: payload.employeeId ?? payload.employee_id,
-    groomerId: payload.groomerId ?? payload.groomer_id,
-    responsibleStaffKey: payload.responsibleStaffKey ?? payload.responsible_staff_key,
-    responsibleStaffName: payload.responsibleStaffName ?? payload.responsible_staff_name,
-    subscriptionId: payload.subscriptionId ?? payload.subscription_id,
-    subscriptionBenefitUsed: payload.subscriptionBenefitUsed ?? payload.subscription_benefit_used,
-    services: servicePayload(payload),
-    ...(hasTransport ? { transport: {
+const toNext = (payload = {}, create = false) => {
+  const result = {}
+  const include = (...keys) => create || keys.some((key) => own(payload, key))
+  if (include('clientId', 'client_id')) result.clientId = payload.clientId || payload.client_id || null
+  if (include('petId', 'pet_id')) result.petId = payload.petId || payload.pet_id || null
+  if (include('scheduledAt', 'scheduled_at')) result.scheduledAt = payload.scheduledAt || payload.scheduled_at
+  if (include('durationMinutes', 'duration_min')) result.durationMinutes = Number(payload.durationMinutes ?? payload.duration_min ?? 60)
+  if (include('status')) result.status = payload.status
+  if (include('liveStatus', 'live_status')) result.liveStatus = payload.liveStatus ?? payload.live_status
+  if (include('source')) result.source = payload.source || 'manual'
+  if (include('notes')) result.notes = payload.notes
+  if (include('employeeId', 'employee_id')) result.employeeId = payload.employeeId ?? payload.employee_id
+  if (include('groomerId', 'groomer_id')) result.groomerId = payload.groomerId ?? payload.groomer_id
+  if (include('responsibleStaffKey', 'responsible_staff_key')) result.responsibleStaffKey = payload.responsibleStaffKey ?? payload.responsible_staff_key
+  if (include('responsibleStaffName', 'responsible_staff_name')) result.responsibleStaffName = payload.responsibleStaffName ?? payload.responsible_staff_name
+  if (include('subscriptionId', 'subscription_id')) result.subscriptionId = payload.subscriptionId ?? payload.subscription_id
+  if (include('subscriptionBenefitUsed', 'subscription_benefit_used')) result.subscriptionBenefitUsed = payload.subscriptionBenefitUsed ?? payload.subscription_benefit_used
+  if (include('services', 'service_items', 'service_type')) result.services = servicePayload(payload)
+
+  const hasTransport = create || ['transport', 'motodog', 'transport_mode', 'transport_address', 'transport_neighborhood', 'transport_city', 'transport_reference', 'delivery_staff_key', 'delivery_staff_name'].some((key) => own(payload, key))
+  if (hasTransport) {
+    const transportSource = payload.transport || payload.motodog || {}
+    result.transport = {
       mode: normalizeMode(transportSource.mode || payload.transport_mode),
       outsideMuriae: transportSource.outsideMuriae ?? transportSource.outside_muriae ?? false,
       petWeightKg: transportSource.petWeightKg ?? transportSource.pet_weight_kg ?? null,
@@ -144,8 +140,9 @@ const toNext = (payload = {}) => {
       reference: transportSource.reference ?? payload.transport_reference ?? null,
       staffKey: transportSource.staffKey ?? transportSource.staff_key ?? payload.delivery_staff_key ?? null,
       staffName: transportSource.staffName ?? transportSource.staff_name ?? payload.delivery_staff_name ?? null,
-    } } : {}),
+    }
   }
+  return result
 }
 
 export function useAppointments() {
@@ -194,16 +191,14 @@ export function useAppointments() {
   const create = useCallback(async (payload) => {
     if (!nextEnabled) return legacy.create(payload)
     if (!activeTenantId || !activeModuleId) throw new Error('Selecione uma empresa ativa antes de salvar o agendamento.')
-    const row = fromNext(await nextApi.appointments.create(activeTenantId, activeModuleId, toNext(payload), payload.idempotency_key || crypto.randomUUID()))
+    const row = fromNext(await nextApi.appointments.create(activeTenantId, activeModuleId, toNext(payload, true), payload.idempotency_key || crypto.randomUUID()))
     setAppointments((current) => [...current.filter((item) => item.id !== row.id), row].sort((a, b) => new Date(a.scheduled_at) - new Date(b.scheduled_at)))
     return row
   }, [legacy.create, activeTenantId, activeModuleId])
 
   const update = useCallback(async (id, payload) => {
     if (!nextEnabled) return legacy.update(id, payload)
-    const body = toNext(payload)
-    Object.keys(body).forEach((key) => body[key] === undefined && delete body[key])
-    const row = fromNext(await nextApi.appointments.update(activeTenantId, activeModuleId, id, body))
+    const row = fromNext(await nextApi.appointments.update(activeTenantId, activeModuleId, id, toNext(payload, false)))
     setAppointments((current) => current.map((item) => item.id === id ? row : item))
     return row
   }, [legacy.update, activeTenantId, activeModuleId])
@@ -246,9 +241,6 @@ export function useAppointments() {
     }
   }
 
-  const serviceLabel = legacy.serviceLabel
-  const statusBadge = legacy.statusBadge
-
   return nextEnabled ? {
     appointments,
     loading,
@@ -260,8 +252,8 @@ export function useAppointments() {
     remove,
     subscribeRealtime,
     todayStats,
-    serviceLabel,
-    statusBadge,
+    serviceLabel: legacy.serviceLabel,
+    statusBadge: legacy.statusBadge,
     fetchAppointmentById,
   } : legacy
 }
