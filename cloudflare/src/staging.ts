@@ -12,7 +12,7 @@ async function queueProbe(env: RuntimeEnv): Promise<{pass:boolean;status:string;
 }
 
 async function durableObjectProbe(env: RuntimeEnv): Promise<boolean> {
-  const stub = env.OPERATION_COORDINATOR.getByName("staging-certification-probe");
+  const stub = env.OPERATION_COORDINATOR.getByName("staging-certification-probe") as unknown as { getSnapshot(): Promise<{ version:number } | null> };
   const snapshot = await stub.getSnapshot();
   return snapshot === null || typeof snapshot.version === "number";
 }
