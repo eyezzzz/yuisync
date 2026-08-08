@@ -38,21 +38,21 @@ export async function certifyStaging(request:Request,env:RuntimeEnv):Promise<Res
   if(env.APP_ENV!=="staging"||env.STAGING_CERTIFICATION_ENABLED!=="true")throw new HttpError(403,"CERTIFICATION_DISABLED","Staging certification is disabled");
   const token=required(env.STAGING_CERTIFICATION_TOKEN,"STAGING_CERTIFICATION_TOKEN");
   if(!(await constantTimeTokenMatch(header(request,"x-yuisync-certification-token"),token)))throw new HttpError(401,"INVALID_CERTIFICATION_TOKEN","Invalid certification token");
-  const input=await request.json() as {tenantId?:string;moduleId?:string;gitSha?:string;rollbackBookmark?:string};
-  if(!input.tenantId||!input.moduleId||!input.gitSha||!input.rollbackBookmark)throw new HttpError(400,"MISSING_CERTIFICATION_INPUT","tenantId, moduleId, gitSha and rollbackBookmark are required");
+  const input=await request.json() as {tenantId?:string;moduleId?:string;gitSha?:string;rollbackBookmark?:string;authRollbackBookmark?:string};
+  if(!input.tenantId||!input.moduleId||!input.gitSha||!input.rollbackBookmark||!input.authRollbackBookmark)throw new HttpError(400,"MISSING_CERTIFICATION_INPUT","tenantId, moduleId, gitSha, rollbackBookmark and authRollbackBookmark are required");
 
   const mainTables=await tableSet(env.DB);const schema=await env.DB.prepare(`SELECT value FROM schema_meta WHERE key='schema_version'`).first<{value:string}>();
   const migration=await migrationRerunChecks(env,input.tenantId,input.moduleId);const queue=await queueProbe(env);const auth=await authCheck(env);const durableObject=await durableObjectProbe(env);const tenantIsolation=await tenantIsolationProbe(env);const idempotency=await idempotencyProbe(env);
   const missingTables=REQUIRED_TABLES.filter((name)=>!mainTables.has(name));
   const migrationPass=Object.values(migration).every((value)=>(value as {pass?:boolean}).pass===true);
-  const checks={environment:env.APP_ENV==="staging",schema:schema?.value===env.SCHEMA_VERSION,requiredTables:missingTables.length===0,migrationRerun:migrationPass,tenantIsolation,idempotency,queue:queue.pass,durableObject,auth:auth.pass===true,cutoverDisabled:env.CUTOVER_MODE==="disabled",rollbackBookmark:Boolean(input.rollbackBookmark),details:{missingTables,migration,queue,auth}};
+  const checks={environment:env.APP_ENV==="staging",schema:schema?.value===env.SCHEMA_VERSION,requiredTables:missingTables.length===0,migrationRerun:migrationPass,tenantIsolation,idempotency,queue:queue.pass,durableObject,auth:auth.pass===true,cutoverDisabled:env.CUTOVER_MODE==="disabled",rollbackBookmarks:Boolean(input.rollbackBookmark&&input.authRollbackBookmark),details:{missingTables,migration,queue,auth}};
   const pass=Object.entries(checks).filter(([key])=>key!=="details").every(([,value])=>value===true);
   const id=randomId("staging_cert");
-  await env.DB.prepare(`INSERT INTO staging_certifications(id,tenant_id,module_id,git_sha,schema_version,status,checks_json,rollback_bookmark,created_at) VALUES(?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(id,input.tenantId,input.moduleId,input.gitSha,Number(env.SCHEMA_VERSION),pass?"pass":"fail",stableJson(checks),input.rollbackBookmark).run();
+  await env.DB.prepare(`INSERT INTO staging_certifications(id,tenant_id,module_id,git_sha,schema_version,status,checks_json,rollback_bookmark,auth_rollback_bookmark,created_at) VALUES(?,?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP)`).bind(id,input.tenantId,input.moduleId,input.gitSha,Number(env.SCHEMA_VERSION),pass?"pass":"fail",stableJson(checks),input.rollbackBookmark,input.authRollbackBookmark).run();
   return json({certificationId:id,pass,checks},pass?200:409);
 }
 
 export async function cutoverPlan(env:RuntimeEnv):Promise<Response>{
-  const cert=await env.DB.prepare(`SELECT id,git_sha,schema_version,status,rollback_bookmark,created_at FROM staging_certifications ORDER BY created_at DESC LIMIT 1`).first<Record<string,unknown>>();
-  return json({executable:false,productionMutationAvailable:false,reason:"Production cutover is intentionally not implemented in the Worker. It requires an explicit operator-controlled release after a passing staging certification.",latestCertification:cert??null,required:["passing staging certification","production preflight","production D1 Time Travel bookmark","explicit textual authorization","operator-controlled deployment"]});
+  const cert=await env.DB.prepare(`SELECT id,git_sha,schema_version,status,rollback_bookmark,auth_rollback_bookmark,created_at FROM staging_certifications ORDER BY created_at DESC LIMIT 1`).first<Record<string,unknown>>();
+  return json({executable:false,productionMutationAvailable:false,reason:"Production cutover is intentionally not implemented in the Worker. It requires an explicit operator-controlled release after a passing staging certification.",latestCertification:cert??null,required:["passing staging certification","production preflight","production DB and AUTH_DB Time Travel bookmarks","explicit textual authorization","operator-controlled deployment"]});
 }
