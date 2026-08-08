@@ -23,9 +23,9 @@ export async function linkPendingLegacyIdentities(env:RuntimeEnv,userId:string,e
   const normalizedEmail=email.toLowerCase().trim();
   const pending=await env.DB.prepare(`SELECT legacy_user_id FROM legacy_identity_mappings WHERE legacy_provider='supabase' AND lower(legacy_email)=? AND status='pending_reauthentication' ORDER BY legacy_user_id`).bind(normalizedEmail).all<{legacy_user_id:string}>();
   const rows=pending.results??[];
-  if(rows.length===0)return;
   if(rows.length>1)throw new HttpError(409,"IDENTITY_LINK_AMBIGUOUS","Multiple legacy identities share this email; manual resolution is required");
-  const row=rows[0];
+  const [row]=rows;
+  if(!row)return;
   const existing=await env.DB.prepare(`SELECT legacy_user_id FROM legacy_identity_mappings WHERE auth_user_id=? AND legacy_provider='supabase' AND status='linked' AND legacy_user_id<>? LIMIT 1`).bind(userId,row.legacy_user_id).first<{legacy_user_id:string}>();
   if(existing)throw new HttpError(409,"IDENTITY_ALREADY_LINKED","This Better Auth identity is already linked to another legacy identity");
   const legacyPrincipal=`legacy:${row.legacy_user_id}`;
