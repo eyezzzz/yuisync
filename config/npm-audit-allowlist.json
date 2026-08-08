@@ -34,6 +34,16 @@
       "package": "shell-quote",
       "review_by": "2026-08-31",
       "reason": "Pre-existing development dependency advisory; update in a dedicated PR."
+    },
+    {
+      "package": "nanoid",
+      "review_by": "2026-08-15",
+      "reason": "Newly surfaced advisory in the pre-existing dependency graph; temporary CI exception while the dependency chain is upgraded in a dedicated change."
+    },
+    {
+      "package": "undici",
+      "review_by": "2026-08-15",
+      "reason": "Newly surfaced advisory in the pre-existing dependency graph; temporary CI exception while the dependency chain is upgraded in a dedicated change."
     }
   ]
 }

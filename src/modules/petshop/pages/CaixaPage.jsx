@@ -22,6 +22,8 @@ import {
   openCashRegisterSnapshot,
 } from '../lib/cashRegisterOperations'
 
+const APPOINTMENT_SYNC_EVENT = 'yuisync:appointments-sync'
+
 const METHOD_LABELS = {
   dinheiro: 'Dinheiro',
   pix: 'Pix',
@@ -102,6 +104,22 @@ export default function CaixaPage({ setPage }) {
   }
 
   useEffect(() => { void reload() }, [activeTenantId, moduleId])
+
+  useEffect(() => {
+    const refreshCash = () => { void reload() }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void reload()
+    }
+
+    window.addEventListener(APPOINTMENT_SYNC_EVENT, refreshCash)
+    window.addEventListener('focus', refreshCash)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.removeEventListener(APPOINTMENT_SYNC_EVENT, refreshCash)
+      window.removeEventListener('focus', refreshCash)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [activeTenantId, moduleId])
 
   async function handleOpenCashRegister() {
     setSaving(true)
@@ -197,7 +215,7 @@ export default function CaixaPage({ setPage }) {
                 <div className="flex items-center justify-between gap-2"><span className="text-muted">Entradas em dinheiro</span><span className="font-semibold text-emerald-400">{fmtCurrency(dashboard.expectedCash || 0)}</span></div>
                 <div className="flex items-center justify-between gap-2"><span className="text-muted">Saldo fisico esperado</span><span className="font-semibold text-amber-400">{fmtCurrency(projectedClosing)}</span></div>
               </div>
-              <div><label className="inp-label">Saldo contado</label><input aria-label="Saldo contado no fechamento" className="inp" type="number" min="0" step="0.01" value={closingBalance} onChange={(event) => setClosingBalance(event.target.value)}/></div>
+              <div><label className="inp-label">Saldo contado</label><input aria-label="Saldo contado do caixa" className="inp" type="number" min="0" step="0.01" value={closingBalance} onChange={(event) => setClosingBalance(event.target.value)}/></div>
               <div className={`rounded-xl border px-4 py-3 text-sm ${Math.abs(closingDifference) < 0.01 ? 'border-emerald-500/20 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/20 bg-amber-500/10 text-amber-300'}`}>
                 Diferenca prevista: <strong>{fmtCurrency(closingDifference)}</strong>
               </div>

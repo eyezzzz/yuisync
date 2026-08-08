@@ -889,14 +889,20 @@ test('recuperacao de contexto usa apenas estado estruturado e nao reinterpreta t
   assert.match(buildPetbotSearchText('banho', structured), /Shih Tzu/)
 })
 
-test('opcoes de transporte sao lidas da configuracao real da loja', () => {
+test('opcoes de transporte preservam os padroes operacionais e a configuracao real da loja', () => {
   assert.deepEqual(listPetTransportOptions({
     petTransportFee: 999,
     petTransportOptions: [
       { id: 'buscar', label: 'Somente buscar', fee: 18, active: true },
       { id: 'inativo', label: 'Inativo', fee: 1, active: false },
     ],
-  }), [{ id: 'buscar', label: 'Somente buscar', fee: 18 }])
+  }), [
+    { id: 'buscar_e_levar', label: 'Buscar e levar', fee: 999 },
+    { id: 'buscar_e_levar_fora_muriae', label: 'Buscar e levar (fora de Muriaé)', fee: 30 },
+    { id: 'somente_buscar', label: 'Somente buscar', fee: 15 },
+    { id: 'somente_levar', label: 'Somente levar', fee: 15 },
+    { id: 'buscar', label: 'Somente buscar', fee: 18 },
+  ])
 })
 
 

@@ -41,6 +41,8 @@ const PAYMENT_LABELS = Object.fromEntries([
   ['pacote', 'Sem cobranca - pacote'],
 ])
 
+const APPOINTMENT_SYNC_EVENT = 'yuisync:appointments-sync'
+
 function localDate() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
@@ -308,6 +310,7 @@ export default function BanhoTosaPdvPanel({ setPage }) {
             .from('sales')
             .select('id,appointment_id,total_price,subtotal,discount,payment_method,status,created_at')
             .eq('module_id', moduleId)
+            .eq('status', 'concluido')
             .in('appointment_id', ids)
           return applyTenantFilter(query, activeTenantId, includeTenant)
         })
@@ -345,6 +348,22 @@ export default function BanhoTosaPdvPanel({ setPage }) {
   }, [activeTenantId, date, moduleId, runScoped])
 
   useEffect(() => { void reload() }, [reload])
+
+  useEffect(() => {
+    const refreshFinancialState = () => { void reload() }
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === 'visible') void reload()
+    }
+
+    window.addEventListener(APPOINTMENT_SYNC_EVENT, refreshFinancialState)
+    window.addEventListener('focus', refreshFinancialState)
+    document.addEventListener('visibilitychange', refreshWhenVisible)
+    return () => {
+      window.removeEventListener(APPOINTMENT_SYNC_EVENT, refreshFinancialState)
+      window.removeEventListener('focus', refreshFinancialState)
+      document.removeEventListener('visibilitychange', refreshWhenVisible)
+    }
+  }, [reload])
 
   const salesByAppointment = useMemo(
     () => new Map(sales.map((sale) => [String(sale.appointment_id), sale])),
