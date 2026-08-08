@@ -1,6 +1,8 @@
 export type RuntimeSecrets = {
   BETTER_AUTH_SECRET?: string;
   BETTER_AUTH_URL?: string;
+  BETTER_AUTH_TRUSTED_ORIGINS?: string;
+  CORS_ALLOWED_ORIGINS?: string;
   MIGRATION_TOKEN?: string;
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
@@ -51,6 +53,13 @@ export function required(value: string | undefined, name: string): string {
 export function header(request: Request, name: string): string | null {
   const value = request.headers.get(name)?.trim();
   return value || null;
+}
+
+export function csv(value: string | undefined): string[] {
+  return String(value ?? "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
 }
 
 export function parseJson<T>(value: unknown, fallback: T): T {
