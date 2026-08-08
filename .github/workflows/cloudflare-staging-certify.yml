@@ -1,0 +1,147 @@
+name: Cloudflare Staging Certification
+
+on:
+  workflow_dispatch:
+    inputs:
+      tenant_id:
+        description: Tenant ID to migrate and certify
+        required: true
+        type: string
+      module_id:
+        description: Module ID to migrate and certify
+        required: true
+        default: petshop
+        type: string
+      staging_url:
+        description: Deployed staging Worker base URL
+        required: true
+        type: string
+      frontend_origin:
+        description: Exact staging frontend origin allowed to call the Worker
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: yuisync-cloudflare-staging
+  cancel-in-progress: false
+
+jobs:
+  certify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      YUISYNC_STAGING_URL: ${{ inputs.staging_url }}
+      YUISYNC_FRONTEND_ORIGIN: ${{ inputs.frontend_origin }}
+      YUISYNC_STAGING_TENANT_ID: ${{ inputs.tenant_id }}
+      YUISYNC_STAGING_MODULE_ID: ${{ inputs.module_id }}
+      YUISYNC_MIGRATION_TOKEN: ${{ secrets.YUISYNC_MIGRATION_TOKEN }}
+      YUISYNC_STAGING_CERTIFICATION_TOKEN: ${{ secrets.YUISYNC_STAGING_CERTIFICATION_TOKEN }}
+      YUISYNC_BETTER_AUTH_SECRET: ${{ secrets.YUISYNC_BETTER_AUTH_SECRET }}
+      YUISYNC_SUPABASE_URL: ${{ secrets.YUISYNC_SUPABASE_URL }}
+      YUISYNC_SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.YUISYNC_SUPABASE_SERVICE_ROLE_KEY }}
+      GIT_SHA: ${{ github.sha }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install edge dependencies
+        run: npm install --ignore-scripts
+
+      - name: Validate staging build
+        run: npm run check
+
+      - name: Validate staging URLs
+        shell: bash
+        run: |
+          set -euo pipefail
+          node - <<'NODE'
+          for (const name of ['YUISYNC_STAGING_URL', 'YUISYNC_FRONTEND_ORIGIN']) {
+            const value = process.env[name]
+            const url = new URL(value)
+            if (!['https:', 'http:'].includes(url.protocol)) throw new Error(`${name} must use http(s)`)
+            if (url.username || url.password || url.search || url.hash) throw new Error(`${name} must be a plain origin/base URL`)
+            if (name === 'YUISYNC_FRONTEND_ORIGIN' && url.pathname !== '/') throw new Error('YUISYNC_FRONTEND_ORIGIN must not contain a path')
+          }
+          NODE
+
+      - name: Deploy staging only
+        run: npx wrangler deploy --env staging
+
+      - name: Capture pre-migration rollback bookmarks
+        id: rollback
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "db=$(node scripts/d1-bookmark.mjs DB)" >> "$GITHUB_OUTPUT"
+          echo "auth_db=$(node scripts/d1-bookmark.mjs AUTH_DB)" >> "$GITHUB_OUTPUT"
+
+      - name: Sync staging runtime secrets
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${YUISYNC_MIGRATION_TOKEN:?missing YUISYNC_MIGRATION_TOKEN}"
+          : "${YUISYNC_STAGING_CERTIFICATION_TOKEN:?missing YUISYNC_STAGING_CERTIFICATION_TOKEN}"
+          : "${YUISYNC_BETTER_AUTH_SECRET:?missing YUISYNC_BETTER_AUTH_SECRET}"
+          : "${YUISYNC_SUPABASE_URL:?missing YUISYNC_SUPABASE_URL}"
+          : "${YUISYNC_SUPABASE_SERVICE_ROLE_KEY:?missing YUISYNC_SUPABASE_SERVICE_ROLE_KEY}"
+          : "${YUISYNC_FRONTEND_ORIGIN:?missing YUISYNC_FRONTEND_ORIGIN}"
+          node - <<'NODE' > /tmp/yuisync-staging-secrets.json
+          const frontendOrigin = new URL(process.env.YUISYNC_FRONTEND_ORIGIN).origin
+          const stagingOrigin = new URL(process.env.YUISYNC_STAGING_URL).origin
+          const values = {
+            BETTER_AUTH_SECRET: process.env.YUISYNC_BETTER_AUTH_SECRET,
+            BETTER_AUTH_URL: process.env.YUISYNC_STAGING_URL,
+            BETTER_AUTH_TRUSTED_ORIGINS: `${frontendOrigin},${stagingOrigin}`,
+            CORS_ALLOWED_ORIGINS: frontendOrigin,
+            MIGRATION_TOKEN: process.env.YUISYNC_MIGRATION_TOKEN,
+            STAGING_CERTIFICATION_TOKEN: process.env.YUISYNC_STAGING_CERTIFICATION_TOKEN,
+            SUPABASE_URL: process.env.YUISYNC_SUPABASE_URL,
+            SUPABASE_SERVICE_ROLE_KEY: process.env.YUISYNC_SUPABASE_SERVICE_ROLE_KEY,
+          }
+          process.stdout.write(JSON.stringify(values))
+          NODE
+          npx wrangler secret bulk /tmp/yuisync-staging-secrets.json --env staging
+          rm -f /tmp/yuisync-staging-secrets.json
+
+      - name: Apply main D1 migrations
+        run: npx wrangler d1 migrations apply DB --env staging --remote
+
+      - name: Apply auth boundary marker
+        run: npx wrangler d1 migrations apply AUTH_DB --env staging --remote
+
+      - name: Apply Better Auth official schema
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST "$YUISYNC_STAGING_URL/admin/auth/migrate" \
+            -H "x-yuisync-migration-token: $YUISYNC_MIGRATION_TOKEN" \
+            -H "content-type: application/json" \
+            -d '{}'
+
+      - name: Migrate and verify all real-data domains twice
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail-with-body --silent --show-error \
+            -X POST "$YUISYNC_STAGING_URL/admin/migrations/run" \
+            -H "x-yuisync-migration-token: $YUISYNC_MIGRATION_TOKEN" \
+            -H "content-type: application/json" \
+            -d "{\"tenantId\":\"$YUISYNC_STAGING_TENANT_ID\",\"moduleId\":\"$YUISYNC_STAGING_MODULE_ID\",\"rerun\":true,\"migrationVersion\":1}"
+
+      - name: Certify staging against pre-migration rollback points
+        env:
+          YUISYNC_ROLLBACK_BOOKMARK: ${{ steps.rollback.outputs.db }}
+          YUISYNC_AUTH_ROLLBACK_BOOKMARK: ${{ steps.rollback.outputs.auth_db }}
+        run: node scripts/staging-certify.mjs
