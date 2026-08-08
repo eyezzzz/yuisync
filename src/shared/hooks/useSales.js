@@ -1,12 +1,10 @@
 import { useCallback, useState } from 'react'
 import { useAuthCtx } from '../../context/AuthContext'
 import { useModuleCtx } from '../../context/ModuleContext'
-import { nextApi, nextFeature } from '../../lib/nextApi'
+import { nextApi, nextDomainEnabled } from '../../lib/nextApi'
 import { useSales as useLegacySales } from './useLegacySales'
 
-const readNext = nextFeature('sales', 'read')
-const writeNext = nextFeature('sales', 'write')
-const nextEnabled = readNext && writeNext
+const nextEnabled = nextDomainEnabled('sales')
 
 const pad = (value) => String(value).padStart(2, '0')
 const dateISO = (date = new Date()) => `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
@@ -75,7 +73,7 @@ const salePayload = (saleData = {}, cartItems = []) => {
   const paymentSplits = Array.isArray(saleData.payment_splits)
     ? saleData.payment_splits.filter((item) => Number(item?.amount || 0) > 0)
     : []
-  const payment = saleData.payment_method || paymentSplits.length
+  const payment = (saleData.payment_method || paymentSplits.length)
     ? {
       method: paymentSplits.length > 1 ? 'multiplo' : saleData.payment_method || paymentSplits[0]?.method || 'outros',
       amount: total,
