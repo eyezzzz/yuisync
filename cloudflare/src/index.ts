@@ -18,5 +18,5 @@ export default {
       return json({error:{code:"NOT_FOUND",message:"Resource not found"}},404);
     }catch(error){return errorResponse(error);}
   },
-  async queue(batch:MessageBatch<{outboxId:string}>,env:RuntimeEnv):Promise<void>{await handleQueue(batch,env);},
+  async queue(batch:MessageBatch<unknown>,env:RuntimeEnv):Promise<void>{await handleQueue(batch,env);},
 } satisfies ExportedHandler<RuntimeEnv>;
