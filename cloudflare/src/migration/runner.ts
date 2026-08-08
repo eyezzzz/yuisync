@@ -13,6 +13,25 @@ function sourceRecord(unit: WriteUnit, normalizedFingerprint: string) {
   };
 }
 
+export function resolveMigrationDomains(domains: MigrationDomain[] = MIGRATION_ORDER): MigrationDomain[] {
+  const resolved = new Set<MigrationDomain>();
+  const visiting = new Set<MigrationDomain>();
+
+  const visit = (domain: MigrationDomain) => {
+    const migration = DOMAIN_MIGRATIONS[domain];
+    if (!migration) throw new HttpError(400, "UNKNOWN_MIGRATION_DOMAIN", `Unknown migration domain: ${domain}`);
+    if (resolved.has(domain)) return;
+    if (visiting.has(domain)) throw new HttpError(500, "MIGRATION_DEPENDENCY_CYCLE", `Migration dependency cycle detected at ${domain}`);
+    visiting.add(domain);
+    for (const dependency of migration.dependencies) visit(dependency);
+    visiting.delete(domain);
+    resolved.add(domain);
+  };
+
+  for (const domain of domains) visit(domain);
+  return MIGRATION_ORDER.filter((domain) => resolved.has(domain));
+}
+
 async function prepareTenant(context: MigrationContext): Promise<void> {
   if (context.scope.dryRun) return;
   await context.env.DB.prepare(`
@@ -86,36 +105,86 @@ export async function runDomainMigration(env: MigrationContext["env"], scope: Mi
   const migration = DOMAIN_MIGRATIONS[domain];
   if (!migration) throw new HttpError(400, "UNKNOWN_MIGRATION_DOMAIN", `Unknown migration domain: ${domain}`);
   const context = { env, scope, runId: randomId("migration_run"), domain } as MigrationContext & { domain: MigrationDomain };
-  await prepareTenant(context); await createRun(context, domain);
+  await prepareTenant(context);
+  await createRun(context, domain);
   const source = await migration.extract(context);
   const sourceRecords: ReturnType<typeof sourceRecord>[] = [];
-  let normalizedCount = 0, writtenCount = 0, rejectedCount = 0;
+  let normalizedCount = 0;
+  let writtenCount = 0;
+  let rejectedCount = 0;
+
   for (const row of source) {
     try {
       const units = await migration.normalize(row, context);
       normalizedCount += units.length;
       const result = await writeUnits(context, units);
-      writtenCount += result.written; sourceRecords.push(...result.sourceRecords);
+      writtenCount += result.written;
+      sourceRecords.push(...result.sourceRecords);
     } catch (error) {
       rejectedCount += 1;
       if (rejectedCount <= MAX_FAILURE_DETAILS) await recordFailure(context, row.id == null ? null : String(row.id), error);
     }
   }
-  sourceRecords.sort((a,b)=>`${a.source_id}|${a.target_table}|${a.target_id}`.localeCompare(`${b.source_id}|${b.target_table}|${b.target_id}`));
+
+  sourceRecords.sort((a, b) => `${a.source_id}|${a.target_table}|${a.target_id}`.localeCompare(`${b.source_id}|${b.target_table}|${b.target_id}`));
   const sourceFingerprint = await sha256(stableJson(sourceRecords));
-  let targetFingerprint = sourceFingerprint; let targetMetrics: Record<string,unknown>={mappedRows:sourceRecords.length};
+  let targetFingerprint = sourceFingerprint;
+  let targetMetrics: Record<string, unknown> = { mappedRows: sourceRecords.length };
+
   if (!scope.dryRun) {
     const target = await migration.targetFingerprint(context);
     const targetRecords = JSON.parse(target.fingerprint) as unknown[];
-    targetFingerprint = await sha256(stableJson(targetRecords)); targetMetrics = target.metrics;
+    targetFingerprint = await sha256(stableJson(targetRecords));
+    targetMetrics = target.metrics;
   }
-  const result: DomainResult = { sourceCount:source.length, normalizedCount, writtenCount:scope.dryRun?0:writtenCount, rejectedCount, sourceFingerprint, targetFingerprint, metrics:{dryRun:scope.dryRun,domain,sourceRows:source.length,normalizedRows:normalizedCount,target:targetMetrics} };
-  await completeRun(context,result); return result;
+
+  const result: DomainResult = {
+    sourceCount: source.length,
+    normalizedCount,
+    writtenCount: scope.dryRun ? 0 : writtenCount,
+    rejectedCount,
+    sourceFingerprint,
+    targetFingerprint,
+    metrics: {
+      dryRun: scope.dryRun,
+      domain,
+      sourceRows: source.length,
+      normalizedRows: normalizedCount,
+      target: targetMetrics,
+    },
+  };
+  await completeRun(context, result);
+  return result;
 }
 
-export async function runMigrationWave(env:MigrationContext["env"],scope:MigrationScope,domains:MigrationDomain[]=MIGRATION_ORDER):Promise<Record<string,DomainResult>>{
-  const requested=new Set(domains),ordered=MIGRATION_ORDER.filter((domain)=>requested.has(domain)),results:Record<string,DomainResult>={};
-  for(const domain of ordered){const migration=DOMAIN_MIGRATIONS[domain];for(const dependency of migration.dependencies){if(requested.has(dependency)&&!results[dependency])throw new HttpError(409,"MIGRATION_DEPENDENCY_ORDER",`${domain} requires ${dependency}`);}const result=await runDomainMigration(env,scope,domain);results[domain]=result;if(result.rejectedCount>0||result.sourceFingerprint!==result.targetFingerprint)break;}return results;
+export async function runMigrationWave(
+  env: MigrationContext["env"],
+  scope: MigrationScope,
+  domains: MigrationDomain[] = MIGRATION_ORDER,
+): Promise<Record<string, DomainResult>> {
+  const ordered = resolveMigrationDomains(domains);
+  const results: Record<string, DomainResult> = {};
+  for (const domain of ordered) {
+    const result = await runDomainMigration(env, scope, domain);
+    results[domain] = result;
+    if (result.rejectedCount > 0 || result.sourceFingerprint !== result.targetFingerprint) break;
+  }
+  return results;
 }
 
-export async function verifyRerun(env:MigrationContext["env"],scope:Omit<MigrationScope,"dryRun">,domains:MigrationDomain[]):Promise<{first:Record<string,DomainResult>;second:Record<string,DomainResult>;pass:boolean}>{const actual={...scope,dryRun:false};const first=await runMigrationWave(env,actual,domains);const second=await runMigrationWave(env,actual,domains);const pass=domains.every((domain)=>{const a=first[domain],b=second[domain];return!!a&&!!b&&a.rejectedCount===0&&b.rejectedCount===0&&a.targetFingerprint===b.targetFingerprint&&b.sourceFingerprint===b.targetFingerprint;});return{first,second,pass};}
+export async function verifyRerun(
+  env: MigrationContext["env"],
+  scope: Omit<MigrationScope, "dryRun">,
+  domains: MigrationDomain[],
+): Promise<{ first: Record<string, DomainResult>; second: Record<string, DomainResult>; pass: boolean }> {
+  const actual = { ...scope, dryRun: false };
+  const resolved = resolveMigrationDomains(domains);
+  const first = await runMigrationWave(env, actual, resolved);
+  const second = await runMigrationWave(env, actual, resolved);
+  const pass = resolved.every((domain) => {
+    const a = first[domain];
+    const b = second[domain];
+    return !!a && !!b && a.rejectedCount === 0 && b.rejectedCount === 0 && a.targetFingerprint === b.targetFingerprint && b.sourceFingerprint === b.targetFingerprint;
+  });
+  return { first, second, pass };
+}
