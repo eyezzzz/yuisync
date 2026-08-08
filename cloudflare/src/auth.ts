@@ -1,15 +1,39 @@
 import { betterAuth } from "better-auth";
 import { getMigrations } from "better-auth/db/migration";
-import { HttpError, RuntimeEnv, constantTimeTokenMatch, header, parseJson, required } from "./runtime";
+import { HttpError, RuntimeEnv, constantTimeTokenMatch, csv, header, parseJson, required } from "./runtime";
 
 export type AuthContext = { userId:string; tenantId:string; moduleId:string; role:string; permissions:string[] };
 
-export function createAuth(env:RuntimeEnv){if(env.BETTER_AUTH_ENABLED!=="true")throw new HttpError(503,"BETTER_AUTH_DISABLED","Better Auth runtime is disabled");return betterAuth({database:env.AUTH_DB,secret:required(env.BETTER_AUTH_SECRET,"BETTER_AUTH_SECRET"),baseURL:required(env.BETTER_AUTH_URL,"BETTER_AUTH_URL"),emailAndPassword:{enabled:true}});}
+export function createAuth(env:RuntimeEnv){
+  if(env.BETTER_AUTH_ENABLED!=="true")throw new HttpError(503,"BETTER_AUTH_DISABLED","Better Auth runtime is disabled");
+  const trustedOrigins=csv(env.BETTER_AUTH_TRUSTED_ORIGINS).map((origin)=>origin.replace(/\/$/,""));
+  return betterAuth({
+    database:env.AUTH_DB,
+    secret:required(env.BETTER_AUTH_SECRET,"BETTER_AUTH_SECRET"),
+    baseURL:required(env.BETTER_AUTH_URL,"BETTER_AUTH_URL"),
+    trustedOrigins,
+    emailAndPassword:{enabled:true},
+  });
+}
 export async function handleAuthRequest(request:Request,env:RuntimeEnv):Promise<Response>{return createAuth(env).handler(request);}
 
 export async function applyAuthMigrations(request:Request,env:RuntimeEnv):Promise<Response>{if(env.APP_ENV!=="staging")throw new HttpError(403,"STAGING_ONLY","Auth migrations are staging-only");if(env.BETTER_AUTH_ENABLED!=="true")throw new HttpError(409,"AUTH_DISABLED","Enable Better Auth before applying schema");const expected=required(env.MIGRATION_TOKEN,"MIGRATION_TOKEN");if(!(await constantTimeTokenMatch(header(request,"x-yuisync-migration-token"),expected)))throw new HttpError(401,"INVALID_MIGRATION_TOKEN","Invalid migration token");const auth=createAuth(env);const migrations=await getMigrations(auth.options);await migrations.runMigrations();return Response.json({ok:true,created:migrations.toBeCreated,added:migrations.toBeAdded},{headers:{"cache-control":"no-store"}});}
 
-export async function linkPendingLegacyIdentities(env:RuntimeEnv,userId:string,email:string):Promise<void>{const pending=await env.DB.prepare(`SELECT legacy_user_id FROM legacy_identity_mappings WHERE legacy_provider='supabase' AND lower(legacy_email)=? AND status='pending_reauthentication'`).bind(email.toLowerCase().trim()).all<{legacy_user_id:string}>();for(const row of pending.results??[]){const legacyPrincipal=`legacy:${row.legacy_user_id}`;await env.DB.batch([env.DB.prepare(`UPDATE legacy_identity_mappings SET auth_user_id=?,status='linked',migrated_at=CURRENT_TIMESTAMP WHERE legacy_provider='supabase' AND legacy_user_id=?`).bind(userId,row.legacy_user_id),env.DB.prepare(`UPDATE tenant_memberships SET user_id=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?`).bind(userId,legacyPrincipal)]);}}
+export async function linkPendingLegacyIdentities(env:RuntimeEnv,userId:string,email:string):Promise<void>{
+  const normalizedEmail=email.toLowerCase().trim();
+  const pending=await env.DB.prepare(`SELECT legacy_user_id FROM legacy_identity_mappings WHERE legacy_provider='supabase' AND lower(legacy_email)=? AND status='pending_reauthentication' ORDER BY legacy_user_id`).bind(normalizedEmail).all<{legacy_user_id:string}>();
+  const rows=pending.results??[];
+  if(rows.length===0)return;
+  if(rows.length>1)throw new HttpError(409,"IDENTITY_LINK_AMBIGUOUS","Multiple legacy identities share this email; manual resolution is required");
+  const row=rows[0];
+  const existing=await env.DB.prepare(`SELECT legacy_user_id FROM legacy_identity_mappings WHERE auth_user_id=? AND legacy_provider='supabase' AND status='linked' AND legacy_user_id<>? LIMIT 1`).bind(userId,row.legacy_user_id).first<{legacy_user_id:string}>();
+  if(existing)throw new HttpError(409,"IDENTITY_ALREADY_LINKED","This Better Auth identity is already linked to another legacy identity");
+  const legacyPrincipal=`legacy:${row.legacy_user_id}`;
+  await env.DB.batch([
+    env.DB.prepare(`UPDATE legacy_identity_mappings SET auth_user_id=?,status='linked',migrated_at=CURRENT_TIMESTAMP WHERE legacy_provider='supabase' AND legacy_user_id=? AND status='pending_reauthentication'`).bind(userId,row.legacy_user_id),
+    env.DB.prepare(`UPDATE tenant_memberships SET user_id=?,updated_at=CURRENT_TIMESTAMP WHERE user_id=?`).bind(userId,legacyPrincipal),
+  ]);
+}
 
 async function betterAuthIdentity(request:Request,env:RuntimeEnv):Promise<{userId:string;email:string}|null>{if(env.BETTER_AUTH_ENABLED!=="true")return null;const session=await createAuth(env).api.getSession({headers:request.headers});const userId=session?.user?.id,email=session?.user?.email?.toLowerCase().trim();if(!userId||!email)return null;await linkPendingLegacyIdentities(env,userId,email);return{userId,email};}
 
