@@ -11,6 +11,7 @@ test('repara beneficio consumido legado antes de recalcular uma edicao aberta', 
   assert.match(sql, /subscription_benefit_status = 'consumed'/)
   assert.match(sql, /perform public\.repair_petshop_reopened_consumed_appointment\(p_appointment_id\)/)
   assert.match(sql, /subscription_benefit_status = 'released'/)
+  assert.match(sql, /create or replace function public\.update_petshop_appointment_transaction/)
 })
 
 test('nao altera silenciosamente atendimento que ja foi lancado no caixa', () => {
