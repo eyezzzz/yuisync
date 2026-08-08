@@ -8,6 +8,8 @@ export const nextFeature = (domain, operation = 'read') => {
   return String(import.meta.env[key] || '').toLowerCase() === 'true'
 }
 
+export const nextDomainEnabled = (domain) => nextFeature(domain, 'read') && nextFeature(domain, 'write')
+
 async function legacyAccessToken() {
   if (nextAuthEnabled) return null
   const { data } = await supabase.auth.getSession()
@@ -42,6 +44,11 @@ async function request(path, { method = 'GET', tenantId, moduleId, body, idempot
 
 const scope = (tenantId, moduleId) => ({ tenantId, moduleId })
 const idem = () => crypto.randomUUID()
+const query = (filters = {}) => new URLSearchParams(Object.entries(filters).filter(([, value]) => value !== undefined && value !== null && value !== '')).toString()
+const withQuery = (path, filters = {}) => {
+  const suffix = query(filters)
+  return suffix ? `${path}?${suffix}` : path
+}
 
 export const nextApi = {
   request,
@@ -53,30 +60,35 @@ export const nextApi = {
     session: () => request('/api/auth/get-session'),
   },
   clients: {
-    list: (tenantId, moduleId, filters = {}) => request(`/v1/clients?${new URLSearchParams(filters)}`, scope(tenantId, moduleId)),
+    list: (tenantId, moduleId, filters = {}) => request(withQuery('/v1/clients', filters), scope(tenantId, moduleId)),
     get: (tenantId, moduleId, id) => request(`/v1/clients/${id}`, scope(tenantId, moduleId)),
     create: (tenantId, moduleId, body) => request('/v1/clients', { ...scope(tenantId, moduleId), method: 'POST', body }),
     update: (tenantId, moduleId, id, body) => request(`/v1/clients/${id}`, { ...scope(tenantId, moduleId), method: 'PATCH', body }),
     remove: (tenantId, moduleId, id) => request(`/v1/clients/${id}`, { ...scope(tenantId, moduleId), method: 'DELETE' }),
   },
   products: {
-    list: (tenantId, moduleId, filters = {}) => request(`/v1/products?${new URLSearchParams(filters)}`, scope(tenantId, moduleId)),
+    list: (tenantId, moduleId, filters = {}) => request(withQuery('/v1/products', filters), scope(tenantId, moduleId)),
+    get: (tenantId, moduleId, id) => request(`/v1/products/${id}`, scope(tenantId, moduleId)),
     create: (tenantId, moduleId, body) => request('/v1/products', { ...scope(tenantId, moduleId), method: 'POST', body }),
     update: (tenantId, moduleId, id, body, idempotencyKey) => request(`/v1/products/${id}`, { ...scope(tenantId, moduleId), method: 'PATCH', body, idempotencyKey }),
     remove: (tenantId, moduleId, id) => request(`/v1/products/${id}`, { ...scope(tenantId, moduleId), method: 'DELETE' }),
   },
   services: {
-    list: (tenantId, moduleId) => request('/v1/services', scope(tenantId, moduleId)),
+    list: (tenantId, moduleId, filters = {}) => request(withQuery('/v1/services', filters), scope(tenantId, moduleId)),
+    get: (tenantId, moduleId, id) => request(`/v1/services/${id}`, scope(tenantId, moduleId)),
+    create: (tenantId, moduleId, body) => request('/v1/services', { ...scope(tenantId, moduleId), method: 'POST', body }),
+    update: (tenantId, moduleId, id, body) => request(`/v1/services/${id}`, { ...scope(tenantId, moduleId), method: 'PATCH', body }),
+    remove: (tenantId, moduleId, id) => request(`/v1/services/${id}`, { ...scope(tenantId, moduleId), method: 'DELETE' }),
   },
   appointments: {
-    list: (tenantId, moduleId, filters = {}) => request(`/v1/appointments?${new URLSearchParams(filters)}`, scope(tenantId, moduleId)),
+    list: (tenantId, moduleId, filters = {}) => request(withQuery('/v1/appointments', filters), scope(tenantId, moduleId)),
     get: (tenantId, moduleId, id) => request(`/v1/appointments/${id}`, scope(tenantId, moduleId)),
     create: (tenantId, moduleId, body, idempotencyKey = idem()) => request('/v1/appointments', { ...scope(tenantId, moduleId), method: 'POST', body, idempotencyKey }),
     update: (tenantId, moduleId, id, body) => request(`/v1/appointments/${id}`, { ...scope(tenantId, moduleId), method: 'PATCH', body }),
     remove: (tenantId, moduleId, id) => request(`/v1/appointments/${id}`, { ...scope(tenantId, moduleId), method: 'DELETE' }),
   },
   sales: {
-    list: (tenantId, moduleId) => request('/v1/sales', scope(tenantId, moduleId)),
+    list: (tenantId, moduleId, filters = {}) => request(withQuery('/v1/sales', filters), scope(tenantId, moduleId)),
     get: (tenantId, moduleId, id) => request(`/v1/sales/${id}`, scope(tenantId, moduleId)),
     create: (tenantId, moduleId, body, idempotencyKey = idem()) => request('/v1/sales', { ...scope(tenantId, moduleId), method: 'POST', body, idempotencyKey }),
   },
