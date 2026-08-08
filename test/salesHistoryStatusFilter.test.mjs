@@ -19,8 +19,9 @@ test('status null permite consultar todos os estados para auditoria', () => {
 test('historico do PDV carrega concluidas e canceladas conforme filtro visual', () => {
   assert.match(vendasPage, /historyStatusFilter, setHistoryStatusFilter/)
   assert.match(vendasPage, /status: historyStatusFilter === 'all' \? null : historyStatusFilter/)
-  assert.match(vendasPage, /<option value=\"all\">Todas<\/option>/)
-  assert.match(vendasPage, /<option value=\"cancelado\">Canceladas<\/option>/)
+  assert.match(vendasPage, /<option value="all">Todas<\/option>/)
+  assert.match(vendasPage, /<option value="cancelado">Canceladas<\/option>/)
+  assert.match(vendasPage, /Canceladas permanecem visíveis para auditoria/)
 })
 
 test('venda cancelada permanece visivel, identificada e sem emissao fiscal', () => {
