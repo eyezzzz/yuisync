@@ -1,7 +1,3 @@
-import { execFileSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import { dirname, resolve } from 'node:path'
-
 const required = (name) => {
   const value = process.env[name]?.trim()
   if (!value) throw new Error(`${name} is required`)
@@ -13,21 +9,8 @@ const certificationToken = required('YUISYNC_STAGING_CERTIFICATION_TOKEN')
 const gitSha = required('GIT_SHA')
 const tenantId = required('YUISYNC_STAGING_TENANT_ID')
 const moduleId = required('YUISYNC_STAGING_MODULE_ID')
-const cwd = resolve(dirname(fileURLToPath(import.meta.url)), '..')
-
-const raw = execFileSync('npx', [
-  'wrangler', 'd1', 'time-travel', 'info', 'DB', '--env', 'staging', '--json'
-], { encoding: 'utf8', cwd })
-const parsed = JSON.parse(raw)
-const findBookmark = (value) => {
-  if (!value) return null
-  if (typeof value === 'object' && typeof value.bookmark === 'string') return value.bookmark
-  if (Array.isArray(value)) return value.map(findBookmark).find(Boolean) || null
-  if (typeof value === 'object') return Object.values(value).map(findBookmark).find(Boolean) || null
-  return null
-}
-const rollbackBookmark = findBookmark(parsed)
-if (!rollbackBookmark) throw new Error('Unable to resolve current D1 Time Travel bookmark')
+const rollbackBookmark = required('YUISYNC_ROLLBACK_BOOKMARK')
+const authRollbackBookmark = required('YUISYNC_AUTH_ROLLBACK_BOOKMARK')
 
 for (let attempt = 0; attempt < 6; attempt += 1) {
   const response = await fetch(`${stagingUrl}/admin/staging/certify`, {
@@ -36,7 +19,7 @@ for (let attempt = 0; attempt < 6; attempt += 1) {
       'content-type': 'application/json',
       'x-yuisync-certification-token': certificationToken,
     },
-    body: JSON.stringify({ tenantId, moduleId, gitSha, rollbackBookmark }),
+    body: JSON.stringify({ tenantId, moduleId, gitSha, rollbackBookmark, authRollbackBookmark }),
   })
   const payload = await response.json()
   if (response.ok && payload.pass) {
