@@ -1,0 +1,24 @@
+{
+  "name": "@yuisync/edge",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "types": "wrangler types worker-configuration.d.ts",
+    "typecheck": "npm run types && tsc --noEmit",
+    "test": "vitest run",
+    "check": "npm run typecheck && npm test && wrangler deploy --dry-run --env staging",
+    "dev": "wrangler dev --env staging",
+    "deploy:staging": "wrangler deploy --env staging",
+    "migrations:staging": "wrangler d1 migrations apply DB --env staging --remote",
+    "auth:migrations:staging": "wrangler d1 migrations apply AUTH_DB --env staging --remote"
+  },
+  "dependencies": {
+    "better-auth": "1.6.25"
+  },
+  "devDependencies": {
+    "typescript": "6.0.3",
+    "vitest": "4.1.10",
+    "wrangler": "4.114.0"
+  }
+}

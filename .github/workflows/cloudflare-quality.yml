@@ -1,0 +1,38 @@
+name: Cloudflare Next Quality
+
+on:
+  pull_request:
+    paths:
+      - 'cloudflare/**'
+      - 'src/lib/nextApi.js'
+      - 'src/shared/hooks/useAuth.js'
+      - 'src/shared/hooks/useLegacyAuth.js'
+      - 'src/shared/hooks/useNextAuth.js'
+      - '.github/workflows/cloudflare-quality.yml'
+  push:
+    branches:
+      - 'agent/cloudflare-cutover-readiness'
+    paths:
+      - 'cloudflare/**'
+      - 'src/lib/nextApi.js'
+      - 'src/shared/hooks/useAuth.js'
+      - 'src/shared/hooks/useLegacyAuth.js'
+      - 'src/shared/hooks/useNextAuth.js'
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cloudflare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts
+      - run: npm run typecheck
+      - run: npm test
+      - run: npx wrangler deploy --dry-run --env staging
+      - name: Frontend cutover inventory
+        run: node scripts/frontend-cutover-audit.mjs

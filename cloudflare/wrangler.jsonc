@@ -1,0 +1,114 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "yuisync-next-edge",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-08",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1
+  },
+  "exports": {
+    "OperationCoordinator": {
+      "type": "durable-object",
+      "storage": "sqlite"
+    }
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "yuisync-next-local",
+      "migrations_dir": "migrations/main"
+    },
+    {
+      "binding": "AUTH_DB",
+      "database_name": "yuisync-next-auth-local",
+      "migrations_dir": "migrations/auth"
+    }
+  ],
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "OPERATION_COORDINATOR",
+        "class_name": "OperationCoordinator"
+      }
+    ]
+  },
+  "queues": {
+    "producers": [
+      {
+        "binding": "ASYNC_EFFECTS",
+        "queue": "yuisync-next-effects-local"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "yuisync-next-effects-local",
+        "dead_letter_queue": "yuisync-next-effects-local-dlq",
+        "max_batch_size": 20,
+        "max_batch_timeout": 5,
+        "max_retries": 5
+      }
+    ]
+  },
+  "vars": {
+    "APP_ENV": "local",
+    "SCHEMA_VERSION": "15",
+    "BETTER_AUTH_ENABLED": "false",
+    "LEGACY_IDENTITY_BRIDGE_ENABLED": "false",
+    "MIGRATION_ENABLED": "false",
+    "STAGING_CERTIFICATION_ENABLED": "false",
+    "CUTOVER_MODE": "disabled"
+  },
+  "env": {
+    "staging": {
+      "name": "yuisync-next-edge-staging",
+      "d1_databases": [
+        {
+          "binding": "DB",
+          "database_name": "yuisync-next-staging",
+          "migrations_dir": "migrations/main"
+        },
+        {
+          "binding": "AUTH_DB",
+          "database_name": "yuisync-next-auth-staging",
+          "migrations_dir": "migrations/auth"
+        }
+      ],
+      "durable_objects": {
+        "bindings": [
+          {
+            "name": "OPERATION_COORDINATOR",
+            "class_name": "OperationCoordinator"
+          }
+        ]
+      },
+      "queues": {
+        "producers": [
+          {
+            "binding": "ASYNC_EFFECTS",
+            "queue": "yuisync-next-effects-staging"
+          }
+        ],
+        "consumers": [
+          {
+            "queue": "yuisync-next-effects-staging",
+            "dead_letter_queue": "yuisync-next-effects-staging-dlq",
+            "max_batch_size": 20,
+            "max_batch_timeout": 5,
+            "max_retries": 5
+          }
+        ]
+      },
+      "vars": {
+        "APP_ENV": "staging",
+        "SCHEMA_VERSION": "15",
+        "BETTER_AUTH_ENABLED": "true",
+        "LEGACY_IDENTITY_BRIDGE_ENABLED": "true",
+        "MIGRATION_ENABLED": "true",
+        "STAGING_CERTIFICATION_ENABLED": "true",
+        "CUTOVER_MODE": "disabled"
+      }
+    }
+  }
+}
