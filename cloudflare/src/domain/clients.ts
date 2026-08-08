@@ -9,11 +9,13 @@ export async function handleClients(request:Request,env:RuntimeEnv,auth:AuthCont
   if(request.method==='GET'){
     requirePermission(auth,'clients:read');
     if(id){const row=await getClient(env,auth,id);if(!row)throw new HttpError(404,'NOT_FOUND','Resource not found');return json({data:{...clientDto(row),pets:await petsFor(env,auth,id)}});}
-    const url=new URL(request.url),search=(url.searchParams.get('search')??'').trim(),limit=limitFrom(request);
+    const url=new URL(request.url),search=(url.searchParams.get('search')??'').trim(),petId=(url.searchParams.get('petId')??'').trim(),limit=limitFrom(request);
     const term=`%${search}%`;
-    const rows=search
-      ? await env.DB.prepare(`SELECT DISTINCT c.* FROM clients c LEFT JOIN pets p ON p.tenant_id=c.tenant_id AND p.module_id=c.module_id AND p.client_id=c.id WHERE c.tenant_id=? AND c.module_id=? AND c.active=1 AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR p.name LIKE ? OR p.breed LIKE ?) ORDER BY c.name LIMIT ?`).bind(auth.tenantId,auth.moduleId,term,term,term,term,term,limit).all<Record<string,unknown>>()
-      : await env.DB.prepare(`SELECT * FROM clients WHERE tenant_id=? AND module_id=? AND active=1 ORDER BY name LIMIT ?`).bind(auth.tenantId,auth.moduleId,limit).all<Record<string,unknown>>();
+    const rows=petId
+      ? await env.DB.prepare(`SELECT DISTINCT c.* FROM clients c JOIN pets p ON p.tenant_id=c.tenant_id AND p.module_id=c.module_id AND p.client_id=c.id WHERE c.tenant_id=? AND c.module_id=? AND c.active=1 AND p.active=1 AND p.id=? ORDER BY c.name LIMIT ?`).bind(auth.tenantId,auth.moduleId,petId,limit).all<Record<string,unknown>>()
+      : search
+        ? await env.DB.prepare(`SELECT DISTINCT c.* FROM clients c LEFT JOIN pets p ON p.tenant_id=c.tenant_id AND p.module_id=c.module_id AND p.client_id=c.id WHERE c.tenant_id=? AND c.module_id=? AND c.active=1 AND (c.name LIKE ? OR c.phone LIKE ? OR c.email LIKE ? OR p.name LIKE ? OR p.breed LIKE ?) ORDER BY c.name LIMIT ?`).bind(auth.tenantId,auth.moduleId,term,term,term,term,term,limit).all<Record<string,unknown>>()
+        : await env.DB.prepare(`SELECT * FROM clients WHERE tenant_id=? AND module_id=? AND active=1 ORDER BY name LIMIT ?`).bind(auth.tenantId,auth.moduleId,limit).all<Record<string,unknown>>();
     const data=[];for(const row of rows.results??[])data.push({...clientDto(row),pets:await petsFor(env,auth,String(row.id))});return json({data});
   }
 
