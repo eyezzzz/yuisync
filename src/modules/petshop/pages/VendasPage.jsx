@@ -329,15 +329,19 @@ function CashierWorkspace({
 function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
   const { storeSettings } = useAuthCtx()
   const fiscal = sale?.fiscal || null
+  const isCancelled = sale?.status === 'cancelado'
   const isFiscalAuthorized = fiscal?.document?.status === 'authorized' || fiscal?.invoice?.fiscal_status === 'authorized'
   const fiscalKey = fiscal?.document?.nfe_key || fiscal?.invoice?.invoice_nfe_url || ''
   const fiscalPdfUrl = fiscal?.document?.pdf_url || ''
   const canConsultFiscal = Boolean(fiscalKey)
-  const receiptLabel = sale?.source === 'whatsapp' && sale?.fulfillmentType === 'entrega'
-    ? 'Comprovante ENTREGA'
-    : 'Comprovante TERMICO'
+  const receiptLabel = isCancelled
+    ? 'Registro CANCELADO'
+    : sale?.source === 'whatsapp' && sale?.fulfillmentType === 'entrega'
+      ? 'Comprovante ENTREGA'
+      : 'Comprovante TERMICO'
 
   const fiscalStatusLabel = (() => {
+    if (isCancelled) return 'Venda cancelada. Nova emissão fiscal bloqueada.'
     if (!fiscal) return 'Cupom fiscal ainda nao emitido.'
     if (fiscal.status === 'runtime_missing') return 'Runtime fiscal nao habilitado no banco.'
     if (fiscal.document?.status === 'authorized') return 'Cupom fiscal emitido e autorizado.'
@@ -469,20 +473,21 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
     <div className="modal-overlay theme-petshop-modal" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-box max-w-sm">
         <div className="modal-header">
-           <h2 className="font-display font-bold text-xl text-text">Venda Registrada!</h2>
+           <h2 className={`font-display font-bold text-xl ${isCancelled ? 'text-red-400' : 'text-text'}`}>{isCancelled ? 'Venda Cancelada' : 'Venda Registrada!'}</h2>
            <button onClick={onClose} className="text-muted hover:text-text ml-1"><X size={18}/></button>
         </div>
 
         <div className="modal-body text-center">
-          <div className="w-16 h-16 rounded-3xl bg-[var(--primary-bg-light)] flex items-center justify-center text-primary mx-auto mb-6 border border-[var(--primary-border)] shadow-inner">
-             <Check size={32} strokeWidth={3}/>
+          <div className={`w-16 h-16 rounded-3xl flex items-center justify-center mx-auto mb-6 border shadow-inner ${isCancelled ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-[var(--primary-bg-light)] text-primary border-[var(--primary-border)]'}`}>
+             {isCancelled ? <XCircle size={32} strokeWidth={3}/> : <Check size={32} strokeWidth={3}/>}
           </div>
           
           <div className="space-y-1 mb-8">
             <p className="text-muted text-[10px] uppercase font-black tracking-[0.2em]">Total da Venda</p>
-            <div className="font-display font-bold text-4xl text-primary">
+            <div className={`font-display font-bold text-4xl ${isCancelled ? 'text-red-400 line-through' : 'text-primary'}`}>
               {fmtCurrency(sale.total)}
             </div>
+            {isCancelled && <p className="mt-2 text-xs font-bold text-red-400">Cancelada / estornada — mantida somente para auditoria.</p>}
           </div>
 
           <div className="bg-white/5 border border-white/5 rounded-2xl p-5 text-left space-y-3 mb-8">
@@ -523,11 +528,11 @@ function SuccessModal({ sale, onClose, onIssueFiscal, issuingFiscal }) {
             </button>
             <button
               onClick={onIssueFiscal}
-              disabled={issuingFiscal || isFiscalAuthorized}
+              disabled={issuingFiscal || isFiscalAuthorized || isCancelled}
               className="btn btn-secondary w-full justify-center gap-2 border-white/10 py-3 disabled:opacity-60"
             >
               {issuingFiscal ? <RefreshCw size={16} className="animate-spin" /> : <FileText size={16} />}
-              {isFiscalAuthorized ? 'Cupom Fiscal Emitido' : 'Emitir Cupom Fiscal'}
+              {isCancelled ? 'Emissão bloqueada — venda cancelada' : isFiscalAuthorized ? 'Cupom Fiscal Emitido' : 'Emitir Cupom Fiscal'}
             </button>
             <button
               onClick={handlePrintFiscal}
@@ -592,6 +597,7 @@ export default function VendasPage() {
   const [dailyStats, setDailyStats]     = useState({ revenue: 0, count: 0, upsells: 0 })
   const [tab, setTab]           = useState('pdv')
   const [historyDate, setHistoryDate] = useState(todayISO())
+  const [historyStatusFilter, setHistoryStatusFilter] = useState('all')
   const [upsellCandidate, setUpsellCandidate] = useState(null)
   const [scannerCode, setScannerCode] = useState('')
   const [scannerQuantity, setScannerQuantity] = useState(1)
@@ -619,9 +625,12 @@ export default function VendasPage() {
 
   useEffect(() => {
     if (tab === 'historico') {
-      loadSales({ date: historyDate })
+      loadSales({
+        date: historyDate,
+        status: historyStatusFilter === 'all' ? null : historyStatusFilter,
+      })
     }
-  }, [tab, historyDate, loadSales])
+  }, [tab, historyDate, historyStatusFilter, loadSales])
 
   useEffect(() => {
     localStorage.setItem('petshop_cart', JSON.stringify(cart))
@@ -830,7 +839,10 @@ export default function VendasPage() {
 
   const reloadHistoryScope = async () => {
     if (tab === 'historico') {
-      await loadSales({ date: historyDate })
+      await loadSales({
+        date: historyDate,
+        status: historyStatusFilter === 'all' ? null : historyStatusFilter,
+      })
     } else {
       await loadSales({ date: todayISO() })
     }
@@ -838,6 +850,8 @@ export default function VendasPage() {
 
   const buildSuccessSalePayload = (saleRow, fiscal = null) => ({
     id: saleRow?.id,
+    status: saleRow?.status || 'concluido',
+    notes: saleRow?.notes || null,
     cart: (saleRow?.sale_items || []).map((item) => ({
       product: item?.products || null,
       name: item?.products?.name || 'Item',
@@ -1039,6 +1053,17 @@ export default function VendasPage() {
             >
               Hoje
             </button>
+            <select
+              aria-label="Status do historico de vendas"
+              className="inp py-2 text-xs w-auto"
+              value={historyStatusFilter}
+              onChange={(event) => setHistoryStatusFilter(event.target.value)}
+            >
+              <option value="all">Todas</option>
+              <option value="concluido">Concluídas</option>
+              <option value="cancelado">Canceladas</option>
+            </select>
+            <p className="text-[11px] text-muted">Canceladas permanecem visíveis para auditoria, mas não entram no caixa nem no faturamento.</p>
           </div>
           <div className="tbl-wrapper">
             <table className="tbl">
@@ -1048,24 +1073,25 @@ export default function VendasPage() {
                   <th>Cliente</th>
                   <th>Descrição</th>
                   <th>Total</th>
+                  <th>Status</th>
                   <th className="text-right">Ações</th>
                 </tr>
               </thead>
               <tbody>
                 {salesLoading ? (
                   <tr>
-                    <td colSpan={5} className="text-center text-sm text-muted py-8">
+                    <td colSpan={6} className="text-center text-sm text-muted py-8">
                       Carregando vendas...
                     </td>
                   </tr>
                 ) : salesError ? (
                   <tr>
-                    <td colSpan={5} className="text-center py-8">
+                    <td colSpan={6} className="text-center py-8">
                       <p className="text-sm text-red-400">Nao foi possivel carregar o historico: {salesError}</p>
                       <button
                         type="button"
                         className="btn btn-secondary btn-sm mt-3"
-                        onClick={() => loadSales({ date: historyDate })}
+                        onClick={() => loadSales({ date: historyDate, status: historyStatusFilter === 'all' ? null : historyStatusFilter })}
                       >
                         <RefreshCw size={12} /> Tentar novamente
                       </button>
@@ -1073,51 +1099,67 @@ export default function VendasPage() {
                   </tr>
                 ) : sales.length === 0 ? (
                   <tr>
-                    <td colSpan={5} className="text-center text-sm text-muted py-8">
+                    <td colSpan={6} className="text-center text-sm text-muted py-8">
                       Nenhuma venda encontrada para {new Date(`${historyDate}T00:00:00`).toLocaleDateString('pt-BR')}.
                     </td>
                   </tr>
-                ) : sales.map(s => (
-                  <tr key={s.id}>
-                    <td className="font-bold text-[var(--primary)]">{new Date(s.created_at).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })}</td>
-                    <td>{s.customer_name || 'Balcão'}</td>
-                    <td className="max-w-[200px]">
-                      <p className="text-xs text-muted truncate" title={s.sale_items?.map(i => `${i.quantity}x ${i.products?.name}`).join(', ')}>
-                        {s.sale_items?.map(i => i.products?.name).join(', ') || 'Sem itens'}
-                      </p>
-                    </td>
-                    <td className="font-bold text-emerald-400">{fmtCurrency(s.total_price)}</td>
-                    <td className="text-right">
-                      <div className="inline-flex items-center gap-2">
-                        <button
-                          onClick={() => setSuccessSale(buildSuccessSalePayload(s))}
-                          className="btn btn-secondary btn-sm btn-icon"
-                          title="Ver comprovante"
+                ) : sales.map((s) => {
+                  const cancelled = s.status === 'cancelado'
+                  const statusLabel = cancelled
+                    ? 'CANCELADA'
+                    : s.status === 'concluido'
+                      ? 'CONCLUÍDA'
+                      : String(s.status || '—').replaceAll('_', ' ').toUpperCase()
+                  return (
+                    <tr key={s.id} className={cancelled ? 'bg-red-500/[0.04] opacity-80' : ''}>
+                      <td className={cancelled ? 'font-bold text-red-300' : 'font-bold text-[var(--primary)]'}>{new Date(s.created_at).toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' })}</td>
+                      <td>{s.customer_name || 'Balcão'}</td>
+                      <td className="max-w-[200px]">
+                        <p className="text-xs text-muted truncate" title={s.sale_items?.map(i => `${i.quantity}x ${i.products?.name}`).join(', ')}>
+                          {s.sale_items?.map(i => i.products?.name).join(', ') || 'Sem itens'}
+                        </p>
+                      </td>
+                      <td className={cancelled ? 'font-bold text-red-300 line-through' : 'font-bold text-emerald-400'}>{fmtCurrency(s.total_price)}</td>
+                      <td>
+                        <span
+                          title={cancelled ? (s.notes || 'Venda cancelada / estornada') : undefined}
+                          className={`inline-flex rounded-full border px-2 py-1 text-[10px] font-black tracking-wider ${cancelled ? 'border-red-500/25 bg-red-500/10 text-red-400' : 'border-emerald-500/25 bg-emerald-500/10 text-emerald-400'}`}
                         >
-                          <Receipt size={14}/>
-                        </button>
-                        <button
-                          onClick={() => handleIssueFiscal(s.id)}
-                          disabled={issuingFiscalSaleId === s.id}
-                          className="btn btn-secondary btn-sm gap-1.5"
-                          title="Emitir cupom fiscal"
-                        >
-                          {issuingFiscalSaleId === s.id ? <RefreshCw size={12} className="animate-spin" /> : <FileText size={12} />}
-                          Cupom
-                        </button>
-                        <button
-                          onClick={() => handleIssueFiscal(s.id, { openSuccessModal: true, saleSnapshot: s })}
-                          disabled={issuingFiscalSaleId === s.id}
-                          className="btn btn-secondary btn-sm gap-1.5"
-                          title="Consultar fiscal"
-                        >
-                          {issuingFiscalSaleId === s.id ? <RefreshCw size={12} className="animate-spin" /> : <ExternalLink size={12} />}
-                          Consulta
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                          {statusLabel}
+                        </span>
+                      </td>
+                      <td className="text-right">
+                        <div className="inline-flex items-center gap-2">
+                          <button
+                            onClick={() => setSuccessSale(buildSuccessSalePayload(s))}
+                            className="btn btn-secondary btn-sm btn-icon"
+                            title={cancelled ? 'Ver registro cancelado' : 'Ver comprovante'}
+                          >
+                            <Receipt size={14}/>
+                          </button>
+                          <button
+                            onClick={() => handleIssueFiscal(s.id)}
+                            disabled={cancelled || issuingFiscalSaleId === s.id}
+                            className="btn btn-secondary btn-sm gap-1.5 disabled:opacity-40"
+                            title={cancelled ? 'Venda cancelada — emissão fiscal bloqueada' : 'Emitir cupom fiscal'}
+                          >
+                            {issuingFiscalSaleId === s.id ? <RefreshCw size={12} className="animate-spin" /> : <FileText size={12} />}
+                            Cupom
+                          </button>
+                          <button
+                            onClick={() => handleIssueFiscal(s.id, { openSuccessModal: true, saleSnapshot: s })}
+                            disabled={cancelled || issuingFiscalSaleId === s.id}
+                            className="btn btn-secondary btn-sm gap-1.5 disabled:opacity-40"
+                            title={cancelled ? 'Venda cancelada — consulta fiscal sem nova emissão indisponível nesta tela' : 'Consultar fiscal'}
+                          >
+                            {issuingFiscalSaleId === s.id ? <RefreshCw size={12} className="animate-spin" /> : <ExternalLink size={12} />}
+                            Consulta
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>
