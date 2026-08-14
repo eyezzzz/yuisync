@@ -32,6 +32,7 @@ set search_path = public
 as $$
 declare
   v_current public.appointments%rowtype;
+  v_has_current boolean := false;
   v_requested_service_codes text[] := array[]::text[];
   v_current_service_codes text[] := array[]::text[];
   v_services_changed boolean := false;
@@ -43,9 +44,11 @@ begin
   from public.appointments
   where id = p_appointment_id;
 
+  v_has_current := found;
+
   -- Deixa o guard preservado produzir as mensagens/validações canônicas quando
   -- o agendamento não existe ou quando o payload não contém lista de serviços.
-  if found and p_payload ? 'services' then
+  if v_has_current and p_payload ? 'services' then
     select coalesce(array_agg(requested.code order by requested.ordinality), array[]::text[])
     into v_requested_service_codes
     from (
@@ -71,7 +74,7 @@ begin
     v_services_changed := v_requested_service_codes is distinct from v_current_service_codes;
   end if;
 
-  if found then
+  if v_has_current then
     v_service_type_changed := nullif(trim(p_payload->>'service_type'), '') is not null
       and nullif(trim(p_payload->>'service_type'), '')
         is distinct from nullif(trim(v_current.service_type), '');
