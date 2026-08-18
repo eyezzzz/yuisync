@@ -79,15 +79,44 @@ test('editor monta consumo, reserva e limite editavel de cada benefício', () =>
   ])
 })
 
-test('ajuste manual nunca ocupa a unidade ja reservada na agenda', () => {
+test('editor não esconde consumo persistido quando ledger de reserva está inconsistente', () => {
+  const inconsistent = {
+    ...subscription,
+    services_used: { catalog_banho_pequeno: 4 },
+    services_reserved: { catalog_banho_pequeno: 1 },
+  }
+
+  const [bath] = buildEditableUsage(inconsistent)
+  assert.equal(bath.used, 4)
+  assert.equal(bath.reserved, 1)
+  assert.equal(bath.max_used, 3)
+})
+
+test('ajuste manual não reduz silenciosamente valor que conflita com reserva aberta', () => {
+  assert.throws(() => clampSubscriptionUsage(subscription, {
+    catalog_banho_pequeno: 4,
+    motodog: 0,
+  }), /1 unidade está reservada em agendamento aberto/)
+
   assert.deepEqual(clampSubscriptionUsage(subscription, {
-    catalog_banho_pequeno: 99,
+    catalog_banho_pequeno: 3,
     motodog: -4,
   }), {
     catalog_banho_pequeno: 3,
     motodog: 0,
     legacy_audit_key: 7,
   })
+})
+
+test('migration reconcilia services_reserved a partir dos agendamentos realmente abertos', async () => {
+  const migration = await read('supabase/migrations/20260818141000_reconcile_package_reserved_usage.sql')
+
+  assert.match(migration, /reconcile_petshop_subscription_reservations/)
+  assert.match(migration, /appointment\.subscription_id = v_subscription\.id/)
+  assert.match(migration, /subscription_benefit_status, 'reserved'/)
+  assert.match(migration, /not in \(\s*'concluido', 'completed', 'finalizado', 'cancelado', 'no_show'/)
+  assert.match(migration, /z_sync_petshop_subscription_reservations/)
+  assert.match(migration, /services_reserved = v_reserved/)
 })
 
 test('tela de planos renderiza busca, edição, cancelamento e cliente pesquisável de forma nativa', async () => {
