@@ -158,7 +158,11 @@ begin
     perform public.reconcile_petshop_subscription_reservations(v_new_subscription_id);
   end if;
 
-  return case when tg_op = 'DELETE' then old else new end;
+  if tg_op = 'DELETE' then
+    return old;
+  end if;
+
+  return new;
 end;
 $$;
 
