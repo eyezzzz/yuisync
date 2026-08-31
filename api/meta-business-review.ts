@@ -114,13 +114,9 @@ async function resolveBusinessPortfolio(
   const explicitBusinessId = digits(requestedBusinessId) || digits(process.env.META_BUSINESS_ID)
 
   if (explicitBusinessId) {
-    const payload = await graphRequest(
-      config,
-      `${encodeURIComponent(explicitBusinessId)}?fields=${encodeURIComponent('id,name')}`,
-    )
     return {
-      id: clean(payload.id) || explicitBusinessId,
-      name: clean(payload.name) || clean(process.env.META_BUSINESS_NAME) || 'Connected Meta Business Portfolio',
+      id: explicitBusinessId,
+      name: clean(process.env.META_BUSINESS_NAME) || 'Connected Meta Business Portfolio',
       source: requestedBusinessId ? 'review_input' : 'environment',
     }
   }
