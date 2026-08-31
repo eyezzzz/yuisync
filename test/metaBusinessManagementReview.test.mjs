@@ -2,7 +2,8 @@ import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import test from 'node:test'
 
-const routeSource = fs.readFileSync('api/meta-business-review.ts', 'utf8')
+const routeSource = fs.readFileSync('serverless/metaBusinessReviewApi.ts', 'utf8')
+const respondSource = fs.readFileSync('api/chat/respond.ts', 'utf8')
 const componentSource = fs.readFileSync('src/shared/components/MetaBusinessManagementReview.jsx', 'utf8')
 const clientSource = fs.readFileSync('src/lib/metaBusinessReviewApi.js', 'utf8')
 
@@ -31,4 +32,11 @@ test('review endpoint keeps the Meta system-user token server-side', () => {
   assert.match(routeSource, /resolveWhatsappConfig/)
   assert.match(routeSource, /Authorization: `Bearer \$\{accessToken\}`/)
   assert.doesNotMatch(componentSource, /accessToken/)
+})
+
+test('business review reuses the existing Vercel chat function', () => {
+  assert.match(respondSource, /integration === 'meta-business-review'/)
+  assert.match(respondSource, /handleMetaBusinessReviewApi/)
+  assert.match(clientSource, /chat\/respond\?integration=meta-business-review/)
+  assert.equal(fs.existsSync('api/meta-business-review.ts'), false)
 })
