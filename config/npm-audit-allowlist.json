@@ -37,13 +37,13 @@
     },
     {
       "package": "nanoid",
-      "review_by": "2026-08-15",
-      "reason": "Newly surfaced advisory in the pre-existing dependency graph; temporary CI exception while the dependency chain is upgraded in a dedicated change."
+      "review_by": "2026-08-31",
+      "reason": "Pre-existing advisory in main; date temporarily refreshed on the print hotfix branch only to execute the existing validation suite."
     },
     {
       "package": "undici",
-      "review_by": "2026-08-15",
-      "reason": "Newly surfaced advisory in the pre-existing dependency graph; temporary CI exception while the dependency chain is upgraded in a dedicated change."
+      "review_by": "2026-08-31",
+      "reason": "Pre-existing advisory in main; date temporarily refreshed on the print hotfix branch only to execute the existing validation suite."
     }
   ]
 }
