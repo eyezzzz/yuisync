@@ -209,6 +209,16 @@ export function getMetaWhatsappReview({ tenantId, moduleId = 'petshop', includeT
   return apiRequest(`/chat/respond?${params.toString()}`, { method: 'GET' })
 }
 
+export function getMetaBusinessManagementReview({ tenantId, moduleId = 'petshop' }) {
+  const params = new URLSearchParams({
+    integration: 'meta-whatsapp',
+    tenant_id: tenantId,
+    module_id: moduleId,
+    include_business_assets: '1',
+  })
+  return apiRequest(`/chat/respond?${params.toString()}`, { method: 'GET' })
+}
+
 function metaWhatsappAction(action, payload) {
   return apiRequest('/chat/respond?integration=meta-whatsapp', {
     method: 'POST',
@@ -230,4 +240,8 @@ export function createMetaWhatsappTemplate(payload) {
 
 export function subscribeMetaWhatsappBusinessAccount(payload) {
   return metaWhatsappAction('subscribe_waba', payload)
+}
+
+export function verifyMetaBusinessAdAccount(payload) {
+  return metaWhatsappAction('verify_ad_account', payload)
 }
