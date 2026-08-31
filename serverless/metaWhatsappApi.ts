@@ -20,7 +20,9 @@ const HOSTED_SIGNUP_URL = process.env.META_HOSTED_SIGNUP_URL
   || 'https://business.facebook.com/messaging/whatsapp/onboard/?app_id=844551911447117&config_id=1014067771245749&extras=%7B%22version%22%3A%22v4%22%2C%22sessionInfoVersion%22%3A%223%22%2C%22featureType%22%3A%22whatsapp_business_app_onboarding%22%7D'
 
 function clean(value: unknown): string {
-  return typeof value === 'string' ? value.trim() : ''
+  if (typeof value === 'string') return value.trim()
+  if (typeof value === 'number' || typeof value === 'bigint') return String(value)
+  return ''
 }
 
 function asRecord(value: unknown): LooseRecord {
@@ -31,6 +33,10 @@ function asRecord(value: unknown): LooseRecord {
 
 function digits(value: unknown): string {
   return clean(value).replace(/\D/g, '')
+}
+
+function normalizeAdAccountId(value: unknown): string {
+  return clean(value).replace(/^act_/i, '').replace(/\D/g, '')
 }
 
 function getUrl(req: IncomingMessage) {
@@ -163,6 +169,99 @@ async function buildStatus(tenantId: string, moduleId: string) {
       'whatsapp_business_messaging',
     ],
     reviewerNote: 'YuiSync uses a system-user access token on the server. The access token is never exposed in the browser.',
+  }
+}
+
+async function resolveBusinessPortfolio(
+  config: LooseRecord,
+  businessAccountId: string,
+) {
+  const configuredBusinessId = clean(process.env.META_BUSINESS_ID)
+  if (configuredBusinessId) {
+    return {
+      id: configuredBusinessId,
+      name: clean(process.env.META_BUSINESS_NAME) || 'Connected Meta Business Portfolio',
+    }
+  }
+
+  if (!businessAccountId) {
+    throw new HttpError(409, 'WhatsApp Business Account ID is required to resolve the connected Meta Business Portfolio.')
+  }
+
+  const fields = encodeURIComponent('owner_business_info')
+  const payload = await graphRequest(
+    config,
+    `${encodeURIComponent(businessAccountId)}?fields=${fields}`,
+  )
+  const owner = asRecord(payload.owner_business_info)
+  const id = clean(owner.id)
+
+  if (!id) {
+    throw new HttpError(502, 'Meta did not return the Business Portfolio that owns this WhatsApp Business Account.')
+  }
+
+  return {
+    id,
+    name: clean(owner.name) || 'Connected Meta Business Portfolio',
+  }
+}
+
+async function listBusinessManagementAssets(tenantId: string, moduleId: string) {
+  const channel = await loadWhatsappChannel(tenantId, moduleId)
+  const businessAccountId = resolveBusinessAccountId(channel)
+  const config = await resolveWhatsappConfig({
+    tenantId,
+    moduleId,
+    requireMessaging: false,
+  })
+  const businessPortfolio = await resolveBusinessPortfolio(config, businessAccountId)
+  const fields = encodeURIComponent('id,name')
+  const payload = await graphRequest(
+    config,
+    `${encodeURIComponent(businessPortfolio.id)}/owned_ad_accounts?fields=${fields}&limit=50`,
+  )
+
+  const adAccounts = (Array.isArray(payload.data) ? payload.data : [])
+    .map((entry) => {
+      const account = asRecord(entry)
+      const id = clean(account.id)
+      const accountId = normalizeAdAccountId(id)
+      return {
+        id: id || (accountId ? `act_${accountId}` : ''),
+        accountId,
+        name: clean(account.name) || 'Unnamed Ad Account',
+      }
+    })
+    .filter((account) => Boolean(account.id))
+
+  return {
+    businessPortfolio,
+    adAccounts,
+  }
+}
+
+async function verifyBusinessAdAccount(
+  tenantId: string,
+  moduleId: string,
+  body: JsonBody,
+) {
+  const requestedId = normalizeAdAccountId(body.adAccountId)
+  if (!requestedId) {
+    throw new HttpError(400, 'Select an Ad Account before running the Graph API verification.')
+  }
+
+  const assets = await listBusinessManagementAssets(tenantId, moduleId)
+  const adAccount = assets.adAccounts.find((account) => normalizeAdAccountId(account.id) === requestedId)
+
+  if (!adAccount) {
+    throw new HttpError(404, 'The selected Ad Account is not present in the connected Business Portfolio.')
+  }
+
+  return {
+    businessPortfolio: assets.businessPortfolio,
+    adAccount,
+    graphEndpoint: `/${assets.businessPortfolio.id}/owned_ad_accounts`,
+    verifiedAt: new Date().toISOString(),
   }
 }
 
@@ -345,7 +444,28 @@ export async function handleMetaWhatsappApi(req: IncomingMessage, res: ServerRes
         ? await listMessageTemplates(tenantId, moduleId)
         : []
 
-      sendJson(res, 200, { status, templates })
+      let businessPortfolio: LooseRecord | null = null
+      let adAccounts: LooseRecord[] = []
+      let businessAssetsError = ''
+      if (url.searchParams.get('include_business_assets') === '1') {
+        try {
+          const assets = await listBusinessManagementAssets(tenantId, moduleId)
+          businessPortfolio = assets.businessPortfolio
+          adAccounts = assets.adAccounts
+        } catch (error) {
+          businessAssetsError = error instanceof Error
+            ? error.message
+            : 'Unable to load Business Portfolio Ad Accounts from Meta.'
+        }
+      }
+
+      sendJson(res, 200, {
+        status,
+        templates,
+        businessPortfolio,
+        adAccounts,
+        businessAssetsError,
+      })
       return
     }
 
@@ -370,6 +490,8 @@ export async function handleMetaWhatsappApi(req: IncomingMessage, res: ServerRes
       result = await createMessageTemplate(tenantId, moduleId, body)
     } else if (action === 'subscribe_waba') {
       result = await subscribeBusinessAccount(tenantId, moduleId)
+    } else if (action === 'verify_ad_account') {
+      result = await verifyBusinessAdAccount(tenantId, moduleId, body)
     } else {
       throw new HttpError(400, 'Unknown Meta WhatsApp action.')
     }
