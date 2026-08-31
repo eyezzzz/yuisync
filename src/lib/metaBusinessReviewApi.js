@@ -30,15 +30,16 @@ async function request(path, options = {}) {
 
 export function getMetaBusinessReview({ tenantId, moduleId = 'petshop', businessId = '' }) {
   const params = new URLSearchParams({
+    integration: 'meta-business-review',
     tenant_id: tenantId,
     module_id: moduleId,
   })
   if (businessId) params.set('business_id', businessId)
-  return request(`/meta-business-review?${params.toString()}`, { method: 'GET' })
+  return request(`/chat/respond?${params.toString()}`, { method: 'GET' })
 }
 
 export function verifyMetaBusinessReviewAdAccount({ tenantId, moduleId = 'petshop', businessId, adAccountId }) {
-  return request('/meta-business-review', {
+  return request('/chat/respond?integration=meta-business-review', {
     method: 'POST',
     body: JSON.stringify({
       tenantId,
