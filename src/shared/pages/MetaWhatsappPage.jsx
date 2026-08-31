@@ -14,6 +14,7 @@ import {
   Webhook,
 } from 'lucide-react'
 import { useAuthCtx } from '../../context/AuthContext'
+import MetaBusinessManagementReview from '../components/MetaBusinessManagementReview'
 import {
   createMetaWhatsappTemplate,
   getMetaWhatsappReview,
@@ -493,6 +494,8 @@ export default function MetaWhatsappPage() {
           )}
         </div>
       </SectionCard>
+
+      <MetaBusinessManagementReview tenantId={activeTenantId} />
 
       <section className="rounded-3xl border border-blue-500/20 bg-blue-500/10 p-5 sm:p-7">
         <div className="flex items-start gap-4">
