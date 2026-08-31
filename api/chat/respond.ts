@@ -9,8 +9,15 @@ export const config = {
 
 export default async function chatRespond(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url || '/', `https://${req.headers.host || 'localhost'}`)
+  const integration = url.searchParams.get('integration')
 
-  if (url.searchParams.get('integration') === 'meta-whatsapp') {
+  if (integration === 'meta-business-review') {
+    const { handleMetaBusinessReviewApi } = await import('../../serverless/metaBusinessReviewApi.js')
+    await handleMetaBusinessReviewApi(req, res)
+    return
+  }
+
+  if (integration === 'meta-whatsapp') {
     const { handleMetaWhatsappApi } = await import('../../serverless/metaWhatsappApi.js')
     await handleMetaWhatsappApi(req, res)
     return
