@@ -1,0 +1,42 @@
+<svg width="900" height="900" viewBox="0 0 900 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <radialGradient id="bg" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(450 450) rotate(90) scale(360)">
+      <stop stop-color="#2A6CFF" stop-opacity="0.28"/>
+      <stop offset="0.5" stop-color="#143062" stop-opacity="0.18"/>
+      <stop offset="1" stop-color="#050816" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="sphere" cx="0" cy="0" r="1" gradientUnits="userSpaceOnUse" gradientTransform="translate(410 330) rotate(59) scale(380)">
+      <stop stop-color="#FFFFFF" stop-opacity="0.38"/>
+      <stop offset="0.28" stop-color="#4CC9FF" stop-opacity="0.42"/>
+      <stop offset="0.7" stop-color="#12234B" stop-opacity="0.92"/>
+      <stop offset="1" stop-color="#060B18"/>
+    </radialGradient>
+    <filter id="glow" x="0" y="0" width="900" height="900" filterUnits="userSpaceOnUse">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <circle cx="450" cy="450" r="360" fill="url(#bg)"/>
+
+  <ellipse cx="450" cy="450" rx="305" ry="160" transform="rotate(18 450 450)" stroke="#63E6FF" stroke-opacity="0.72" stroke-width="10" filter="url(#glow)"/>
+  <ellipse cx="450" cy="450" rx="285" ry="145" transform="rotate(-28 450 450)" stroke="#58F1C6" stroke-opacity="0.64" stroke-width="8" filter="url(#glow)"/>
+  <ellipse cx="450" cy="450" rx="270" ry="128" transform="rotate(62 450 450)" stroke="#B99AFF" stroke-opacity="0.54" stroke-width="7" filter="url(#glow)"/>
+
+  <circle cx="450" cy="450" r="170" fill="url(#sphere)" stroke="#FFFFFF" stroke-opacity="0.14" stroke-width="2"/>
+  <circle cx="450" cy="450" r="122" fill="#FFFFFF" fill-opacity="0.02"/>
+
+  <path d="M390 355L450 425L510 355" stroke="#F3FBFF" stroke-width="28" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  <path d="M450 425V545" stroke="#F3FBFF" stroke-width="28" stroke-linecap="round" filter="url(#glow)"/>
+
+  <circle cx="450" cy="145" r="11" fill="#FFFFFF"/>
+  <circle cx="181" cy="445" r="10" fill="#63E6FF"/>
+  <circle cx="680" cy="588" r="12" fill="#58F1C6"/>
+  <circle cx="620" cy="200" r="9" fill="#B99AFF"/>
+  <circle cx="305" cy="640" r="11" fill="#63E6FF"/>
+
+  <circle cx="450" cy="450" r="220" stroke="#FFFFFF" stroke-opacity="0.04" stroke-width="1"/>
+</svg>
